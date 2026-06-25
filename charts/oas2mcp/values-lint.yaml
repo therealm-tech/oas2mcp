@@ -1,0 +1,16 @@
+# Placeholder values so `helm lint`/`helm template` can render the chart.
+# Not part of the packaged chart (see .helmignore).
+oas2mcp:
+  openapi:
+    url: https://petstore3.swagger.io/api/v3/openapi.json
+  baseUrl: https://petstore3.swagger.io/api/v3
+  upstream:
+    headers:
+      - "Authorization: Bearer lint-placeholder"
+    forwardHeaders:
+      - X-Tenant-Id
+  ingress:
+    enabled: true
+    className: nginx
+    host: oas2mcp.example.com
+    tlsSecret: oas2mcp-tls

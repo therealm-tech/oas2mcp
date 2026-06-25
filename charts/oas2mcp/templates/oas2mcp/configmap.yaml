@@ -1,0 +1,12 @@
+{{- if .Values.oas2mcp.openapi.inline }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "oas2mcp.fullname" . }}-openapi
+  labels:
+    {{- include "oas2mcp.labels" . | nindent 4 }}
+data:
+  openapi.yaml: |-
+    {{- .Values.oas2mcp.openapi.inline | nindent 4 }}
+{{- end }}

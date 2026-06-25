@@ -1,0 +1,6 @@
+/target
+/.git
+/.github
+**/*.log
+*.md
+.pre-commit-config.yaml

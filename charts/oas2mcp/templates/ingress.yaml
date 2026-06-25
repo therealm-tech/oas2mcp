@@ -1,0 +1,34 @@
+{{- if .Values.oas2mcp.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "oas2mcp.fullname" . }}
+  labels:
+    {{- include "oas2mcp.labels" . | nindent 4 }}
+  {{- with .Values.oas2mcp.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.oas2mcp.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.oas2mcp.ingress.tlsSecret }}
+  tls:
+    - hosts:
+        - {{ $.Values.oas2mcp.ingress.host | quote }}
+      secretName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.oas2mcp.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "oas2mcp.fullname" . }}
+                port:
+                  name: http
+{{- end }}

@@ -1,0 +1,15 @@
+---
+apiVersion: v2
+name: oas2mcp
+description: >-
+  Expose an OpenAPI document as a Model Context Protocol (MCP) server over the
+  Streamable HTTP or legacy SSE transport.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/therealm-tech/oas2mcp
+sources:
+  - https://github.com/therealm-tech/oas2mcp
+maintainers:
+  - name: Guillaume Leroy
+    email: gleroy@therealm.tech

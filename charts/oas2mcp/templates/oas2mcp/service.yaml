@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "oas2mcp.fullname" . }}
+  labels:
+    {{- include "oas2mcp.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.oas2mcp.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.oas2mcp.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "oas2mcp.selectorLabels" . | nindent 4 }}

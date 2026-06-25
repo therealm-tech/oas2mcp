@@ -1,0 +1,123 @@
+# -- oas2mcp server: deploys the OpenAPI→MCP proxy as an HTTP MCP endpoint.
+oas2mcp:
+  # -- Number of server replicas.
+  replicaCount: 1
+
+  image:
+    # -- Container image repository.
+    repository: ghcr.io/therealm-tech/oas2mcp
+    # -- Image pull policy.
+    pullPolicy: IfNotPresent
+    # -- (string) Image tag. Unset → the chart `appVersion`.
+    tag: ~
+
+  # -- (list) Image pull secrets for private registries.
+  imagePullSecrets: []
+
+  openapi:
+    # -- (string) URL of the OpenAPI document fetched at startup. Mutually exclusive with `inline`.
+    url: ~
+    # -- (string) Inline OpenAPI document (JSON or YAML). Stored in a ConfigMap and mounted; takes precedence over `url`.
+    inline: ~
+
+  # -- (string) Upstream API base URL the tool calls are proxied to. Unset → taken from the document `servers`.
+  baseUrl: ~
+
+  # -- MCP transport to expose. One of `streamable-http`, `sse`. (`stdio` makes no sense for a long-running Deployment.)
+  transport: streamable-http
+
+  upstream:
+    # -- (list) Static `Name: Value` headers added to every upstream request (e.g. `Authorization: Bearer ...`). Stored in a Secret.
+    headers: []
+    # -- (string) Name of a pre-existing Secret holding key `UPSTREAM_HEADERS`. Takes precedence over `headers`.
+    existingSecret: ~
+    # -- (list) Names of incoming MCP-client request headers forwarded verbatim to the upstream API (e.g. `Authorization`). Per-call, not static; requires `transport: streamable-http`.
+    forwardHeaders: []
+
+  # -- `tracing` filter directive, mapped to `RUST_LOG`.
+  logFilter: info
+
+  service:
+    # -- Service type.
+    type: ClusterIP
+    # -- Service port (also the container listen port).
+    port: 8000
+
+  ingress:
+    # -- Create an Ingress for the HTTP transport.
+    enabled: false
+    # -- (string) Ingress class name.
+    className: ~
+    # -- (object) Ingress annotations.
+    annotations: {}
+    # -- Host the Ingress routes from.
+    host: oas2mcp.example.com
+    # -- (string) Name of a TLS Secret for the host. Unset → no TLS block.
+    tlsSecret: ~
+
+  serviceAccount:
+    # -- Create a dedicated ServiceAccount for the server.
+    create: true
+    # -- (string) ServiceAccount name. Unset → generated from the release name.
+    name: ~
+    # -- (object) Annotations added to the ServiceAccount.
+    annotations: {}
+
+  # -- (object) Annotations added to the pod.
+  podAnnotations: {}
+  # -- (object) Extra labels added to the pod.
+  podLabels: {}
+
+  # -- Pod-level security context (restricted Pod Security Standard).
+  podSecurityContext:
+    # -- Forbid running as root.
+    runAsNonRoot: true
+    # -- UID to run every container as.
+    runAsUser: 1000
+    # -- GID to run every container as.
+    runAsGroup: 1000
+    # -- Owning group for mounted volumes.
+    fsGroup: 1000
+    seccompProfile:
+      # -- Seccomp profile applied to the pod.
+      type: RuntimeDefault
+
+  # -- Container-level security context (restricted Pod Security Standard).
+  securityContext:
+    # -- Disallow privilege escalation.
+    allowPrivilegeEscalation: false
+    # -- Mount the root filesystem read-only.
+    readOnlyRootFilesystem: true
+    capabilities:
+      # -- Linux capabilities dropped from the container.
+      drop:
+        - ALL
+
+  # -- Compute resources. CPU has a request but no limit (compressible); memory and ephemeral storage are capped.
+  resources:
+    requests:
+      # -- CPU request.
+      cpu: 50m
+      # -- Memory request.
+      memory: 64Mi
+      # -- Ephemeral storage request.
+      ephemeral-storage: 64Mi
+    limits:
+      # -- Memory limit.
+      memory: 128Mi
+      # -- Ephemeral storage limit.
+      ephemeral-storage: 256Mi
+
+  # -- (object) Node selector for pod scheduling.
+  nodeSelector: {}
+  # -- (list) Tolerations for pod scheduling.
+  tolerations: []
+  # -- (object) Affinity rules for pod scheduling.
+  affinity: {}
+
+  # -- Extra environment variables injected into the container.
+  extraEnv: []
+  # -- Extra volumes added to the pod.
+  extraVolumes: []
+  # -- Extra volume mounts added to the container.
+  extraVolumeMounts: []

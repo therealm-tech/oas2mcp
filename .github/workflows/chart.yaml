@@ -1,0 +1,48 @@
+name: chart
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Chart version and appVersion to publish (SemVer, no leading v).
+        type: string
+        required: true
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CHART_DIR: charts/oas2mcp
+  OCI_REPO: oci://ghcr.io/therealm-tech/charts
+
+jobs:
+  publish:
+    name: publish
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: check out the repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+
+      - name: lint the chart
+        run: helm lint "$CHART_DIR" -f "$CHART_DIR/values-lint.yaml"
+
+      - name: log in to GHCR
+        run: helm registry login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: package and push the chart
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          helm package "$CHART_DIR" --version "$VERSION" --app-version "$VERSION"
+          helm push "oas2mcp-${VERSION}.tgz" "$OCI_REPO"

@@ -1,0 +1,10 @@
+.DS_Store
+.git/
+.gitignore
+*.tmproj
+*.orig
+*.bak
+.idea/
+.vscode/
+# Lint-only placeholder values, not part of the packaged chart.
+values-lint.yaml
