@@ -45,6 +45,14 @@ jobs:
           curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin actionlint
 
+      - name: install hadolint
+        env:
+          HADOLINT_VERSION: "2.12.0"
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/hadolint \
+            "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64"
+          sudo chmod +x /usr/local/bin/hadolint
+
       - name: install pre-commit
         run: pipx install pre-commit
 
