@@ -221,4 +221,4 @@ git tag chart-0.1.0 && git push origin chart-0.1.0
 
 ## License
 
-Licensed under either of Apache-2.0 or MIT at your option.
+Licensed under the [Apache License, Version 2.0](LICENSE).

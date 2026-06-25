@@ -5,7 +5,7 @@ edition = "2024"
 description = "Load an OpenAPI document at startup and expose it as a Model Context Protocol (MCP) server over stdio, SSE, or Streamable HTTP."
 authors = ["Guillaume Leroy <gleroy@therealm.tech>"]
 repository = "https://github.com/therealm-tech/oas2mcp"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 readme = "README.md"
 
 [dependencies]
