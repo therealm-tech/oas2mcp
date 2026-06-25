@@ -60,6 +60,12 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--base-url`      | `BASE_URL`       | spec `servers`   | Upstream API base URL that tool calls are proxied to.              |
 | `--header`        | `UPSTREAM_HEADERS` | —              | Extra `Name: Value` header on every upstream request. Repeatable.  |
 | `--forward-header`| `FORWARD_HEADERS`  | —              | Name of an incoming request header to forward upstream (e.g. `Authorization`). Repeatable. `streamable-http` only. |
+| `--include`       | `INCLUDE_OPERATIONS` | —            | Only expose operations whose name matches this glob (`*`/`?`). Repeatable. |
+| `--exclude`       | `EXCLUDE_OPERATIONS` | —            | Drop operations whose name matches this glob. Repeatable. Wins over `--include`/`--tag`. |
+| `--include-regex` | `INCLUDE_OPERATIONS_REGEX` | —      | Only expose operations whose name matches this regex. Repeatable. |
+| `--exclude-regex` | `EXCLUDE_OPERATIONS_REGEX` | —      | Drop operations whose name matches this regex. Repeatable. Wins over the allowlist. |
+| `--tag`           | `INCLUDE_TAGS`   | —                | Only expose operations carrying this OpenAPI tag (case-insensitive). Repeatable. |
+| `--exclude-tag`   | `EXCLUDE_TAGS`   | —                | Drop operations carrying this OpenAPI tag (case-insensitive). Repeatable. Wins over the allowlist. |
 | `--transport`     | `TRANSPORT`      | `stdio`          | One of `stdio`, `sse`, `streamable-http`.                          |
 | `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address for the `sse` and `streamable-http` transports.       |
 | `--log-filter`    | `RUST_LOG`       | `info`           | `tracing` filter directive (e.g. `oas2mcp=debug,rmcp=warn`).       |
@@ -112,6 +118,40 @@ oas2mcp --openapi-file examples/petstore.yaml --transport sse
 # SSE stream:   GET  http://127.0.0.1:8000/sse
 # Client posts: POST http://127.0.0.1:8000/messages?sessionId=<id>
 ```
+
+### Restricting the exposed operations
+
+A large API turns into a huge tool set: GitLab's OpenAPI document defines ~1700
+operations, whose `tools/list` payload is on the order of **half a million
+tokens** — it does not fit a model's context, and most MCP clients choke well
+before that. Use `--include`/`--exclude` (name globs),
+`--include-regex`/`--exclude-regex` (name regexes) and `--tag`/`--exclude-tag`
+(OpenAPI tags) to advertise only the operations you actually need.
+
+An operation is kept when it passes **both** tests: it matches the allowlist
+(any `--include` glob, any `--include-regex`, **or** any `--tag`; an empty
+allowlist means "everything") and it does not match the denylist
+(`--exclude` / `--exclude-regex` / `--exclude-tag`, which always win). Name
+patterns match the tool name — the `operationId`, or the `<method>_<path>`
+fallback. Globs support `*` (any run) and `?` (one character); regexes use the
+[`regex`](https://docs.rs/regex) crate syntax (case-insensitive via a leading
+`(?i)`) and are unanchored unless you anchor them with `^`/`$`.
+
+```bash
+# Expose only the Projects and Merge requests endpoints of GitLab:
+oas2mcp \
+  --openapi-url https://gitlab.com/gitlab-org/gitlab/-/raw/master/doc/api/openapi/openapi_v3.yaml \
+  --tag Projects --tag 'Merge requests'
+# ~1700 operations → 114 tools (a ~9× smaller tools/list)
+
+# Or select by name and drop the deprecated ones:
+oas2mcp --openapi-file api.yaml --include 'getApiV4Projects*' --exclude '*Deprecated'
+
+# Read-only Projects/Groups endpoints, via a regex:
+oas2mcp --openapi-file api.yaml --include-regex '^getApiV4(Projects|Groups)'
+```
+
+The startup log reports how many operations were kept versus filtered.
 
 ### Using it from an MCP client
 

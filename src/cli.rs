@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
+use regex::Regex;
 use url::Url;
 
 /// MCP transport to expose the server over.
@@ -70,6 +71,55 @@ pub struct Cli {
     )]
     pub forward_headers: Vec<String>,
 
+    /// Only expose operations whose name (operationId, or `<method>_<path>`)
+    /// matches this glob. Repeatable; an operation is kept if it matches any
+    /// `--include` or carries any `--tag`. Globs support `*` and `?`. Use it to
+    /// cut a huge API down to a usable tool set. When set via the environment
+    /// variable, separate patterns with newlines.
+    #[arg(long = "include", env = "INCLUDE_OPERATIONS", value_delimiter = '\n')]
+    pub include_operations: Vec<String>,
+
+    /// Drop operations whose name matches this glob. Repeatable; takes
+    /// precedence over `--include`/`--tag`. When set via the environment
+    /// variable, separate patterns with newlines.
+    #[arg(long = "exclude", env = "EXCLUDE_OPERATIONS", value_delimiter = '\n')]
+    pub exclude_operations: Vec<String>,
+
+    /// Only expose operations whose name matches this regex (e.g.
+    /// `^(get|post)ApiV4Projects`). Repeatable; combines with `--include`/`--tag`
+    /// as an allowlist. Invalid patterns are rejected at startup. When set via
+    /// the environment variable, separate patterns with newlines.
+    #[arg(
+        long = "include-regex",
+        env = "INCLUDE_OPERATIONS_REGEX",
+        value_delimiter = '\n',
+        value_parser = Regex::new
+    )]
+    pub include_operations_regex: Vec<Regex>,
+
+    /// Drop operations whose name matches this regex. Repeatable; takes
+    /// precedence over the allowlist. Invalid patterns are rejected at startup.
+    /// When set via the environment variable, separate patterns with newlines.
+    #[arg(
+        long = "exclude-regex",
+        env = "EXCLUDE_OPERATIONS_REGEX",
+        value_delimiter = '\n',
+        value_parser = Regex::new
+    )]
+    pub exclude_operations_regex: Vec<Regex>,
+
+    /// Only expose operations carrying this OpenAPI tag (case-insensitive).
+    /// Repeatable; combines with `--include` as an allowlist. When set via the
+    /// environment variable, separate tags with newlines.
+    #[arg(long = "tag", env = "INCLUDE_TAGS", value_delimiter = '\n')]
+    pub include_tags: Vec<String>,
+
+    /// Drop operations carrying this OpenAPI tag (case-insensitive). Repeatable;
+    /// takes precedence over the allowlist. When set via the environment
+    /// variable, separate tags with newlines.
+    #[arg(long = "exclude-tag", env = "EXCLUDE_TAGS", value_delimiter = '\n')]
+    pub exclude_tags: Vec<String>,
+
     /// MCP transport to expose.
     #[arg(long, env = "TRANSPORT", default_value_t = Transport::Stdio)]
     pub transport: Transport,
@@ -81,4 +131,26 @@ pub struct Cli {
     /// `tracing` filter directive (e.g. `info`, `oas2mcp=debug,rmcp=warn`).
     #[arg(long = "log-filter", env = "RUST_LOG", default_value = "info")]
     pub log_filter: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_operation_regex_is_compiled() {
+        let cli = Cli::try_parse_from(["oas2mcp", "--include-regex", "^getApiV4Projects"])
+            .expect("valid regex parses");
+        assert_eq!(
+            cli.include_operations_regex[0].as_str(),
+            "^getApiV4Projects"
+        );
+    }
+
+    #[test]
+    fn invalid_operation_regex_is_rejected_by_clap() {
+        let err = Cli::try_parse_from(["oas2mcp", "--include-regex", "("])
+            .expect_err("invalid regex must fail at parse time");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+    }
 }

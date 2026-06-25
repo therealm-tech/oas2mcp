@@ -11,6 +11,10 @@ use openapiv3::{
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 
+#[cfg(test)]
+use crate::filter::FilterConfig;
+use crate::filter::OperationFilter;
+
 /// Where an OpenAPI parameter is carried in the HTTP request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamLocation {
@@ -42,10 +46,12 @@ pub struct ToolSpec {
     pub input_schema: Arc<Map<String, Value>>,
 }
 
-/// Build one [`ToolSpec`] per operation defined in the document.
-pub fn build_tools(spec: &OpenAPI) -> Vec<ToolSpec> {
+/// Build one [`ToolSpec`] per operation defined in the document, keeping only
+/// the operations the [`OperationFilter`] selects.
+pub fn build_tools(spec: &OpenAPI, filter: &OperationFilter) -> Vec<ToolSpec> {
     let mut tools = Vec::new();
     let mut seen_names = HashSet::new();
+    let mut filtered = 0usize;
 
     for (path, item) in &spec.paths.paths {
         let ReferenceOr::Item(item) = item else {
@@ -54,6 +60,11 @@ pub fn build_tools(spec: &OpenAPI) -> Vec<ToolSpec> {
         };
 
         for (method, operation) in operations(item) {
+            if !filter.keeps(&operation_name(path, &method, operation), &operation.tags) {
+                filtered += 1;
+                continue;
+            }
+
             let mut tool = match build_tool(spec, item, path, method.clone(), operation) {
                 Ok(tool) => tool,
                 Err(err) => {
@@ -76,6 +87,14 @@ pub fn build_tools(spec: &OpenAPI) -> Vec<ToolSpec> {
         }
     }
 
+    if filtered > 0 {
+        tracing::info!(
+            kept = tools.len(),
+            filtered,
+            "filtered operations by the configured include/exclude rules"
+        );
+    }
+
     tools
 }
 
@@ -96,6 +115,16 @@ fn operations(item: &PathItem) -> Vec<(Method, &Operation)> {
     .collect()
 }
 
+/// The MCP tool name for an operation: its `operationId`, or a synthesised
+/// `<method>_<path>` fallback, sanitised to the allowed character set.
+fn operation_name(path: &str, method: &Method, operation: &Operation) -> String {
+    operation
+        .operation_id
+        .clone()
+        .map(|id| sanitize_name(&id))
+        .unwrap_or_else(|| sanitize_name(&format!("{}_{path}", method.as_str().to_lowercase())))
+}
+
 fn build_tool(
     spec: &OpenAPI,
     item: &PathItem,
@@ -103,11 +132,7 @@ fn build_tool(
     method: Method,
     operation: &Operation,
 ) -> anyhow::Result<ToolSpec> {
-    let name = operation
-        .operation_id
-        .clone()
-        .map(|id| sanitize_name(&id))
-        .unwrap_or_else(|| sanitize_name(&format!("{}_{path}", method.as_str().to_lowercase())));
+    let name = operation_name(path, &method, operation);
 
     // Use the summary as a headline and the description as detail. Many specs
     // (e.g. GitLab) put the one-line "what it does" in `summary` and reserve
@@ -407,7 +432,7 @@ components:
 
     #[test]
     fn builds_one_tool_per_operation() {
-        let tools = build_tools(&spec_from(PETSTORE));
+        let tools = build_tools(&spec_from(PETSTORE), &OperationFilter::default());
         let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"getPet"));
         assert!(names.contains(&"createPet"));
@@ -416,7 +441,7 @@ components:
 
     #[test]
     fn path_param_is_required_and_present() {
-        let tools = build_tools(&spec_from(PETSTORE));
+        let tools = build_tools(&spec_from(PETSTORE), &OperationFilter::default());
         let get_pet = tools.iter().find(|t| t.name == "getPet").unwrap();
         let pet_id = get_pet.params.iter().find(|p| p.name == "petId").unwrap();
         assert_eq!(pet_id.location, ParamLocation::Path);
@@ -426,7 +451,7 @@ components:
 
     #[test]
     fn request_body_ref_is_inlined() {
-        let tools = build_tools(&spec_from(PETSTORE));
+        let tools = build_tools(&spec_from(PETSTORE), &OperationFilter::default());
         let create = tools.iter().find(|t| t.name == "createPet").unwrap();
         assert!(create.has_body);
         let body = &create.input_schema["properties"]["body"];
@@ -437,7 +462,7 @@ components:
 
     #[test]
     fn description_combines_summary_and_detail() {
-        let tools = build_tools(&spec_from(PETSTORE));
+        let tools = build_tools(&spec_from(PETSTORE), &OperationFilter::default());
         // Both present: summary headlines, description follows.
         let create = tools.iter().find(|t| t.name == "createPet").unwrap();
         assert_eq!(
@@ -466,11 +491,22 @@ paths:
       description: Just a description
       responses: { "200": { description: ok } }
 "##;
-        let tools = build_tools(&spec_from(SPEC));
+        let tools = build_tools(&spec_from(SPEC), &OperationFilter::default());
         let only_summary = tools.iter().find(|t| t.name == "onlySummary").unwrap();
         assert_eq!(only_summary.description.as_deref(), Some("Just a summary"));
         let only_desc = tools.iter().find(|t| t.name == "onlyDescription").unwrap();
         assert_eq!(only_desc.description.as_deref(), Some("Just a description"));
+    }
+
+    #[test]
+    fn filter_restricts_the_built_tool_set() {
+        let only_get = OperationFilter::new(FilterConfig {
+            include_globs: vec!["getPet".into()],
+            ..Default::default()
+        });
+        let tools = build_tools(&spec_from(PETSTORE), &only_get);
+        let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["getPet"]);
     }
 
     #[test]

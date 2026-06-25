@@ -6,6 +6,7 @@
 //! HTTP request to the upstream API described by the document.
 
 mod cli;
+mod filter;
 mod openapi;
 mod server;
 mod tools;
