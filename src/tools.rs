@@ -109,10 +109,15 @@ fn build_tool(
         .map(|id| sanitize_name(&id))
         .unwrap_or_else(|| sanitize_name(&format!("{}_{path}", method.as_str().to_lowercase())));
 
-    let description = operation
-        .description
-        .clone()
-        .or_else(|| operation.summary.clone());
+    // Use the summary as a headline and the description as detail. Many specs
+    // (e.g. GitLab) put the one-line "what it does" in `summary` and reserve
+    // `description` for version/deprecation notes, so favouring one over the
+    // other loses information; combine them when both are present.
+    let description = match (&operation.summary, &operation.description) {
+        (Some(summary), Some(detail)) => Some(format!("{summary}\n\n{detail}")),
+        (Some(summary), None) => Some(summary.clone()),
+        (None, detail) => detail.clone(),
+    };
 
     // Path-item parameters apply to every operation; operation parameters win.
     let mut properties = Map::new();
@@ -377,6 +382,8 @@ paths:
   /pets:
     post:
       operationId: createPet
+      summary: Create a pet
+      description: Introduced in 1.0.
       requestBody:
         required: true
         content:
@@ -426,6 +433,44 @@ components:
         // The $ref to Pet must be inlined, not left as a bare reference.
         assert!(body.get("$ref").is_none());
         assert_eq!(body["properties"]["name"]["type"], "string");
+    }
+
+    #[test]
+    fn description_combines_summary_and_detail() {
+        let tools = build_tools(&spec_from(PETSTORE));
+        // Both present: summary headlines, description follows.
+        let create = tools.iter().find(|t| t.name == "createPet").unwrap();
+        assert_eq!(
+            create.description.as_deref(),
+            Some("Create a pet\n\nIntroduced in 1.0.")
+        );
+        // Neither summary nor description: stays None.
+        let get_pet = tools.iter().find(|t| t.name == "getPet").unwrap();
+        assert_eq!(get_pet.description, None);
+    }
+
+    #[test]
+    fn description_falls_back_to_each_field() {
+        const SPEC: &str = r##"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+paths:
+  /a:
+    get:
+      operationId: onlySummary
+      summary: Just a summary
+      responses: { "200": { description: ok } }
+  /b:
+    get:
+      operationId: onlyDescription
+      description: Just a description
+      responses: { "200": { description: ok } }
+"##;
+        let tools = build_tools(&spec_from(SPEC));
+        let only_summary = tools.iter().find(|t| t.name == "onlySummary").unwrap();
+        assert_eq!(only_summary.description.as_deref(), Some("Just a summary"));
+        let only_desc = tools.iter().find(|t| t.name == "onlyDescription").unwrap();
+        assert_eq!(only_desc.description.as_deref(), Some("Just a description"));
     }
 
     #[test]
