@@ -19,6 +19,7 @@ use serde_json::{Map, Value};
 use url::Url;
 
 use crate::cli::Cli;
+use crate::filter::{FilterConfig, OperationFilter};
 use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
 
 /// MCP server backed by an OpenAPI document. Cheap to clone (everything shared
@@ -43,7 +44,15 @@ impl OpenApiServer {
         let extra_headers = parse_headers(&cli.headers)?;
         let forward_headers = parse_header_names(&cli.forward_headers)?;
 
-        let tools = build_tools(spec);
+        let filter = OperationFilter::new(FilterConfig {
+            include_globs: cli.include_operations.clone(),
+            exclude_globs: cli.exclude_operations.clone(),
+            include_regexes: cli.include_operations_regex.clone(),
+            exclude_regexes: cli.exclude_operations_regex.clone(),
+            include_tags: cli.include_tags.clone(),
+            exclude_tags: cli.exclude_tags.clone(),
+        });
+        let tools = build_tools(spec, &filter);
         if tools.is_empty() {
             tracing::warn!("the OpenAPI document defines no usable operations");
         }
