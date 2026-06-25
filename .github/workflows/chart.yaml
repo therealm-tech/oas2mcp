@@ -1,15 +1,13 @@
 name: chart
 
 on:
+  push:
+    tags:
+      - "chart-*"
   workflow_dispatch:
     inputs:
       version:
-        description: Chart version and appVersion to publish (SemVer, no leading v).
-        type: string
-        required: true
-  workflow_call:
-    inputs:
-      version:
+        description: Chart version to publish (SemVer, no leading v).
         type: string
         required: true
 
@@ -34,6 +32,17 @@ jobs:
       - name: set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
 
+      - name: resolve the chart version
+        id: v
+        # From the `chart-X.Y.Z` tag, or the workflow_dispatch input.
+        run: |
+          version="${{ inputs.version }}"
+          if [ -z "$version" ]; then
+            version="${GITHUB_REF_NAME#chart-}"
+            version="${version#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: lint the chart
         run: helm lint "$CHART_DIR" -f "$CHART_DIR/values-lint.yaml"
 
@@ -42,7 +51,9 @@ jobs:
 
       - name: package and push the chart
         env:
-          VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.v.outputs.version }}
         run: |
-          helm package "$CHART_DIR" --version "$VERSION" --app-version "$VERSION"
+          # appVersion stays as declared in Chart.yaml (the app image the chart targets);
+          # the tag only sets the chart package version.
+          helm package "$CHART_DIR" --version "$VERSION"
           helm push "oas2mcp-${VERSION}.tgz" "$OCI_REPO"

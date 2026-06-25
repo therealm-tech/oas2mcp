@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: derive the version from the tag
         id: v
-        # Strip the leading `v` so the value is valid SemVer for the chart/image.
+        # Strip the leading `v` so the value is valid SemVer for the image.
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
   build:
@@ -31,21 +31,10 @@ jobs:
       push: true
       version: ${{ needs.version.outputs.version }}
 
-  chart:
-    name: chart
-    needs: version
-    permissions:
-      contents: read
-      packages: write
-    uses: ./.github/workflows/chart.yaml
-    with:
-      version: ${{ needs.version.outputs.version }}
-
   github-release:
     name: github-release
     needs:
       - build
-      - chart
     permissions:
       contents: write
     runs-on: ubuntu-24.04

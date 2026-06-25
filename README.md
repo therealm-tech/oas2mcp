@@ -194,15 +194,20 @@ GitHub Actions workflows:
 - **build** — builds the container image (multi-arch on native runners); pushes
   to `ghcr.io/therealm-tech/oas2mcp` only on manual dispatch or from a release.
 - **chart** — publishes the Helm chart as an OCI artifact to
-  `ghcr.io/therealm-tech/charts`.
+  `ghcr.io/therealm-tech/charts`, triggered by a `chart-X.Y.Z` tag (or manual
+  dispatch). The chart is versioned and released independently of the app.
 - **release** — triggered by pushing a `vX.Y.Z` tag: builds and pushes the
-  image, publishes the chart (both versioned from the tag), and creates a
-  GitHub Release with auto-generated notes.
+  image (versioned from the tag) and creates a GitHub Release with
+  auto-generated notes.
 
-To cut a release, push a SemVer tag:
+The app and the chart have separate release lifecycles:
 
 ```bash
+# Release the application (image + GitHub Release):
 git tag v0.1.0 && git push origin v0.1.0
+
+# Release the Helm chart (OCI push), independently:
+git tag chart-0.1.0 && git push origin chart-0.1.0
 ```
 
 ## Limitations
