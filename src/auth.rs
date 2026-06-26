@@ -14,7 +14,7 @@ use anyhow::{Context as _, bail};
 use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::cli::Cli;
 
@@ -25,11 +25,14 @@ struct RoleRule {
     pattern: Regex,
 }
 
-/// The claims read from a verified token: the caller's roles and `sub`.
+/// The claims read from a verified token: the caller's roles and the
+/// `--trace-claim` claims selected for tracing.
 pub struct VerifiedClaims {
     pub roles: HashSet<String>,
-    /// The `sub` (subject) claim, when the token carried one.
-    pub sub: Option<String>,
+    /// The `--trace-claim` claims that were present in the token, keeping their
+    /// JSON shape. Empty when none are configured or none were present. Surfaced
+    /// on the per-call tracing log, never in metric labels.
+    pub traced: Map<String, Value>,
 }
 
 /// Verifies incoming JWTs against a JWKS and decides which tools a caller may
@@ -39,6 +42,9 @@ pub struct Authorizer {
     jwks: JwkSet,
     role_claim: String,
     rules: Vec<RoleRule>,
+    /// Names of the claims to copy into the per-call tracing log, from
+    /// `--trace-claim`. Empty disables claim tracing.
+    trace_claims: Vec<String>,
 }
 
 impl Authorizer {
@@ -64,6 +70,7 @@ impl Authorizer {
             jwks,
             role_claim: cli.oauth_role_claim.clone(),
             rules,
+            trace_claims: cli.trace_claims.clone(),
         })))
     }
 
@@ -92,11 +99,7 @@ impl Authorizer {
         let data = decode::<Value>(token, &key, &validation).context("verifying the JWT")?;
         Ok(VerifiedClaims {
             roles: extract_roles(&data.claims, &self.role_claim),
-            sub: data
-                .claims
-                .get("sub")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            traced: extract_traced_claims(&data.claims, &self.trace_claims),
         })
     }
 
@@ -209,6 +212,16 @@ fn extract_roles(claims: &Value, claim: &str) -> HashSet<String> {
     }
 }
 
+/// Pick the `--trace-claim` claims out of the token, preserving each value's
+/// JSON shape (string, number, array, …). Claims absent from the token are
+/// skipped — only what was actually present is traced.
+fn extract_traced_claims(claims: &Value, names: &[String]) -> Map<String, Value> {
+    names
+        .iter()
+        .filter_map(|name| claims.get(name).map(|value| (name.clone(), value.clone())))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +254,7 @@ mod tests {
             jwks: JwkSet { keys: vec![] },
             role_claim: "roles".into(),
             rules: parse_rules(&["admin:.*".into(), "reader:^get".into()]).expect("valid mappings"),
+            trace_claims: vec![],
         };
 
         // admin can use anything.
@@ -268,6 +282,33 @@ mod tests {
         assert!(extract_roles(&json!({}), "roles").is_empty());
     }
 
+    #[test]
+    fn extract_traced_claims_keeps_present_claims_in_their_json_shape() {
+        let claims = json!({
+            "sub": "user-123",
+            "email": "a@b.com",
+            "tenant_id": 42,
+            "groups": ["x", "y"],
+        });
+        let traced = extract_traced_claims(
+            &claims,
+            &[
+                "sub".into(),
+                "tenant_id".into(),
+                "groups".into(),
+                "missing".into(),
+            ],
+        );
+        assert_eq!(traced.get("sub"), Some(&json!("user-123")));
+        assert_eq!(traced.get("tenant_id"), Some(&json!(42)));
+        assert_eq!(traced.get("groups"), Some(&json!(["x", "y"])));
+        // Absent claims and claims not requested are left out.
+        assert!(!traced.contains_key("missing"));
+        assert!(!traced.contains_key("email"));
+        // No names configured → nothing traced.
+        assert!(extract_traced_claims(&claims, &[]).is_empty());
+    }
+
     // A throwaway 2048-bit RSA keypair generated solely for these tests, with
     // the matching JWK modulus. NOT a real credential — never used outside the
     // test. The PEM lives in a fixture file (and is excluded from the
@@ -293,6 +334,7 @@ mod tests {
             jwks,
             role_claim: "roles".into(),
             rules: parse_rules(&["admin:.*".into()]).expect("valid mapping"),
+            trace_claims: vec!["sub".into(), "email".into()],
         }
     }
 
@@ -317,13 +359,16 @@ mod tests {
     }
 
     #[test]
-    fn verify_reads_roles_and_subject_from_a_valid_jwt() {
+    fn verify_reads_roles_and_traced_claims_from_a_valid_jwt() {
         let authz = test_authorizer();
         let token = sign(json!(["admin", "reader"]), in_one_hour(), Some(TEST_KID));
         let claims = authz.verify(&token).expect("valid token verifies");
         assert_eq!(claims.roles, roles(&["admin", "reader"]));
-        assert_eq!(claims.sub.as_deref(), Some("user-123"));
         assert!(authz.allows(&claims.roles, "deletePet"));
+        // `sub` is configured for tracing and present; `email` is configured but
+        // absent from the token, so it is not traced.
+        assert_eq!(claims.traced.get("sub"), Some(&json!("user-123")));
+        assert!(!claims.traced.contains_key("email"));
     }
 
     #[test]

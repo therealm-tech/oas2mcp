@@ -60,8 +60,10 @@ struct Caller {
     /// `None` when no authorizer is configured (no restriction); `Some` carries
     /// the verified roles, empty when the token is missing or invalid.
     roles: Option<HashSet<String>>,
-    /// The caller's JWT subject, used only as a metric attribute.
-    sub: Option<String>,
+    /// The `--trace-claim` claims present in the verified token, logged with the
+    /// tool call. Empty unless claim tracing is configured and the token carried
+    /// them.
+    traced_claims: Map<String, Value>,
 }
 
 impl OpenApiServer {
@@ -293,6 +295,18 @@ impl ServerHandler for OpenApiServer {
             ));
         }
 
+        // Surface the configured JWT claims on the call for observability. Logged
+        // only (never a metric label), and only when `--trace-claim` selected
+        // claims that the token actually carried.
+        if !caller.traced_claims.is_empty() {
+            let claims = Value::Object(caller.traced_claims);
+            tracing::info!(
+                tool = %spec.name,
+                jwt.claims = %claims,
+                "tool call carrying traced JWT claims",
+            );
+        }
+
         let args = request.arguments.unwrap_or_default();
         let forwarded = self.forwarded_headers(&context);
 
@@ -303,12 +317,8 @@ impl ServerHandler for OpenApiServer {
         } else {
             Outcome::Success
         };
-        self.metrics.record_call(
-            &spec.name,
-            outcome,
-            caller.sub.as_deref(),
-            started.elapsed(),
-        );
+        self.metrics
+            .record_call(&spec.name, outcome, started.elapsed());
 
         Ok(result)
     }
@@ -328,7 +338,7 @@ impl OpenApiServer {
         let Some(authorizer) = self.authorizer.as_ref() else {
             return Caller {
                 roles: None,
-                sub: None,
+                traced_claims: Map::new(),
             };
         };
         let token = context
@@ -339,13 +349,13 @@ impl OpenApiServer {
             Some(token) => match authorizer.verify(token) {
                 Ok(claims) => Caller {
                     roles: Some(claims.roles),
-                    sub: claims.sub,
+                    traced_claims: claims.traced,
                 },
                 Err(err) => {
                     tracing::warn!(error = %format!("{err:#}"), "rejecting request: JWT verification failed");
                     Caller {
                         roles: Some(HashSet::new()),
-                        sub: None,
+                        traced_claims: Map::new(),
                     }
                 }
             },
@@ -353,7 +363,7 @@ impl OpenApiServer {
                 tracing::warn!("rejecting request: no bearer token on a role-restricted server");
                 Caller {
                     roles: Some(HashSet::new()),
-                    sub: None,
+                    traced_claims: Map::new(),
                 }
             }
         }

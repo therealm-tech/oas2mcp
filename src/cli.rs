@@ -180,6 +180,17 @@ pub struct Cli {
     )]
     pub oauth_role_claim: String,
 
+    /// Name of a JWT claim to surface in the per-call tracing log as a
+    /// `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`), for observability.
+    /// Repeatable; each named claim that is present in the verified token is
+    /// emitted, keeping its JSON shape. Claims are written to logs only, never
+    /// added to metric labels, so this never inflates metric cardinality. Reads
+    /// the claims from the JWT verified for role-based access, so it only takes
+    /// effect when `--oauth-role-mapper` (and a JWKS) is configured. When set via
+    /// the environment variable, separate names with newlines.
+    #[arg(long = "trace-claim", env = "TRACE_CLAIMS", value_delimiter = '\n')]
+    pub trace_claims: Vec<String>,
+
     /// Base OTLP endpoint to push tool-call metrics to over HTTP/protobuf (e.g.
     /// `http://localhost:4318`). When set, metrics are exported to this
     /// collector; the `/v1/metrics` signal path is appended automatically.

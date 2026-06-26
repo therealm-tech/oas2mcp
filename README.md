@@ -36,9 +36,12 @@ writing a line of glue code.
 - **Role-based tool access** — verify the caller's JWT against a JWKS and gate
   which tools they can see and call, mapping each `role` to a tool-name regex
   (`streamable-http` only).
+- **JWT claim tracing** — with `--trace-claim`, echo selected claims from the
+  verified token (e.g. `sub`, `email`, `tenant_id`) onto each tool-call log line
+  to see who made each call, without inflating metric cardinality.
 - **OpenTelemetry metrics** — count and time every tool call, labelled by tool
-  and outcome (and the caller's JWT `sub` when role-based access is on),
-  exported over OTLP and/or a Prometheus `/metrics` endpoint.
+  and outcome (kept low-cardinality), exported over OTLP and/or a Prometheus
+  `/metrics` endpoint.
 - **Custom CA trust** — point `--ca-cert` at a PEM bundle to trust a private or
   corporate CA for every outbound TLS connection (upstream API, document fetch,
   OAuth, JWKS), on top of the built-in public roots.
@@ -87,6 +90,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--oauth-jwks-url` | `OAUTH_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Required with `--oauth-role-mapper` (or use `--oauth-jwks-file`). |
 | `--oauth-jwks-file` | `OAUTH_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--oauth-jwks-url`. |
 | `--oauth-role-claim` | `OAUTH_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
+| `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs `--oauth-role-mapper`. |
 | `--include`       | `INCLUDE_OPERATIONS` | —            | Only expose operations whose name matches this glob (`*`/`?`). Repeatable. |
 | `--exclude`       | `EXCLUDE_OPERATIONS` | —            | Drop operations whose name matches this glob. Repeatable. Wins over `--include`/`--tag`. |
 | `--include-regex` | `INCLUDE_OPERATIONS_REGEX` | —      | Only expose operations whose name matches this regex. Repeatable. |
@@ -235,6 +239,34 @@ rejected), and the token's `exp` is enforced. Invalid regexes are rejected at
 startup. With multiple entries set through the environment variable, separate
 them with newlines (e.g. `OAUTH_ROLE_MAPPER=$'admin:.*\nreader:^get'`).
 
+#### Tracing the caller's JWT claims
+
+Once JWTs are verified for role-based access, you can echo selected claims into
+the logs to see *who* made each call. Pass one or more `--trace-claim` with the
+claim names you care about; each one that the token actually carried is emitted
+on the tool-call log line as a single `jwt.claims` field (a JSON object that
+keeps every value's original shape — strings, numbers, arrays):
+
+```bash
+oas2mcp \
+  --openapi-url https://api.example.com/openapi.json \
+  --transport streamable-http \
+  --bind-addr 0.0.0.0:8000 \
+  --oauth-jwks-url https://idp.example.com/.well-known/jwks.json \
+  --oauth-role-mapper 'admin:.*' \
+  --trace-claim sub \
+  --trace-claim email \
+  --trace-claim tenant_id
+# logs, per call: jwt.claims={"sub":"u-123","email":"a@b.com","tenant_id":42}
+```
+
+The claims come from the same verified JWT used for role mapping, so
+`--trace-claim` only takes effect when `--oauth-role-mapper` (and a JWKS) is
+configured. Claims go to the logs only — never to metric labels — so a
+high-cardinality claim such as `sub` can't blow up your metrics backend.
+With multiple names set through the environment variable, separate them with
+newlines (e.g. `TRACE_CLAIMS=$'sub\nemail'`).
+
 ### Metrics
 
 Every tool call is counted and timed and exposed as OpenTelemetry metrics:
@@ -245,10 +277,10 @@ Every tool call is counted and timed and exposed as OpenTelemetry metrics:
 | `mcp.tool.call.duration` | histogram (seconds) | Duration of the proxied upstream request. |
 
 Both carry the attributes `tool` (the tool/operation name) and `outcome`
-(`success` or `error`). When **role-based access is enabled** and the caller's
-JWT carried a `sub` claim, a `sub` attribute is added too — so you can break
-metrics down by caller. (Mind the cardinality: a `sub` per end user can
-multiply your time series.)
+(`success` or `error`) — and nothing else, so metric cardinality stays bounded.
+To break activity down by caller, log the relevant JWT claims with
+`--trace-claim` (see above) and aggregate them in your logging backend, rather
+than turning a per-user identifier into a metric label.
 
 Enable either exporter, both, or neither — they are independent:
 

@@ -151,6 +151,10 @@ spec:
             - name: OAUTH_ROLE_CLAIM
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.oas2mcp.auth.traceClaims }}
+            - name: TRACE_CLAIMS
+              value: {{ join "\n" . | quote }}
+            {{- end }}
             {{- with .Values.oas2mcp.auth.jwks.url }}
             - name: OAUTH_JWKS_URL
               value: {{ . | quote }}
