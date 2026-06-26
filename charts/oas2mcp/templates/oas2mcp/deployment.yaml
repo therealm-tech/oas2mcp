@@ -115,6 +115,46 @@ spec:
             - name: FORWARD_HEADERS
               value: {{ join "\n" . | quote }}
             {{- end }}
+            {{- with .Values.oas2mcp.operations.include }}
+            - name: INCLUDE_OPERATIONS
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.operations.exclude }}
+            - name: EXCLUDE_OPERATIONS
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.operations.includeRegex }}
+            - name: INCLUDE_OPERATIONS_REGEX
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.operations.excludeRegex }}
+            - name: EXCLUDE_OPERATIONS_REGEX
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.operations.includeTags }}
+            - name: INCLUDE_TAGS
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.operations.excludeTags }}
+            - name: EXCLUDE_TAGS
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.auth.roleMapper }}
+            - name: OAUTH_ROLE_MAPPER
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.auth.roleClaim }}
+            - name: OAUTH_ROLE_CLAIM
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.auth.jwks.url }}
+            - name: OAUTH_JWKS_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.auth.jwks.file }}
+            - name: OAUTH_JWKS_FILE
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.oas2mcp.metrics.otlp.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ . | quote }}
