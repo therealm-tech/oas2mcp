@@ -1,6 +1,6 @@
 [package]
 name = "oas2mcp"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Load an OpenAPI document at startup and expose it as a Model Context Protocol (MCP) server over stdio, SSE, or Streamable HTTP."
 authors = ["Guillaume Leroy <gleroy@therealm.tech>"]
