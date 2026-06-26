@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
+use arc_swap::ArcSwap;
 use openapiv3::OpenAPI;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -22,70 +23,63 @@ use crate::cli::Cli;
 use crate::filter::{FilterConfig, OperationFilter};
 use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
 
+/// The part of the server that an OpenAPI reload replaces: the resolved tools,
+/// their name index, the upstream base URL (which may be derived from the
+/// document's `servers`), and the instructions string. Swapped atomically as a
+/// whole so a reload never exposes a half-updated state.
+struct Snapshot {
+    tools: Vec<ToolSpec>,
+    index: HashMap<String, usize>,
+    base_url: Url,
+    instructions: String,
+}
+
 /// MCP server backed by an OpenAPI document. Cheap to clone (everything shared
 /// is behind an `Arc`, and `reqwest::Client` is itself reference-counted), as
-/// the Streamable HTTP transport builds one instance per session.
+/// the Streamable HTTP transport builds one instance per session. The
+/// document-derived state lives behind an [`ArcSwap`] so a periodic reload
+/// updates every clone at once.
 #[derive(Clone)]
 pub struct OpenApiServer {
-    tools: Arc<Vec<ToolSpec>>,
-    index: Arc<HashMap<String, usize>>,
+    state: Arc<ArcSwap<Snapshot>>,
     client: reqwest::Client,
-    base_url: Url,
     extra_headers: Arc<HeaderMap>,
     /// Names of incoming-request headers to forward verbatim to the upstream API.
     forward_headers: Arc<Vec<HeaderName>>,
-    instructions: Arc<str>,
 }
 
 impl OpenApiServer {
     /// Build the server from a parsed OpenAPI document and the CLI config.
     pub fn from_spec(spec: &OpenAPI, cli: &Cli) -> anyhow::Result<Self> {
-        let base_url = resolve_base_url(spec, cli)?;
         let extra_headers = parse_headers(&cli.headers)?;
         let forward_headers = parse_header_names(&cli.forward_headers)?;
-
-        let filter = OperationFilter::new(FilterConfig {
-            include_globs: cli.include_operations.clone(),
-            exclude_globs: cli.exclude_operations.clone(),
-            include_regexes: cli.include_operations_regex.clone(),
-            exclude_regexes: cli.exclude_operations_regex.clone(),
-            include_tags: cli.include_tags.clone(),
-            exclude_tags: cli.exclude_tags.clone(),
-        });
-        let tools = build_tools(spec, &filter);
-        if tools.is_empty() {
-            tracing::warn!("the OpenAPI document defines no usable operations");
-        }
-        let index = tools
-            .iter()
-            .enumerate()
-            .map(|(i, t)| (t.name.clone(), i))
-            .collect();
-
-        let instructions = format!(
-            "MCP server proxying the \"{}\" API (version {}). \
-             Each tool maps to one OpenAPI operation and is executed as an HTTP \
-             request against {}. Path/query/header parameters are top-level tool \
-             arguments; a JSON request body is passed as the `body` argument.",
-            spec.info.title, spec.info.version, base_url,
-        );
+        let snapshot = build_snapshot(spec, cli)?;
 
         Ok(Self {
-            tools: Arc::new(tools),
-            index: Arc::new(index),
+            state: Arc::new(ArcSwap::from_pointee(snapshot)),
             client: reqwest::Client::builder()
                 .user_agent(concat!("oas2mcp/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .context("building the HTTP client")?,
-            base_url,
             extra_headers: Arc::new(extra_headers),
             forward_headers: Arc::new(forward_headers),
-            instructions: Arc::from(instructions),
         })
     }
 
+    /// Rebuild the tool set from a freshly fetched document and swap it in
+    /// atomically. The static config (auth headers, forwarded header names, the
+    /// HTTP client) is untouched. If the new document yields no usable tools,
+    /// the swap still happens — that is what the document now says.
+    pub fn reload(&self, spec: &OpenAPI, cli: &Cli) -> anyhow::Result<()> {
+        let snapshot = build_snapshot(spec, cli)?;
+        let tools = snapshot.tools.len();
+        self.state.store(Arc::new(snapshot));
+        tracing::info!(tools, "reloaded the OpenAPI document");
+        Ok(())
+    }
+
     pub fn tool_count(&self) -> usize {
-        self.tools.len()
+        self.state.load().tools.len()
     }
 
     /// Execute a tool call as a proxied HTTP request and shape the response as
@@ -93,10 +87,11 @@ impl OpenApiServer {
     async fn execute(
         &self,
         spec: &ToolSpec,
+        base_url: &Url,
         args: &Map<String, Value>,
         forwarded: &HeaderMap,
     ) -> CallToolResult {
-        let request = match self.build_request(spec, args, forwarded) {
+        let request = match self.build_request(spec, base_url, args, forwarded) {
             Ok(request) => request,
             Err(err) => return CallToolResult::error(vec![Content::text(err.to_string())]),
         };
@@ -125,6 +120,7 @@ impl OpenApiServer {
     fn build_request(
         &self,
         spec: &ToolSpec,
+        base_url: &Url,
         args: &Map<String, Value>,
         forwarded: &HeaderMap,
     ) -> anyhow::Result<reqwest::RequestBuilder> {
@@ -145,7 +141,7 @@ impl OpenApiServer {
 
         let full = format!(
             "{}/{}",
-            self.base_url.as_str().trim_end_matches('/'),
+            base_url.as_str().trim_end_matches('/'),
             path.trim_start_matches('/')
         );
         let url = Url::parse(&full).with_context(|| format!("building upstream URL `{full}`"))?;
@@ -216,7 +212,7 @@ impl ServerHandler for OpenApiServer {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = server_info;
-        info.instructions = Some(self.instructions.to_string());
+        info.instructions = Some(self.state.load().instructions.clone());
         info
     }
 
@@ -226,6 +222,8 @@ impl ServerHandler for OpenApiServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let tools = self
+            .state
+            .load()
             .tools
             .iter()
             .map(|spec| {
@@ -248,16 +246,19 @@ impl ServerHandler for OpenApiServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let Some(&idx) = self.index.get(request.name.as_ref()) else {
+        // Pin the current snapshot for the whole call so a concurrent reload
+        // cannot swap the tool out from under us mid-request.
+        let state = self.state.load_full();
+        let Some(&idx) = state.index.get(request.name.as_ref()) else {
             return Err(ErrorData::invalid_params(
                 Cow::from(format!("unknown tool `{}`", request.name)),
                 None,
             ));
         };
-        let spec = &self.tools[idx];
+        let spec = &state.tools[idx];
         let args = request.arguments.unwrap_or_default();
         let forwarded = self.forwarded_headers(&context);
-        Ok(self.execute(spec, &args, &forwarded).await)
+        Ok(self.execute(spec, &state.base_url, &args, &forwarded).await)
     }
 }
 
@@ -290,6 +291,46 @@ fn filter_forwarded(allow: &[HeaderName], src: &HeaderMap) -> HeaderMap {
     out
 }
 
+/// Build the document-derived [`Snapshot`]: resolve the base URL, apply the
+/// operation filter, build the tools and their name index, and render the
+/// instructions. Shared by the initial build and every reload.
+fn build_snapshot(spec: &OpenAPI, cli: &Cli) -> anyhow::Result<Snapshot> {
+    let base_url = resolve_base_url(spec, cli)?;
+
+    let filter = OperationFilter::new(FilterConfig {
+        include_globs: cli.include_operations.clone(),
+        exclude_globs: cli.exclude_operations.clone(),
+        include_regexes: cli.include_operations_regex.clone(),
+        exclude_regexes: cli.exclude_operations_regex.clone(),
+        include_tags: cli.include_tags.clone(),
+        exclude_tags: cli.exclude_tags.clone(),
+    });
+    let tools = build_tools(spec, &filter);
+    if tools.is_empty() {
+        tracing::warn!("the OpenAPI document defines no usable operations");
+    }
+    let index = tools
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.name.clone(), i))
+        .collect();
+
+    let instructions = format!(
+        "MCP server proxying the \"{}\" API (version {}). \
+         Each tool maps to one OpenAPI operation and is executed as an HTTP \
+         request against {}. Path/query/header parameters are top-level tool \
+         arguments; a JSON request body is passed as the `body` argument.",
+        spec.info.title, spec.info.version, base_url,
+    );
+
+    Ok(Snapshot {
+        tools,
+        index,
+        base_url,
+        instructions,
+    })
+}
+
 /// Determine the upstream base URL: the CLI override wins, otherwise the first
 /// absolute `servers` entry of the document.
 fn resolve_base_url(spec: &OpenAPI, cli: &Cli) -> anyhow::Result<Url> {
@@ -305,7 +346,7 @@ fn resolve_base_url(spec: &OpenAPI, cli: &Cli) -> anyhow::Result<Url> {
 }
 
 /// Parse `Name: Value` header strings from the CLI into a [`HeaderMap`].
-fn parse_headers(raw: &[String]) -> anyhow::Result<HeaderMap> {
+pub(crate) fn parse_headers(raw: &[String]) -> anyhow::Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     for entry in raw {
         let (name, value) = entry
@@ -354,6 +395,36 @@ fn collect_query(param: &Param, value: Option<&Value>, out: &mut Vec<(String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser as _;
+
+    #[test]
+    fn reload_swaps_the_tool_set() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+
+        const ONE_OP: &str = r#"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
+"#;
+        const TWO_OPS: &str = r#"
+openapi: 3.0.0
+info: { title: T, version: "2" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
+  /b: { get: { operationId: getB, responses: { "200": { description: ok } } } }
+"#;
+        let spec_one: OpenAPI = serde_yaml_ng::from_str(ONE_OP).expect("valid spec");
+        let server = OpenApiServer::from_spec(&spec_one, &cli).expect("server builds");
+        assert_eq!(server.tool_count(), 1);
+
+        let spec_two: OpenAPI = serde_yaml_ng::from_str(TWO_OPS).expect("valid spec");
+        server.reload(&spec_two, &cli).expect("reload succeeds");
+        assert_eq!(server.tool_count(), 2);
+        assert!(server.state.load().index.contains_key("getB"));
+    }
 
     #[test]
     fn parses_and_validates_header_names() {

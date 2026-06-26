@@ -24,8 +24,11 @@ spec:
         {{- if .Values.oas2mcp.openapi.inline }}
         checksum/openapi: {{ .Values.oas2mcp.openapi.inline | sha256sum }}
         {{- end }}
-        {{- if and (gt (len .Values.oas2mcp.upstream.headers) 0) (not .Values.oas2mcp.upstream.existingSecret) }}
+        {{- if and (gt (len .Values.oas2mcp.upstream.headers) 0) (not .Values.oas2mcp.upstream.existingSecret.name) }}
         checksum/upstream: {{ join "\n" .Values.oas2mcp.upstream.headers | sha256sum }}
+        {{- end }}
+        {{- if and (not .Values.oas2mcp.openapi.inline) (gt (len .Values.oas2mcp.openapi.headers) 0) (not .Values.oas2mcp.openapi.existingSecret.name) }}
+        checksum/openapi-headers: {{ join "\n" .Values.oas2mcp.openapi.headers | sha256sum }}
         {{- end }}
         {{- with .Values.oas2mcp.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -59,17 +62,28 @@ spec:
             {{- else }}
             - name: OPENAPI_URL
               value: {{ .Values.oas2mcp.openapi.url | quote }}
+            {{- if or .Values.oas2mcp.openapi.existingSecret.name (gt (len .Values.oas2mcp.openapi.headers) 0) }}
+            - name: OPENAPI_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oas2mcp.openapiSecretName" . }}
+                  key: {{ include "oas2mcp.openapiSecretKey" . }}
+            {{- end }}
+            {{- with .Values.oas2mcp.openapi.reloadEvery }}
+            - name: RELOAD_EVERY
+              value: {{ . | quote }}
+            {{- end }}
             {{- end }}
             {{- with .Values.oas2mcp.baseUrl }}
             - name: BASE_URL
               value: {{ . | quote }}
             {{- end }}
-            {{- if or .Values.oas2mcp.upstream.existingSecret (gt (len .Values.oas2mcp.upstream.headers) 0) }}
+            {{- if or .Values.oas2mcp.upstream.existingSecret.name (gt (len .Values.oas2mcp.upstream.headers) 0) }}
             - name: UPSTREAM_HEADERS
               valueFrom:
                 secretKeyRef:
                   name: {{ include "oas2mcp.upstreamSecretName" . }}
-                  key: UPSTREAM_HEADERS
+                  key: {{ include "oas2mcp.upstreamSecretKey" . }}
             {{- end }}
             {{- with .Values.oas2mcp.upstream.forwardHeaders }}
             - name: FORWARD_HEADERS

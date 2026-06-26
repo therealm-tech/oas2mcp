@@ -20,7 +20,7 @@ Expose an OpenAPI document as a Model Context Protocol (MCP) server over the Str
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| oas2mcp | object | `{"affinity":{},"baseUrl":null,"extraEnv":[],"extraVolumeMounts":[],"extraVolumes":[],"image":{"pullPolicy":"IfNotPresent","repository":"ghcr.io/therealm-tech/oas2mcp","tag":null},"imagePullSecrets":[],"ingress":{"annotations":{},"className":null,"enabled":false,"host":"oas2mcp.example.com","tlsSecret":null},"logFilter":"info","nodeSelector":{},"openapi":{"inline":null,"url":null},"podAnnotations":{},"podLabels":{},"podSecurityContext":{"fsGroup":1000,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}},"replicaCount":1,"resources":{"limits":{"ephemeral-storage":"256Mi","memory":"128Mi"},"requests":{"cpu":"50m","ephemeral-storage":"64Mi","memory":"64Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true},"service":{"port":8000,"type":"ClusterIP"},"serviceAccount":{"annotations":{},"create":true,"name":null},"tolerations":[],"transport":"streamable-http","upstream":{"existingSecret":null,"forwardHeaders":[],"headers":[]}}` | oas2mcp server: deploys the OpenAPI→MCP proxy as an HTTP MCP endpoint. |
+| oas2mcp | object | `{"affinity":{},"baseUrl":null,"extraEnv":[],"extraVolumeMounts":[],"extraVolumes":[],"image":{"pullPolicy":"IfNotPresent","repository":"ghcr.io/therealm-tech/oas2mcp","tag":null},"imagePullSecrets":[],"ingress":{"annotations":{},"className":null,"enabled":false,"host":"oas2mcp.example.com","tlsSecret":null},"logFilter":"info","nodeSelector":{},"openapi":{"existingSecret":{"key":"OPENAPI_HEADERS","name":null},"headers":[],"inline":null,"reloadEvery":null,"url":null},"podAnnotations":{},"podLabels":{},"podSecurityContext":{"fsGroup":1000,"runAsGroup":1000,"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}},"replicaCount":1,"resources":{"limits":{"ephemeral-storage":"256Mi","memory":"128Mi"},"requests":{"cpu":"50m","ephemeral-storage":"64Mi","memory":"64Mi"}},"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true},"service":{"port":8000,"type":"ClusterIP"},"serviceAccount":{"annotations":{},"create":true,"name":null},"tolerations":[],"transport":"streamable-http","upstream":{"existingSecret":{"key":"UPSTREAM_HEADERS","name":null},"forwardHeaders":[],"headers":[]}}` | oas2mcp server: deploys the OpenAPI→MCP proxy as an HTTP MCP endpoint. |
 | oas2mcp.affinity | object | `{}` | Affinity rules for pod scheduling. |
 | oas2mcp.baseUrl | string | `nil` | Upstream API base URL the tool calls are proxied to. Unset → taken from the document `servers`. |
 | oas2mcp.extraEnv | list | `[]` | Extra environment variables injected into the container. |
@@ -37,7 +37,11 @@ Expose an OpenAPI document as a Model Context Protocol (MCP) server over the Str
 | oas2mcp.ingress.tlsSecret | string | `nil` | Name of a TLS Secret for the host. Unset → no TLS block. |
 | oas2mcp.logFilter | string | `"info"` | `tracing` filter directive, mapped to `RUST_LOG`. |
 | oas2mcp.nodeSelector | object | `{}` | Node selector for pod scheduling. |
+| oas2mcp.openapi.existingSecret.key | string | `"OPENAPI_HEADERS"` | Key in that Secret holding the newline-separated `Name: Value` headers. |
+| oas2mcp.openapi.existingSecret.name | string | `nil` | Name of a pre-existing Secret holding the document-fetch headers. Set → takes precedence over `headers`. |
+| oas2mcp.openapi.headers | list | `[]` | `Name: Value` headers sent when fetching `url` (e.g. for a private document). Stored in a Secret. Ignored with `inline`. |
 | oas2mcp.openapi.inline | string | `nil` | Inline OpenAPI document (JSON or YAML). Stored in a ConfigMap and mounted; takes precedence over `url`. |
+| oas2mcp.openapi.reloadEvery | string | `nil` | Re-fetch `url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Unset → load once at startup. Ignored with `inline`. |
 | oas2mcp.openapi.url | string | `nil` | URL of the OpenAPI document fetched at startup. Mutually exclusive with `inline`. |
 | oas2mcp.podAnnotations | object | `{}` | Annotations added to the pod. |
 | oas2mcp.podLabels | object | `{}` | Extra labels added to the pod. |
@@ -65,7 +69,8 @@ Expose an OpenAPI document as a Model Context Protocol (MCP) server over the Str
 | oas2mcp.serviceAccount.name | string | `nil` | ServiceAccount name. Unset → generated from the release name. |
 | oas2mcp.tolerations | list | `[]` | Tolerations for pod scheduling. |
 | oas2mcp.transport | string | `"streamable-http"` | MCP transport to expose. One of `streamable-http`, `sse`. (`stdio` makes no sense for a long-running Deployment.) |
-| oas2mcp.upstream.existingSecret | string | `nil` | Name of a pre-existing Secret holding key `UPSTREAM_HEADERS`. Takes precedence over `headers`. |
+| oas2mcp.upstream.existingSecret.key | string | `"UPSTREAM_HEADERS"` | Key in that Secret holding the newline-separated `Name: Value` headers. |
+| oas2mcp.upstream.existingSecret.name | string | `nil` | Name of a pre-existing Secret holding the upstream headers. Set → takes precedence over `headers`. |
 | oas2mcp.upstream.forwardHeaders | list | `[]` | Names of incoming MCP-client request headers forwarded verbatim to the upstream API (e.g. `Authorization`). Per-call, not static; requires `transport: streamable-http`. |
 | oas2mcp.upstream.headers | list | `[]` | Static `Name: Value` headers added to every upstream request (e.g. `Authorization: Bearer ...`). Stored in a Secret. |
 
