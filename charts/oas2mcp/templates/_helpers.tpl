@@ -77,3 +77,21 @@ UPSTREAM_HEADERS
 OPENAPI_HEADERS
 {{- end -}}
 {{- end -}}
+
+{{/* Name of the Secret holding the OAuth client secret (existing or generated). */}}
+{{- define "oas2mcp.oauthSecretName" -}}
+{{- if .Values.oas2mcp.openapi.oauth.existingSecret.name -}}
+{{- .Values.oas2mcp.openapi.oauth.existingSecret.name -}}
+{{- else -}}
+{{- printf "%s-openapi-oauth" (include "oas2mcp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Key in the OAuth client-secret Secret: the existing Secret's key, else the generated default. */}}
+{{- define "oas2mcp.oauthSecretKey" -}}
+{{- if .Values.oas2mcp.openapi.oauth.existingSecret.name -}}
+{{- .Values.oas2mcp.openapi.oauth.existingSecret.key -}}
+{{- else -}}
+OPENAPI_OAUTH_CLIENT_SECRET
+{{- end -}}
+{{- end -}}

@@ -17,7 +17,9 @@ writing a line of glue code.
   `--openapi-header`.
 - **Periodic reload** — with `--reload-every`, a document loaded from a URL is
   re-fetched on an interval and the exposed tool set is rebuilt in place,
-  without restarting the server.
+  without restarting the server. The fetch can authenticate via OAuth2
+  `client_credentials` (auto-refreshed token), so reloads keep working on a
+  long-running server where a static token would expire.
 - **One tool per operation** — `operationId` becomes the tool name (falling
   back to `<method>_<path>`); path, query and header parameters become
   top-level tool arguments, and a JSON request body is passed as a `body`
@@ -63,6 +65,11 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--openapi-url`   | `OPENAPI_URL`    | —                | URL of an OpenAPI document fetched at startup (and on each reload).|
 | `--openapi-header`| `OPENAPI_HEADERS`| —                | `Name: Value` header sent when fetching `--openapi-url` (e.g. for a private document). Repeatable. |
 | `--reload-every`  | `RELOAD_EVERY`   | —                | Re-fetch `--openapi-url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Off by default; ignored for a file source. |
+| `--openapi-oauth-token-url` | `OPENAPI_OAUTH_TOKEN_URL` | — | OAuth2 `client_credentials` token endpoint. Set → the document fetch uses an auto-refreshed bearer token. Requires the client id/secret below. |
+| `--openapi-oauth-client-id` | `OPENAPI_OAUTH_CLIENT_ID` | — | OAuth2 client ID for the document-fetch token.                     |
+| `--openapi-oauth-client-secret` | `OPENAPI_OAUTH_CLIENT_SECRET` | — | OAuth2 client secret. Prefer the env var so it stays out of the process list. |
+| `--openapi-oauth-scope` | `OPENAPI_OAUTH_SCOPES` | —          | OAuth2 scope requested (sent space-joined). Repeatable; newline-separated via the env var. |
+| `--openapi-oauth-audience` | `OPENAPI_OAUTH_AUDIENCE` | —    | OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0). |
 | `--base-url`      | `BASE_URL`       | spec `servers`   | Upstream API base URL that tool calls are proxied to.              |
 | `--header`        | `UPSTREAM_HEADERS` | —              | Extra `Name: Value` header on every upstream request. Repeatable.  |
 | `--forward-header`| `FORWARD_HEADERS`  | —              | Name of an incoming request header to forward upstream (e.g. `Authorization`). Repeatable. `streamable-http` only. |
@@ -148,6 +155,32 @@ loaded tool set is kept, so a transient upstream blip never empties the server.
 `--reload-every` is ignored when the document is loaded from a file. Note that
 the server does not yet emit an MCP `tools/list_changed` notification, so a
 connected client picks up the new tools on its next `tools/list` call.
+
+#### OAuth for the document fetch
+
+A static `--openapi-header` bearer token works for a one-shot fetch, but on a
+long-running server it eventually expires and the reloads start failing. For
+that case, authenticate the document fetch with an OAuth2 `client_credentials`
+grant: the server obtains a token from the provider, caches it, and refreshes
+it automatically shortly before expiry — so the periodic reload keeps working
+indefinitely.
+
+```bash
+oas2mcp \
+  --openapi-url https://api.example.com/openapi.json \
+  --reload-every 1h \
+  --openapi-oauth-token-url https://idp.example.com/oauth/token \
+  --openapi-oauth-client-id "$CLIENT_ID" \
+  --openapi-oauth-client-secret "$CLIENT_SECRET" \
+  --openapi-oauth-scope read:openapi \
+  --transport streamable-http \
+  --bind-addr 0.0.0.0:8000
+```
+
+Client authentication uses HTTP Basic against the token endpoint (RFC 6749).
+The OAuth bearer takes precedence over any static `Authorization` set via
+`--openapi-header`. This auth covers the **document fetch only**; upstream API
+calls still use `--header` / `--forward-header`.
 
 ### Restricting the exposed operations
 
