@@ -63,6 +63,10 @@ spec:
               value: "0.0.0.0:{{ .Values.oas2mcp.service.port }}"
             - name: RUST_LOG
               value: {{ .Values.oas2mcp.logFilter | quote }}
+            {{- if .Values.oas2mcp.streamResponses }}
+            - name: STREAM_RESPONSES
+              value: "true"
+            {{- end }}
             {{- if .Values.oas2mcp.openapi.inline }}
             - name: OPENAPI_FILE
               value: /etc/oas2mcp/openapi.yaml

@@ -94,6 +94,9 @@ oas2mcp:
   # -- MCP transport to expose. One of `streamable-http`, `sse`. (`stdio` makes no sense for a long-running Deployment.)
   transport: streamable-http
 
+  # -- Reply on `streamable-http` with an SSE flow and stateful sessions. Set to `false` when the MCP server sits behind a proxy (e.g. Envoy AI Gateway) that can't parse the SSE priming event — that switches it to single `application/json` replies (stateless). Only affects `transport: streamable-http`.
+  streamResponses: true
+
   upstream:
     # -- (list) Static `Name: Value` headers added to every upstream request (e.g. `Authorization: Bearer ...`). Stored in a Secret.
     headers: []

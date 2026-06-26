@@ -280,6 +280,21 @@ pub struct Cli {
     #[arg(long, env = "BIND_ADDR", default_value_t = default_bind_addr())]
     pub bind_addr: SocketAddr,
 
+    /// Stream `streamable-http` replies as a `text/event-stream` (SSE) flow with
+    /// stateful MCP sessions, instead of the default single `application/json`
+    /// reply.
+    ///
+    /// By default oas2mcp answers each `streamable-http` request with one
+    /// `application/json` body (running statelessly). That is the most
+    /// compatible mode: rmcp's SSE framing prepends a priming event whose
+    /// `data:` line is empty, which some strict proxies (e.g. Envoy AI Gateway)
+    /// refuse to parse — they abort on the empty event and report
+    /// `MCP message is not a response`. Turn this on only when you specifically
+    /// want SSE streaming and stateful sessions, and you are not behind such a
+    /// proxy. Only affects `streamable-http`; ignored for `stdio` and `sse`.
+    #[arg(long = "stream-responses", env = "STREAM_RESPONSES")]
+    pub stream_responses: bool,
+
     /// `tracing` filter directive (e.g. `info`, `oas2mcp=debug,rmcp=warn`).
     #[arg(long = "log-filter", env = "RUST_LOG", default_value = "info")]
     pub log_filter: String,
@@ -304,6 +319,17 @@ mod tests {
         let err = Cli::try_parse_from(["oas2mcp", "--include-regex", "("])
             .expect_err("invalid regex must fail at parse time");
         assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn json_replies_are_the_default_and_streaming_is_opt_in() {
+        // JSON replies are the default — streaming stays off unless asked.
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
+        assert!(!cli.stream_responses);
+
+        // The flag opts into SSE streaming.
+        let cli = Cli::try_parse_from(["oas2mcp", "--stream-responses"]).expect("bare flag parses");
+        assert!(cli.stream_responses);
     }
 
     #[test]
