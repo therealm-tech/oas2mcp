@@ -11,6 +11,7 @@ mod filter;
 mod oauth;
 mod openapi;
 mod server;
+mod telemetry;
 mod tools;
 mod transport;
 
@@ -54,14 +55,23 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let server = server::OpenApiServer::from_spec(&spec, &cli, authorizer)
-        .context("failed to build the MCP server from the OpenAPI document")?;
+    let telemetry =
+        telemetry::Telemetry::from_cli(&cli).context("configuring metrics telemetry")?;
+
+    let server =
+        server::OpenApiServer::from_spec(&spec, &cli, authorizer, telemetry.metrics.clone())
+            .context("failed to build the MCP server from the OpenAPI document")?;
 
     tracing::info!(
         transport = %cli.transport,
         tools = server.tool_count(),
         "starting MCP server"
     );
+
+    telemetry
+        .serve_metrics()
+        .await
+        .context("starting the Prometheus metrics endpoint")?;
 
     // When asked to reload, re-fetch the document on an interval in the
     // background. Only a URL source can be reloaded; a file source is loaded
@@ -88,6 +98,9 @@ async fn main() -> anyhow::Result<()> {
     transport::serve(cli.transport, cli.bind_addr, server)
         .await
         .context("MCP transport terminated with an error")?;
+
+    // Flush any metrics buffered by the OTLP exporter before exiting.
+    telemetry.shutdown();
 
     Ok(())
 }

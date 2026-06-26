@@ -22,6 +22,7 @@ use url::Url;
 use crate::auth::Authorizer;
 use crate::cli::Cli;
 use crate::filter::{FilterConfig, OperationFilter};
+use crate::telemetry::{Metrics, Outcome};
 use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
 
 /// The part of the server that an OpenAPI reload replaces: the resolved tools,
@@ -49,6 +50,18 @@ pub struct OpenApiServer {
     forward_headers: Arc<Vec<HeaderName>>,
     /// Optional JWT role-based tool authorization. `None` exposes every tool.
     authorizer: Option<Arc<Authorizer>>,
+    /// Tool-call metrics. No-op when telemetry is disabled.
+    metrics: Metrics,
+}
+
+/// The authenticated caller of a request: their JWT roles (when authorization
+/// is enabled) and `sub` claim (when the token carried one).
+struct Caller {
+    /// `None` when no authorizer is configured (no restriction); `Some` carries
+    /// the verified roles, empty when the token is missing or invalid.
+    roles: Option<HashSet<String>>,
+    /// The caller's JWT subject, used only as a metric attribute.
+    sub: Option<String>,
 }
 
 impl OpenApiServer {
@@ -59,6 +72,7 @@ impl OpenApiServer {
         spec: &OpenAPI,
         cli: &Cli,
         authorizer: Option<Arc<Authorizer>>,
+        metrics: Metrics,
     ) -> anyhow::Result<Self> {
         let extra_headers = parse_headers(&cli.headers)?;
         let forward_headers = parse_header_names(&cli.forward_headers)?;
@@ -73,6 +87,7 @@ impl OpenApiServer {
             extra_headers: Arc::new(extra_headers),
             forward_headers: Arc::new(forward_headers),
             authorizer,
+            metrics,
         })
     }
 
@@ -231,7 +246,7 @@ impl ServerHandler for OpenApiServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let roles = self.caller_roles(&context);
+        let roles = self.caller(&context).roles;
         let tools = self
             .state
             .load()
@@ -272,8 +287,8 @@ impl ServerHandler for OpenApiServer {
         // Enforce JWT role authorization: a caller who cannot see the tool may
         // not call it either. Reported as an unknown tool so the gate does not
         // leak which tools exist to an unauthorized caller.
-        let roles = self.caller_roles(&context);
-        if !self.is_allowed(&roles, &spec.name) {
+        let caller = self.caller(&context);
+        if !self.is_allowed(&caller.roles, &spec.name) {
             tracing::warn!(tool = %spec.name, "denying tool call: caller is not authorized");
             return Err(ErrorData::invalid_params(
                 Cow::from(format!("unknown tool `{}`", request.name)),
@@ -283,35 +298,68 @@ impl ServerHandler for OpenApiServer {
 
         let args = request.arguments.unwrap_or_default();
         let forwarded = self.forwarded_headers(&context);
-        Ok(self.execute(spec, &state.base_url, &args, &forwarded).await)
+
+        let started = std::time::Instant::now();
+        let result = self.execute(spec, &state.base_url, &args, &forwarded).await;
+        let outcome = if result.is_error.unwrap_or(false) {
+            Outcome::Error
+        } else {
+            Outcome::Success
+        };
+        self.metrics.record_call(
+            &spec.name,
+            outcome,
+            caller.sub.as_deref(),
+            started.elapsed(),
+        );
+
+        Ok(result)
     }
 }
 
 impl OpenApiServer {
-    /// Resolve the caller's JWT roles for this request.
+    /// Resolve the caller's identity for this request: their JWT roles and
+    /// `sub`.
     ///
-    /// Returns `None` when no authorizer is configured — meaning "no
-    /// restriction", every tool is allowed. Returns `Some(roles)` when an
+    /// `roles` is `None` when no authorizer is configured — meaning "no
+    /// restriction", every tool is allowed. It is `Some(roles)` when an
     /// authorizer is configured; the set is empty when the request carries no
     /// bearer token (e.g. `stdio`/`sse`, which expose no client headers) or the
-    /// token fails verification, which denies access to every tool.
-    fn caller_roles(&self, context: &RequestContext<RoleServer>) -> Option<HashSet<String>> {
-        let authorizer = self.authorizer.as_ref()?;
+    /// token fails verification, which denies access to every tool. `sub` is set
+    /// only from a successfully verified token.
+    fn caller(&self, context: &RequestContext<RoleServer>) -> Caller {
+        let Some(authorizer) = self.authorizer.as_ref() else {
+            return Caller {
+                roles: None,
+                sub: None,
+            };
+        };
         let token = context
             .extensions
             .get::<http::request::Parts>()
             .and_then(|parts| bearer_token(&parts.headers));
-        let roles = match token {
-            Some(token) => authorizer.roles_for_token(token).unwrap_or_else(|err| {
-                tracing::warn!(error = %format!("{err:#}"), "rejecting request: JWT verification failed");
-                HashSet::new()
-            }),
+        match token {
+            Some(token) => match authorizer.verify(token) {
+                Ok(claims) => Caller {
+                    roles: Some(claims.roles),
+                    sub: claims.sub,
+                },
+                Err(err) => {
+                    tracing::warn!(error = %format!("{err:#}"), "rejecting request: JWT verification failed");
+                    Caller {
+                        roles: Some(HashSet::new()),
+                        sub: None,
+                    }
+                }
+            },
             None => {
                 tracing::warn!("rejecting request: no bearer token on a role-restricted server");
-                HashSet::new()
+                Caller {
+                    roles: Some(HashSet::new()),
+                    sub: None,
+                }
             }
-        };
-        Some(roles)
+        }
     }
 
     /// Whether the tool named `name` is visible/callable for this request's
@@ -488,7 +536,8 @@ paths:
   /b: { get: { operationId: getB, responses: { "200": { description: ok } } } }
 "#;
         let spec_one: OpenAPI = serde_yaml_ng::from_str(ONE_OP).expect("valid spec");
-        let server = OpenApiServer::from_spec(&spec_one, &cli, None).expect("server builds");
+        let server = OpenApiServer::from_spec(&spec_one, &cli, None, Metrics::disabled())
+            .expect("server builds");
         assert_eq!(server.tool_count(), 1);
 
         let spec_two: OpenAPI = serde_yaml_ng::from_str(TWO_OPS).expect("valid spec");

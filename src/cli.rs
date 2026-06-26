@@ -180,6 +180,28 @@ pub struct Cli {
     )]
     pub oauth_role_claim: String,
 
+    /// Base OTLP endpoint to push tool-call metrics to over HTTP/protobuf (e.g.
+    /// `http://localhost:4318`). When set, metrics are exported to this
+    /// collector; the `/v1/metrics` signal path is appended automatically.
+    /// Honours the standard `OTEL_EXPORTER_OTLP_ENDPOINT` variable. Independent
+    /// of `--metrics-addr`; enable either, both, or neither.
+    #[arg(long = "otlp-endpoint", env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
+    pub otlp_endpoint: Option<Url>,
+
+    /// Address to serve a Prometheus `/metrics` endpoint on (e.g.
+    /// `0.0.0.0:9090`). When set, tool-call metrics are exposed for scraping on
+    /// a dedicated HTTP server, independent of the MCP transport.
+    #[arg(long = "metrics-addr", env = "METRICS_ADDR")]
+    pub metrics_addr: Option<SocketAddr>,
+
+    /// `service.name` reported on exported metrics.
+    #[arg(
+        long = "otel-service-name",
+        env = "OTEL_SERVICE_NAME",
+        default_value = "oas2mcp"
+    )]
+    pub otel_service_name: String,
+
     /// Only expose operations whose name (operationId, or `<method>_<path>`)
     /// matches this glob. Repeatable; an operation is kept if it matches any
     /// `--include` or carries any `--tag`. Globs support `*` and `?`. Use it to

@@ -71,6 +71,32 @@ oas2mcp:
     # -- Service port (also the container listen port).
     port: 8000
 
+  # -- Tool-call metrics (OpenTelemetry). Export over OTLP and/or a Prometheus `/metrics` endpoint; both are independent.
+  metrics:
+    otlp:
+      # -- (string) Base OTLP endpoint to push metrics to over HTTP (e.g. `http://otel-collector:4318`); `/v1/metrics` is appended. Unset → no OTLP export. Maps to `OTEL_EXPORTER_OTLP_ENDPOINT`.
+      endpoint: ~
+    # -- (string) `service.name` reported on exported metrics. Unset → the binary default (`oas2mcp`). Maps to `OTEL_SERVICE_NAME`.
+    serviceName: ~
+    prometheus:
+      # -- Serve a Prometheus `/metrics` endpoint on a dedicated port and Service port. Required by the ServiceMonitor below.
+      enabled: false
+      # -- Port the Prometheus `/metrics` endpoint listens on (container and Service).
+      port: 9090
+      serviceMonitor:
+        # -- Create a Prometheus Operator ServiceMonitor scraping `/metrics`. Requires `prometheus.enabled` and the `monitoring.coreos.com` CRD.
+        enabled: false
+        # -- (string) Scrape interval (e.g. `30s`). Unset → the Prometheus default.
+        interval: ~
+        # -- (string) Per-scrape timeout (e.g. `10s`). Unset → the Prometheus default.
+        scrapeTimeout: ~
+        # -- (object) Extra labels on the ServiceMonitor so your Prometheus instance selects it (e.g. `release: kube-prometheus-stack`).
+        labels: {}
+        # -- (list) Prometheus `relabelings` applied to scraped targets before ingestion.
+        relabelings: []
+        # -- (list) Prometheus `metricRelabelings` applied to scraped samples before ingestion.
+        metricRelabelings: []
+
   ingress:
     # -- Create an Ingress for the HTTP transport.
     enabled: false
