@@ -28,6 +28,22 @@ oas2mcp:
       key: OPENAPI_HEADERS
     # -- (string) Re-fetch `url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Unset → load once at startup. Ignored with `inline`.
     reloadEvery: ~
+    oauth:
+      # -- (string) OAuth2 `client_credentials` token endpoint. Set → the document fetch authenticates with an auto-refreshed bearer token (best paired with `reloadEvery`). Ignored with `inline`.
+      tokenUrl: ~
+      # -- (string) OAuth2 client ID.
+      clientId: ~
+      # -- (string) OAuth2 client secret. Stored in a Secret. Ignored when `existingSecret.name` is set.
+      clientSecret: ~
+      existingSecret:
+        # -- (string) Name of a pre-existing Secret holding the client secret. Set → takes precedence over `clientSecret`.
+        name: ~
+        # -- Key in that Secret holding the client secret.
+        key: OPENAPI_OAUTH_CLIENT_SECRET
+      # -- (list) OAuth2 scopes requested for the token.
+      scopes: []
+      # -- (string) OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0).
+      audience: ~
 
   # -- (string) Upstream API base URL the tool calls are proxied to. Unset → taken from the document `servers`.
   baseUrl: ~

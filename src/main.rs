@@ -7,6 +7,7 @@
 
 mod cli;
 mod filter;
+mod oauth;
 mod openapi;
 mod server;
 mod tools;
@@ -34,7 +35,10 @@ async fn main() -> anyhow::Result<()> {
         .with_ansi(false)
         .init();
 
-    let spec = openapi::load(&cli)
+    let doc_auth =
+        openapi::DocAuth::from_cli(&cli).context("configuring OpenAPI document authentication")?;
+
+    let spec = openapi::load(&cli, &doc_auth)
         .await
         .context("failed to load the OpenAPI document")?;
 
@@ -57,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
                 tokio::spawn(reload_loop(
                     server.clone(),
                     cli.clone(),
+                    doc_auth.clone(),
                     url.clone(),
                     interval,
                 ));
@@ -78,13 +83,19 @@ async fn main() -> anyhow::Result<()> {
 /// Periodically re-fetch the OpenAPI document from `url` and swap the server's
 /// tool set. A failed fetch or rebuild is logged and the previous tool set is
 /// kept, so a transient upstream blip never empties the server.
-async fn reload_loop(server: OpenApiServer, cli: Cli, url: Url, interval: Duration) {
+async fn reload_loop(
+    server: OpenApiServer,
+    cli: Cli,
+    auth: openapi::DocAuth,
+    url: Url,
+    interval: Duration,
+) {
     let mut ticker = tokio::time::interval(interval);
     // The first tick fires immediately; skip it since we just loaded at startup.
     ticker.tick().await;
     loop {
         ticker.tick().await;
-        match openapi::fetch(&url, &cli.openapi_headers).await {
+        match auth.fetch(&url).await {
             Ok(spec) => {
                 if let Err(err) = server.reload(&spec, &cli) {
                     tracing::error!(

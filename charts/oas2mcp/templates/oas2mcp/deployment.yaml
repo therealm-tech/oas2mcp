@@ -30,6 +30,9 @@ spec:
         {{- if and (not .Values.oas2mcp.openapi.inline) (gt (len .Values.oas2mcp.openapi.headers) 0) (not .Values.oas2mcp.openapi.existingSecret.name) }}
         checksum/openapi-headers: {{ join "\n" .Values.oas2mcp.openapi.headers | sha256sum }}
         {{- end }}
+        {{- if and (not .Values.oas2mcp.openapi.inline) .Values.oas2mcp.openapi.oauth.clientSecret (not .Values.oas2mcp.openapi.oauth.existingSecret.name) }}
+        checksum/openapi-oauth: {{ .Values.oas2mcp.openapi.oauth.clientSecret | sha256sum }}
+        {{- end }}
         {{- with .Values.oas2mcp.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -68,6 +71,29 @@ spec:
                 secretKeyRef:
                   name: {{ include "oas2mcp.openapiSecretName" . }}
                   key: {{ include "oas2mcp.openapiSecretKey" . }}
+            {{- end }}
+            {{- with .Values.oas2mcp.openapi.oauth.tokenUrl }}
+            - name: OPENAPI_OAUTH_TOKEN_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.openapi.oauth.clientId }}
+            - name: OPENAPI_OAUTH_CLIENT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if or .Values.oas2mcp.openapi.oauth.existingSecret.name .Values.oas2mcp.openapi.oauth.clientSecret }}
+            - name: OPENAPI_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oas2mcp.oauthSecretName" . }}
+                  key: {{ include "oas2mcp.oauthSecretKey" . }}
+            {{- end }}
+            {{- with .Values.oas2mcp.openapi.oauth.scopes }}
+            - name: OPENAPI_OAUTH_SCOPES
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.openapi.oauth.audience }}
+            - name: OPENAPI_OAUTH_AUDIENCE
+              value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.openapi.reloadEvery }}
             - name: RELOAD_EVERY

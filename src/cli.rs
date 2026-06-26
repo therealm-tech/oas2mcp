@@ -68,6 +68,51 @@ pub struct Cli {
     #[arg(long, env = "RELOAD_EVERY", value_parser = humantime::parse_duration)]
     pub reload_every: Option<Duration>,
 
+    /// OAuth 2.0 token endpoint for the `client_credentials` grant. When set,
+    /// the OpenAPI document fetch (initial and every reload) authenticates with
+    /// a bearer token obtained here, refreshed automatically before it expires —
+    /// use it instead of a static `--openapi-header` token that would go stale
+    /// on a long-running server. Requires `--openapi-oauth-client-id` and
+    /// `--openapi-oauth-client-secret`.
+    #[arg(
+        long = "openapi-oauth-token-url",
+        env = "OPENAPI_OAUTH_TOKEN_URL",
+        requires = "openapi_oauth_client_id"
+    )]
+    pub openapi_oauth_token_url: Option<Url>,
+
+    /// OAuth 2.0 client ID for the document-fetch `client_credentials` grant.
+    #[arg(
+        long = "openapi-oauth-client-id",
+        env = "OPENAPI_OAUTH_CLIENT_ID",
+        requires = "openapi_oauth_client_secret"
+    )]
+    pub openapi_oauth_client_id: Option<String>,
+
+    /// OAuth 2.0 client secret for the document-fetch `client_credentials`
+    /// grant. Prefer the environment variable over the command line so the
+    /// secret does not leak into the process list.
+    #[arg(
+        long = "openapi-oauth-client-secret",
+        env = "OPENAPI_OAUTH_CLIENT_SECRET"
+    )]
+    pub openapi_oauth_client_secret: Option<String>,
+
+    /// OAuth 2.0 scope requested for the document-fetch token. Repeatable; sent
+    /// space-joined as the `scope` parameter. When set via the environment
+    /// variable, separate scopes with newlines.
+    #[arg(
+        long = "openapi-oauth-scope",
+        env = "OPENAPI_OAUTH_SCOPES",
+        value_delimiter = '\n'
+    )]
+    pub openapi_oauth_scopes: Vec<String>,
+
+    /// OAuth 2.0 `audience` parameter for the document-fetch token. Some
+    /// providers (e.g. Auth0) require it to issue a token for the target API.
+    #[arg(long = "openapi-oauth-audience", env = "OPENAPI_OAUTH_AUDIENCE")]
+    pub openapi_oauth_audience: Option<String>,
+
     /// Base URL of the upstream API that tool calls are proxied to. Overrides
     /// the `servers` entry of the OpenAPI document.
     #[arg(long, env = "BASE_URL")]
@@ -173,5 +218,30 @@ mod tests {
         let err = Cli::try_parse_from(["oas2mcp", "--include-regex", "("])
             .expect_err("invalid regex must fail at parse time");
         assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn oauth_token_url_requires_client_id_and_secret() {
+        // token-url alone is incomplete: it requires a client id, which in turn
+        // requires a client secret.
+        let err = Cli::try_parse_from([
+            "oas2mcp",
+            "--openapi-oauth-token-url",
+            "https://idp.example.com/token",
+        ])
+        .expect_err("token-url without credentials must fail");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+
+        // The full triple parses.
+        Cli::try_parse_from([
+            "oas2mcp",
+            "--openapi-oauth-token-url",
+            "https://idp.example.com/token",
+            "--openapi-oauth-client-id",
+            "id",
+            "--openapi-oauth-client-secret",
+            "secret",
+        ])
+        .expect("complete OAuth config parses");
     }
 }
