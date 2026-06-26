@@ -137,6 +137,49 @@ pub struct Cli {
     )]
     pub forward_headers: Vec<String>,
 
+    /// Restrict which tools a caller may see and invoke based on the roles
+    /// carried in their JWT, as `role:tool_name_regex` (e.g.
+    /// `admin:.*`, `reader:^get`). Repeatable; a tool is allowed if any of the
+    /// caller's roles maps to a regex matching the tool name. When set, the
+    /// incoming request's `Authorization: Bearer` JWT is verified against a
+    /// JWKS (`--oauth-jwks-url` or `--oauth-jwks-file`, one is required) and the
+    /// roles are read from the `--oauth-role-claim` claim. A caller with no
+    /// valid token, or whose roles match nothing, sees and can call no tools.
+    /// Only the `streamable-http` transport exposes the client's JWT; ignored
+    /// for `stdio` and `sse`. Invalid regexes are rejected at startup. When set
+    /// via the environment variable, separate entries with newlines.
+    #[arg(
+        long = "oauth-role-mapper",
+        env = "OAUTH_ROLE_MAPPER",
+        value_delimiter = '\n'
+    )]
+    pub oauth_role_mapper: Vec<String>,
+
+    /// URL of a JWKS document, fetched at startup, whose keys verify the
+    /// incoming JWT signatures. Required (with `--oauth-jwks-file` as the
+    /// alternative) when `--oauth-role-mapper` is set.
+    #[arg(
+        long = "oauth-jwks-url",
+        env = "OAUTH_JWKS_URL",
+        conflicts_with = "oauth_jwks_file"
+    )]
+    pub oauth_jwks_url: Option<Url>,
+
+    /// Path to a JWKS document on disk whose keys verify the incoming JWT
+    /// signatures. Mutually exclusive with `--oauth-jwks-url`.
+    #[arg(long = "oauth-jwks-file", env = "OAUTH_JWKS_FILE")]
+    pub oauth_jwks_file: Option<PathBuf>,
+
+    /// Name of the JWT claim listing the caller's roles. The claim value may be
+    /// an array of strings or a single whitespace-separated string. Only used
+    /// when `--oauth-role-mapper` is set.
+    #[arg(
+        long = "oauth-role-claim",
+        env = "OAUTH_ROLE_CLAIM",
+        default_value = "roles"
+    )]
+    pub oauth_role_claim: String,
+
     /// Only expose operations whose name (operationId, or `<method>_<path>`)
     /// matches this glob. Repeatable; an operation is kept if it matches any
     /// `--include` or carries any `--tag`. Globs support `*` and `?`. Use it to

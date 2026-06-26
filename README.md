@@ -33,6 +33,9 @@ writing a line of glue code.
 - **Auth passthrough** — attach arbitrary static headers (e.g. a bearer token)
   to every upstream request, or forward the MCP client's own request headers
   (e.g. `Authorization`) upstream per call (`streamable-http` only).
+- **Role-based tool access** — verify the caller's JWT against a JWKS and gate
+  which tools they can see and call, mapping each `role` to a tool-name regex
+  (`streamable-http` only).
 - **Graceful shutdown** on `SIGTERM`/`SIGINT`.
 
 ## Install
@@ -73,6 +76,10 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--base-url`      | `BASE_URL`       | spec `servers`   | Upstream API base URL that tool calls are proxied to.              |
 | `--header`        | `UPSTREAM_HEADERS` | —              | Extra `Name: Value` header on every upstream request. Repeatable.  |
 | `--forward-header`| `FORWARD_HEADERS`  | —              | Name of an incoming request header to forward upstream (e.g. `Authorization`). Repeatable. `streamable-http` only. |
+| `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:tool_name_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Requires a JWKS source below. `streamable-http` only. |
+| `--oauth-jwks-url` | `OAUTH_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Required with `--oauth-role-mapper` (or use `--oauth-jwks-file`). |
+| `--oauth-jwks-file` | `OAUTH_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--oauth-jwks-url`. |
+| `--oauth-role-claim` | `OAUTH_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
 | `--include`       | `INCLUDE_OPERATIONS` | —            | Only expose operations whose name matches this glob (`*`/`?`). Repeatable. |
 | `--exclude`       | `EXCLUDE_OPERATIONS` | —            | Drop operations whose name matches this glob. Repeatable. Wins over `--include`/`--tag`. |
 | `--include-regex` | `INCLUDE_OPERATIONS_REGEX` | —      | Only expose operations whose name matches this regex. Repeatable. |
@@ -181,6 +188,42 @@ Client authentication uses HTTP Basic against the token endpoint (RFC 6749).
 The OAuth bearer takes precedence over any static `Authorization` set via
 `--openapi-header`. This auth covers the **document fetch only**; upstream API
 calls still use `--header` / `--forward-header`.
+
+### Role-based tool access from the caller's JWT
+
+The filters above are global: every MCP client sees the same tools. When the
+server is shared by callers with different privileges, gate the tools on the
+**caller's own JWT** instead. Set one or more `--oauth-role-mapper` entries of
+the form `role:tool_name_regex`: a tool is visible (in `tools/list`) and
+callable (in `tools/call`) only when one of the caller's roles maps to a regex
+matching the tool name.
+
+When a mapper is set, the incoming request's `Authorization: Bearer` JWT is
+verified against a JWKS (`--oauth-jwks-url`, fetched once at startup, or
+`--oauth-jwks-file`) and the roles are read from the `--oauth-role-claim` claim
+(default `roles`; an array of strings or a whitespace-separated string). A
+caller with no token, an invalid/expired token, or roles that match no mapping
+sees and can call **no** tools.
+
+```bash
+oas2mcp \
+  --openapi-url https://api.example.com/openapi.json \
+  --transport streamable-http \
+  --bind-addr 0.0.0.0:8000 \
+  --oauth-jwks-url https://idp.example.com/.well-known/jwks.json \
+  --oauth-role-claim roles \
+  --oauth-role-mapper 'admin:.*' \
+  --oauth-role-mapper 'reader:^get'
+# admins get every tool; readers only the ones whose name starts with "get".
+```
+
+This needs the caller's JWT, which only the `streamable-http` transport
+exposes — under `stdio`/`sse` no token is available, so every tool stays
+hidden. The signature is verified with the key family advertised by the JWK
+(an algorithm-substitution downgrade such as `HS256` against a public key is
+rejected), and the token's `exp` is enforced. Invalid regexes are rejected at
+startup. With multiple entries set through the environment variable, separate
+them with newlines (e.g. `OAUTH_ROLE_MAPPER=$'admin:.*\nreader:^get'`).
 
 ### Restricting the exposed operations
 
