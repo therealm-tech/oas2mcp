@@ -45,6 +45,33 @@ oas2mcp:
       # -- (string) OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0).
       audience: ~
 
+  # -- Filter which OpenAPI operations are exposed as tools. An operation is kept if it matches any `include`/`includeRegex`/`includeTags` allowlist (or all allowlists are empty), then dropped if it matches any `exclude`/`excludeRegex`/`excludeTags`. Use it to cut a large API down to a usable tool set.
+  operations:
+    # -- (list) Glob allowlist on the operation name (operationId, or `<method>_<path>`); `*` and `?` supported. Maps to `INCLUDE_OPERATIONS`.
+    include: []
+    # -- (list) Glob denylist on the operation name; takes precedence over the allowlist. Maps to `EXCLUDE_OPERATIONS`.
+    exclude: []
+    # -- (list) Regex allowlist on the operation name (e.g. `^(get|post)ApiV4Projects`). Maps to `INCLUDE_OPERATIONS_REGEX`.
+    includeRegex: []
+    # -- (list) Regex denylist on the operation name; takes precedence over the allowlist. Maps to `EXCLUDE_OPERATIONS_REGEX`.
+    excludeRegex: []
+    # -- (list) Only expose operations carrying one of these OpenAPI tags (case-insensitive). Maps to `INCLUDE_TAGS`.
+    includeTags: []
+    # -- (list) Drop operations carrying one of these OpenAPI tags (case-insensitive); takes precedence over the allowlist. Maps to `EXCLUDE_TAGS`.
+    excludeTags: []
+
+  # -- Restrict the tool set per caller by matching the roles in their verified JWT against tool-name regexes. Requires `transport: streamable-http` (the only transport exposing the client's JWT). A caller with no valid token, or whose roles match nothing, sees and can call no tools.
+  auth:
+    # -- (list) Role→tool mappings as `role:tool_name_regex` (e.g. `admin:.*`, `reader:^get`). A tool is visible if any of the caller's roles maps to a regex matching the tool name. Set → enables JWT verification, which requires `jwks.url` or `jwks.file`. Maps to `OAUTH_ROLE_MAPPER`.
+    roleMapper: []
+    # -- (string) JWT claim listing the caller's roles (an array or a whitespace-separated string). Unset → the binary default (`roles`). Maps to `OAUTH_ROLE_CLAIM`.
+    roleClaim: ~
+    jwks:
+      # -- (string) URL of a JWKS document, fetched at startup, whose keys verify incoming JWT signatures. Mutually exclusive with `file`. One of the two is required when `roleMapper` is set. Maps to `OAUTH_JWKS_URL`.
+      url: ~
+      # -- (string) Path to a JWKS document on disk (mount it via `extraVolumes`/`extraVolumeMounts`). Mutually exclusive with `url`. Maps to `OAUTH_JWKS_FILE`.
+      file: ~
+
   # -- (string) Upstream API base URL the tool calls are proxied to. Unset → taken from the document `servers`.
   baseUrl: ~
 
