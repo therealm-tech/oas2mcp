@@ -36,6 +36,9 @@ writing a line of glue code.
 - **Role-based tool access** — verify the caller's JWT against a JWKS and gate
   which tools they can see and call, mapping each `role` to a tool-name regex
   (`streamable-http` only).
+- **OpenTelemetry metrics** — count and time every tool call, labelled by tool
+  and outcome (and the caller's JWT `sub` when role-based access is on),
+  exported over OTLP and/or a Prometheus `/metrics` endpoint.
 - **Graceful shutdown** on `SIGTERM`/`SIGINT`.
 
 ## Install
@@ -86,6 +89,9 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--exclude-regex` | `EXCLUDE_OPERATIONS_REGEX` | —      | Drop operations whose name matches this regex. Repeatable. Wins over the allowlist. |
 | `--tag`           | `INCLUDE_TAGS`   | —                | Only expose operations carrying this OpenAPI tag (case-insensitive). Repeatable. |
 | `--exclude-tag`   | `EXCLUDE_TAGS`   | —                | Drop operations carrying this OpenAPI tag (case-insensitive). Repeatable. Wins over the allowlist. |
+| `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Base OTLP endpoint to push tool-call metrics to over HTTP (e.g. `http://localhost:4318`); `/v1/metrics` is appended. Set → OTLP export on. |
+| `--metrics-addr`  | `METRICS_ADDR`   | —                | Address to serve a Prometheus `/metrics` endpoint on (e.g. `0.0.0.0:9090`). Set → scrape endpoint on. Independent of `--otlp-endpoint`. |
+| `--otel-service-name` | `OTEL_SERVICE_NAME` | `oas2mcp`   | `service.name` reported on exported metrics.                       |
 | `--transport`     | `TRANSPORT`      | `stdio`          | One of `stdio`, `sse`, `streamable-http`.                          |
 | `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address for the `sse` and `streamable-http` transports.       |
 | `--log-filter`    | `RUST_LOG`       | `info`           | `tracing` filter directive (e.g. `oas2mcp=debug,rmcp=warn`).       |
@@ -224,6 +230,38 @@ hidden. The signature is verified with the key family advertised by the JWK
 rejected), and the token's `exp` is enforced. Invalid regexes are rejected at
 startup. With multiple entries set through the environment variable, separate
 them with newlines (e.g. `OAUTH_ROLE_MAPPER=$'admin:.*\nreader:^get'`).
+
+### Metrics
+
+Every tool call is counted and timed and exposed as OpenTelemetry metrics:
+
+| Instrument | Type | Description |
+|------------|------|-------------|
+| `mcp.tool.calls` | counter | Number of tool calls. |
+| `mcp.tool.call.duration` | histogram (seconds) | Duration of the proxied upstream request. |
+
+Both carry the attributes `tool` (the tool/operation name) and `outcome`
+(`success` or `error`). When **role-based access is enabled** and the caller's
+JWT carried a `sub` claim, a `sub` attribute is added too — so you can break
+metrics down by caller. (Mind the cardinality: a `sub` per end user can
+multiply your time series.)
+
+Enable either exporter, both, or neither — they are independent:
+
+```bash
+# OTLP push to a collector + a Prometheus scrape endpoint, at once.
+oas2mcp \
+  --openapi-file ./examples/petstore.yaml \
+  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+  --otlp-endpoint http://otel-collector:4318 \
+  --metrics-addr 0.0.0.0:9090
+# Push: POST http://otel-collector:4318/v1/metrics  (HTTP/protobuf, every 30s)
+# Pull: GET  http://0.0.0.0:9090/metrics            (Prometheus text format)
+```
+
+The Prometheus endpoint runs on its own HTTP server (the `--metrics-addr`
+address), separate from the MCP transport, so it works under `stdio` too. OTLP
+honours the standard `OTEL_EXPORTER_OTLP_*` environment variables.
 
 ### Restricting the exposed operations
 

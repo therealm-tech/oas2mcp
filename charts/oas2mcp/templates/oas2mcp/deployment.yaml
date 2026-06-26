@@ -115,6 +115,18 @@ spec:
             - name: FORWARD_HEADERS
               value: {{ join "\n" . | quote }}
             {{- end }}
+            {{- with .Values.oas2mcp.metrics.otlp.endpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.metrics.serviceName }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if .Values.oas2mcp.metrics.prometheus.enabled }}
+            - name: METRICS_ADDR
+              value: "0.0.0.0:{{ .Values.oas2mcp.metrics.prometheus.port }}"
+            {{- end }}
             {{- with .Values.oas2mcp.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -122,6 +134,11 @@ spec:
             - name: http
               containerPort: {{ .Values.oas2mcp.service.port }}
               protocol: TCP
+            {{- if .Values.oas2mcp.metrics.prometheus.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.oas2mcp.metrics.prometheus.port }}
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             tcpSocket:
               port: http

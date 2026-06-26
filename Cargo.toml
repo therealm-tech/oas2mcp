@@ -49,5 +49,15 @@ anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+opentelemetry = "0.32.0"
+opentelemetry_sdk = { version = "0.32.1", features = ["metrics"] }
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = [
+    "metrics",
+    "http-proto",
+    "reqwest-blocking-client",
+    "reqwest-rustls",
+] }
+opentelemetry-prometheus = "0.32.0"
+prometheus = { version = "0.14.0", default-features = false }
 
 [dev-dependencies]

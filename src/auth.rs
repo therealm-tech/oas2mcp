@@ -25,6 +25,13 @@ struct RoleRule {
     pattern: Regex,
 }
 
+/// The claims read from a verified token: the caller's roles and `sub`.
+pub struct VerifiedClaims {
+    pub roles: HashSet<String>,
+    /// The `sub` (subject) claim, when the token carried one.
+    pub sub: Option<String>,
+}
+
 /// Verifies incoming JWTs against a JWKS and decides which tools a caller may
 /// use based on the roles in the token. Built once at startup and shared (via
 /// an [`Arc`]) across every per-session server clone.
@@ -60,10 +67,10 @@ impl Authorizer {
         })))
     }
 
-    /// Verify `token` against the JWKS and return the set of roles it carries.
-    /// Fails when the token is malformed, signed by an unknown key, expired, or
-    /// otherwise fails verification.
-    pub fn roles_for_token(&self, token: &str) -> anyhow::Result<HashSet<String>> {
+    /// Verify `token` against the JWKS and return the claims it carries (roles
+    /// and `sub`). Fails when the token is malformed, signed by an unknown key,
+    /// expired, or otherwise fails verification.
+    pub fn verify(&self, token: &str) -> anyhow::Result<VerifiedClaims> {
         let header = decode_header(token).context("decoding the JWT header")?;
         let kid = header
             .kid
@@ -83,7 +90,14 @@ impl Authorizer {
         validation.validate_aud = false;
 
         let data = decode::<Value>(token, &key, &validation).context("verifying the JWT")?;
-        Ok(extract_roles(&data.claims, &self.role_claim))
+        Ok(VerifiedClaims {
+            roles: extract_roles(&data.claims, &self.role_claim),
+            sub: data
+                .claims
+                .get("sub")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        })
     }
 
     /// Whether a caller holding `roles` is allowed to use the tool named `tool`.
@@ -285,12 +299,13 @@ mod tests {
         }
     }
 
-    /// Sign a token with the test key, `kid` header, and the given expiry.
+    /// Sign a token with the test key, `kid` header, a fixed `sub`, and the
+    /// given expiry.
     fn sign(roles_claim: Value, exp_unix: u64, kid: Option<&str>) -> String {
         use jsonwebtoken::{EncodingKey, Header};
         let mut header = Header::new(Algorithm::RS256);
         header.kid = kid.map(str::to_string);
-        let claims = json!({ "roles": roles_claim, "exp": exp_unix });
+        let claims = json!({ "roles": roles_claim, "sub": "user-123", "exp": exp_unix });
         let key = EncodingKey::from_rsa_pem(TEST_PRIV_PEM.as_bytes()).expect("test key parses");
         jsonwebtoken::encode(&header, &claims, &key).expect("signing succeeds")
     }
@@ -305,31 +320,32 @@ mod tests {
     }
 
     #[test]
-    fn roles_for_token_verifies_a_valid_jwt() {
+    fn verify_reads_roles_and_subject_from_a_valid_jwt() {
         let authz = test_authorizer();
         let token = sign(json!(["admin", "reader"]), in_one_hour(), Some(TEST_KID));
-        let found = authz.roles_for_token(&token).expect("valid token verifies");
-        assert_eq!(found, roles(&["admin", "reader"]));
-        assert!(authz.allows(&found, "deletePet"));
+        let claims = authz.verify(&token).expect("valid token verifies");
+        assert_eq!(claims.roles, roles(&["admin", "reader"]));
+        assert_eq!(claims.sub.as_deref(), Some("user-123"));
+        assert!(authz.allows(&claims.roles, "deletePet"));
     }
 
     #[test]
-    fn roles_for_token_rejects_expired_and_tampered_tokens() {
+    fn verify_rejects_expired_and_tampered_tokens() {
         let authz = test_authorizer();
 
         // Expired: exp one hour in the past.
         let expired = sign(json!(["admin"]), in_one_hour() - 7200, Some(TEST_KID));
-        assert!(authz.roles_for_token(&expired).is_err());
+        assert!(authz.verify(&expired).is_err());
 
         // Tampered signature: flip the last character of a valid token.
         let mut token = sign(json!(["admin"]), in_one_hour(), Some(TEST_KID)).into_bytes();
         let last = token.last_mut().unwrap();
         *last = if *last == b'A' { b'B' } else { b'A' };
         let tampered = String::from_utf8(token).unwrap();
-        assert!(authz.roles_for_token(&tampered).is_err());
+        assert!(authz.verify(&tampered).is_err());
 
         // Unknown kid: no matching JWK.
         let unknown = sign(json!(["admin"]), in_one_hour(), Some("other-key"));
-        assert!(authz.roles_for_token(&unknown).is_err());
+        assert!(authz.verify(&unknown).is_err());
     }
 }
