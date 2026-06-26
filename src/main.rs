@@ -5,6 +5,7 @@
 //! HTTP+SSE transport, and Streamable HTTP. A tool call is proxied as a real
 //! HTTP request to the upstream API described by the document.
 
+mod auth;
 mod cli;
 mod filter;
 mod oauth;
@@ -42,7 +43,18 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to load the OpenAPI document")?;
 
-    let server = server::OpenApiServer::from_spec(&spec, &cli)
+    let authorizer = auth::Authorizer::from_cli(&cli)
+        .await
+        .context("configuring JWT role-based authorization")?;
+    if authorizer.is_some() && cli.transport != cli::Transport::StreamableHttp {
+        tracing::warn!(
+            transport = %cli.transport,
+            "--oauth-role-mapper only takes effect on the streamable-http transport; \
+             on this transport no client JWT is available, so every tool stays hidden"
+        );
+    }
+
+    let server = server::OpenApiServer::from_spec(&spec, &cli, authorizer)
         .context("failed to build the MCP server from the OpenAPI document")?;
 
     tracing::info!(

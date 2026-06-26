@@ -2,7 +2,7 @@
 //! tool call by proxying it as an HTTP request to the upstream API.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
@@ -19,6 +19,7 @@ use rmcp::{ErrorData, ServerHandler};
 use serde_json::{Map, Value};
 use url::Url;
 
+use crate::auth::Authorizer;
 use crate::cli::Cli;
 use crate::filter::{FilterConfig, OperationFilter};
 use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
@@ -46,11 +47,19 @@ pub struct OpenApiServer {
     extra_headers: Arc<HeaderMap>,
     /// Names of incoming-request headers to forward verbatim to the upstream API.
     forward_headers: Arc<Vec<HeaderName>>,
+    /// Optional JWT role-based tool authorization. `None` exposes every tool.
+    authorizer: Option<Arc<Authorizer>>,
 }
 
 impl OpenApiServer {
     /// Build the server from a parsed OpenAPI document and the CLI config.
-    pub fn from_spec(spec: &OpenAPI, cli: &Cli) -> anyhow::Result<Self> {
+    /// `authorizer`, when set, gates tool visibility and invocation on the
+    /// caller's JWT roles.
+    pub fn from_spec(
+        spec: &OpenAPI,
+        cli: &Cli,
+        authorizer: Option<Arc<Authorizer>>,
+    ) -> anyhow::Result<Self> {
         let extra_headers = parse_headers(&cli.headers)?;
         let forward_headers = parse_header_names(&cli.forward_headers)?;
         let snapshot = build_snapshot(spec, cli)?;
@@ -63,6 +72,7 @@ impl OpenApiServer {
                 .context("building the HTTP client")?,
             extra_headers: Arc::new(extra_headers),
             forward_headers: Arc::new(forward_headers),
+            authorizer,
         })
     }
 
@@ -219,13 +229,15 @@ impl ServerHandler for OpenApiServer {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
+        let roles = self.caller_roles(&context);
         let tools = self
             .state
             .load()
             .tools
             .iter()
+            .filter(|spec| self.is_allowed(&roles, &spec.name))
             .map(|spec| {
                 Tool::new(
                     spec.name.clone(),
@@ -256,6 +268,19 @@ impl ServerHandler for OpenApiServer {
             ));
         };
         let spec = &state.tools[idx];
+
+        // Enforce JWT role authorization: a caller who cannot see the tool may
+        // not call it either. Reported as an unknown tool so the gate does not
+        // leak which tools exist to an unauthorized caller.
+        let roles = self.caller_roles(&context);
+        if !self.is_allowed(&roles, &spec.name) {
+            tracing::warn!(tool = %spec.name, "denying tool call: caller is not authorized");
+            return Err(ErrorData::invalid_params(
+                Cow::from(format!("unknown tool `{}`", request.name)),
+                None,
+            ));
+        }
+
         let args = request.arguments.unwrap_or_default();
         let forwarded = self.forwarded_headers(&context);
         Ok(self.execute(spec, &state.base_url, &args, &forwarded).await)
@@ -263,6 +288,41 @@ impl ServerHandler for OpenApiServer {
 }
 
 impl OpenApiServer {
+    /// Resolve the caller's JWT roles for this request.
+    ///
+    /// Returns `None` when no authorizer is configured — meaning "no
+    /// restriction", every tool is allowed. Returns `Some(roles)` when an
+    /// authorizer is configured; the set is empty when the request carries no
+    /// bearer token (e.g. `stdio`/`sse`, which expose no client headers) or the
+    /// token fails verification, which denies access to every tool.
+    fn caller_roles(&self, context: &RequestContext<RoleServer>) -> Option<HashSet<String>> {
+        let authorizer = self.authorizer.as_ref()?;
+        let token = context
+            .extensions
+            .get::<http::request::Parts>()
+            .and_then(|parts| bearer_token(&parts.headers));
+        let roles = match token {
+            Some(token) => authorizer.roles_for_token(token).unwrap_or_else(|err| {
+                tracing::warn!(error = %format!("{err:#}"), "rejecting request: JWT verification failed");
+                HashSet::new()
+            }),
+            None => {
+                tracing::warn!("rejecting request: no bearer token on a role-restricted server");
+                HashSet::new()
+            }
+        };
+        Some(roles)
+    }
+
+    /// Whether the tool named `name` is visible/callable for this request's
+    /// roles. `None` roles means no authorizer is configured, so allow all.
+    fn is_allowed(&self, roles: &Option<HashSet<String>>, name: &str) -> bool {
+        match (&self.authorizer, roles) {
+            (Some(authorizer), Some(roles)) => authorizer.allows(roles, name),
+            _ => true,
+        }
+    }
+
     /// Collect the allow-listed incoming-request headers to forward upstream.
     /// Only the Streamable HTTP transport injects the request [`Parts`]; for
     /// `stdio` and `sse` this yields an empty map.
@@ -277,6 +337,17 @@ impl OpenApiServer {
             None => HeaderMap::new(),
         }
     }
+}
+
+/// Extract the bearer token from an `Authorization` header, if present and
+/// well-formed (`Bearer <token>`, scheme case-insensitive).
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(http::header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    scheme
+        .eq_ignore_ascii_case("bearer")
+        .then(|| token.trim())
+        .filter(|t| !t.is_empty())
 }
 
 /// Pick the headers named in `allow` out of `src`, preserving multiple values
@@ -417,7 +488,7 @@ paths:
   /b: { get: { operationId: getB, responses: { "200": { description: ok } } } }
 "#;
         let spec_one: OpenAPI = serde_yaml_ng::from_str(ONE_OP).expect("valid spec");
-        let server = OpenApiServer::from_spec(&spec_one, &cli).expect("server builds");
+        let server = OpenApiServer::from_spec(&spec_one, &cli, None).expect("server builds");
         assert_eq!(server.tool_count(), 1);
 
         let spec_two: OpenAPI = serde_yaml_ng::from_str(TWO_OPS).expect("valid spec");
@@ -438,6 +509,26 @@ paths:
             ]
         );
         assert!(parse_header_names(&["not a header".into()]).is_err());
+    }
+
+    #[test]
+    fn bearer_token_parses_scheme_case_insensitively() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer abc.def.ghi"),
+        );
+        assert_eq!(bearer_token(&headers), Some("abc.def.ghi"));
+
+        headers.insert("authorization", HeaderValue::from_static("bearer  spaced "));
+        assert_eq!(bearer_token(&headers), Some("spaced"));
+
+        // Non-bearer schemes and empty tokens yield nothing.
+        headers.insert("authorization", HeaderValue::from_static("Basic Zm9v"));
+        assert_eq!(bearer_token(&headers), None);
+        headers.insert("authorization", HeaderValue::from_static("Bearer "));
+        assert_eq!(bearer_token(&headers), None);
+        assert_eq!(bearer_token(&HeaderMap::new()), None);
     }
 
     #[test]
