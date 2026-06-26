@@ -251,6 +251,16 @@ pub struct Cli {
     #[arg(long = "exclude-tag", env = "EXCLUDE_TAGS", value_delimiter = '\n')]
     pub exclude_tags: Vec<String>,
 
+    /// Path to a PEM file holding one or more extra CA certificates to trust
+    /// when verifying TLS for every outbound connection (upstream API, OpenAPI
+    /// document fetch, OAuth token endpoint, JWKS). Repeatable; a single file
+    /// may bundle a whole chain. The platform's built-in roots stay trusted —
+    /// these are added on top, so you only need to supply your private or
+    /// corporate CA. When set via the environment variable, separate paths with
+    /// newlines.
+    #[arg(long = "ca-cert", env = "CA_CERT_FILE", value_delimiter = '\n')]
+    pub ca_certs: Vec<PathBuf>,
+
     /// MCP transport to expose.
     #[arg(long, env = "TRANSPORT", default_value_t = Transport::Stdio)]
     pub transport: Transport,

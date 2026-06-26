@@ -72,6 +72,19 @@ oas2mcp:
       # -- (string) Path to a JWKS document on disk (mount it via `extraVolumes`/`extraVolumeMounts`). Mutually exclusive with `url`. Maps to `OAUTH_JWKS_FILE`.
       file: ~
 
+  # -- Extra CA certificates to trust for every outbound TLS connection (upstream API, document fetch, OAuth token endpoint, JWKS). Added on top of the built-in public roots — supply only your private/corporate CA. Mounted as a file and pointed at via `CA_CERT_FILE`.
+  caCerts:
+    # -- (string) Inline PEM bundle of one or more CA certificates. Stored in a Secret and mounted. Ignored when `existing.name` is set.
+    inline: ~
+    # -- Mount the PEM bundle from a resource you already manage, instead of `inline`. Takes precedence over `inline` when `name` is set.
+    existing:
+      # -- (string) Kind of the resource holding the bundle: `ConfigMap` (the natural home for public CA certs) or `Secret`.
+      kind: ConfigMap
+      # -- (string) Name of the resource. Set → mounts the bundle from it instead of generating a Secret from `inline`.
+      name: ~
+      # -- Key in the resource holding the PEM bundle (also the mounted file name).
+      key: ca-certificates.crt
+
   # -- (string) Upstream API base URL the tool calls are proxied to. Unset → taken from the document `servers`.
   baseUrl: ~
 

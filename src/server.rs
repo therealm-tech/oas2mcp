@@ -80,10 +80,7 @@ impl OpenApiServer {
 
         Ok(Self {
             state: Arc::new(ArcSwap::from_pointee(snapshot)),
-            client: reqwest::Client::builder()
-                .user_agent(concat!("oas2mcp/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .context("building the HTTP client")?,
+            client: crate::http::client(cli).context("building the upstream HTTP client")?,
             extra_headers: Arc::new(extra_headers),
             forward_headers: Arc::new(forward_headers),
             authorizer,

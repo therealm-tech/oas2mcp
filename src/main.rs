@@ -8,6 +8,7 @@
 mod auth;
 mod cli;
 mod filter;
+mod http;
 mod oauth;
 mod openapi;
 mod server;
