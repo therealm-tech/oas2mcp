@@ -27,7 +27,11 @@ writing a line of glue code.
 - **Three transports** — the MCP server can be exposed over:
   - `stdio` — for a local subprocess MCP client.
   - `streamable-http` — the current remote transport, single `POST /mcp`
-    endpoint.
+    endpoint. By default each request is answered with a single
+    `application/json` body (stateless), which is the most interoperable mode
+    — notably with strict proxies such as Envoy AI Gateway. Pass
+    `--stream-responses` to reply with a `text/event-stream` (SSE) flow and keep
+    stateful sessions instead.
   - `sse` — the legacy HTTP+SSE transport (deprecated by the MCP spec, kept
     for compatibility with older clients).
 - **Auth passthrough** — attach arbitrary static headers (e.g. a bearer token)
@@ -102,6 +106,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--otel-service-name` | `OTEL_SERVICE_NAME` | `oas2mcp`   | `service.name` reported on exported metrics.                       |
 | `--transport`     | `TRANSPORT`      | `stdio`          | One of `stdio`, `sse`, `streamable-http`.                          |
 | `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address for the `sse` and `streamable-http` transports.       |
+| `--stream-responses` | `STREAM_RESPONSES` | `false`      | Reply on `streamable-http` with an SSE flow and stateful sessions instead of the default single `application/json` body. `streamable-http` only. |
 | `--log-filter`    | `RUST_LOG`       | `info`           | `tracing` filter directive (e.g. `oas2mcp=debug,rmcp=warn`).       |
 
 Configuration resolves CLI flags → environment variables → defaults, and every

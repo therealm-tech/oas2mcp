@@ -96,7 +96,14 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    transport::serve(cli.transport, cli.bind_addr, server)
+    if cli.stream_responses && cli.transport != cli::Transport::StreamableHttp {
+        tracing::warn!(
+            transport = %cli.transport,
+            "--stream-responses only takes effect on the streamable-http transport; ignored here"
+        );
+    }
+
+    transport::serve(cli.transport, cli.bind_addr, !cli.stream_responses, server)
         .await
         .context("MCP transport terminated with an error")?;
 

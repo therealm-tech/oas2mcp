@@ -7,22 +7,26 @@ use std::net::SocketAddr;
 use anyhow::Context as _;
 use rmcp::ServiceExt as _;
 use rmcp::transport::stdio;
-use rmcp::transport::streamable_http_server::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
 use crate::cli::Transport;
 use crate::server::OpenApiServer;
 
 /// Serve the MCP server over `transport`, blocking until shutdown.
+///
+/// `json_response` only affects `streamable-http`: when set, POST replies are a
+/// single `application/json` body instead of an SSE stream (see `Cli`).
 pub async fn serve(
     transport: Transport,
     bind: SocketAddr,
+    json_response: bool,
     server: OpenApiServer,
 ) -> anyhow::Result<()> {
     match transport {
         Transport::Stdio => serve_stdio(server).await,
         Transport::Sse => sse::serve(bind, server).await,
-        Transport::StreamableHttp => serve_streamable_http(bind, server).await,
+        Transport::StreamableHttp => serve_streamable_http(bind, json_response, server).await,
     }
 }
 
@@ -35,12 +39,23 @@ async fn serve_stdio(server: OpenApiServer) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn serve_streamable_http(bind: SocketAddr, server: OpenApiServer) -> anyhow::Result<()> {
+async fn serve_streamable_http(
+    bind: SocketAddr,
+    json_response: bool,
+    server: OpenApiServer,
+) -> anyhow::Result<()> {
     // One server instance is built per MCP session.
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),
-        Default::default(),
+        // rmcp only honours `json_response` in stateless mode: the stateful
+        // path always replies over SSE (with a priming event) regardless. So
+        // enabling JSON replies means turning stateful sessions off too. That
+        // is fine behind a proxy — oas2mcp is a stateless request/response
+        // proxy, and a gateway like Envoy manages MCP sessions itself.
+        StreamableHttpServerConfig::default()
+            .with_json_response(json_response)
+            .with_stateful_mode(!json_response),
     );
     let app = axum::Router::new().nest_service("/mcp", service);
 
