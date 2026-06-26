@@ -3,6 +3,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
 use regex::Regex;
@@ -43,9 +44,29 @@ pub struct Cli {
     #[arg(long, env = "OPENAPI_FILE", conflicts_with = "openapi_url")]
     pub openapi_file: Option<PathBuf>,
 
-    /// URL of an OpenAPI document (JSON or YAML) fetched once at startup.
+    /// URL of an OpenAPI document (JSON or YAML) fetched at startup (and
+    /// periodically when `--reload-every` is set).
     #[arg(long, env = "OPENAPI_URL", conflicts_with = "openapi_file")]
     pub openapi_url: Option<Url>,
+
+    /// Header to send when fetching the OpenAPI document from `--openapi-url`,
+    /// as `Name: Value`. Repeatable; use it when the document URL is not public
+    /// and needs auth (e.g. `Authorization: Bearer ...`). This is separate from
+    /// `--header`, which targets the upstream API, not the document URL. When
+    /// set via the environment variable, separate headers with newlines.
+    #[arg(
+        long = "openapi-header",
+        env = "OPENAPI_HEADERS",
+        value_delimiter = '\n'
+    )]
+    pub openapi_headers: Vec<String>,
+
+    /// Re-fetch the OpenAPI document from `--openapi-url` on this interval and
+    /// rebuild the exposed tool set (e.g. `30s`, `5m`, `1h`). Omit to load the
+    /// document only once at startup. Ignored when the document is loaded from a
+    /// file rather than a URL.
+    #[arg(long, env = "RELOAD_EVERY", value_parser = humantime::parse_duration)]
+    pub reload_every: Option<Duration>,
 
     /// Base URL of the upstream API that tool calls are proxied to. Overrides
     /// the `servers` entry of the OpenAPI document.

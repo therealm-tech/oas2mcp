@@ -44,9 +44,36 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{/* Name of the Secret holding the upstream headers (existing or generated). */}}
 {{- define "oas2mcp.upstreamSecretName" -}}
-{{- if .Values.oas2mcp.upstream.existingSecret -}}
-{{- .Values.oas2mcp.upstream.existingSecret -}}
+{{- if .Values.oas2mcp.upstream.existingSecret.name -}}
+{{- .Values.oas2mcp.upstream.existingSecret.name -}}
 {{- else -}}
 {{- printf "%s-upstream" (include "oas2mcp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Key in the upstream-headers Secret: the existing Secret's key, else the generated default. */}}
+{{- define "oas2mcp.upstreamSecretKey" -}}
+{{- if .Values.oas2mcp.upstream.existingSecret.name -}}
+{{- .Values.oas2mcp.upstream.existingSecret.key -}}
+{{- else -}}
+UPSTREAM_HEADERS
+{{- end -}}
+{{- end -}}
+
+{{/* Name of the Secret holding the OpenAPI document-fetch headers (existing or generated). */}}
+{{- define "oas2mcp.openapiSecretName" -}}
+{{- if .Values.oas2mcp.openapi.existingSecret.name -}}
+{{- .Values.oas2mcp.openapi.existingSecret.name -}}
+{{- else -}}
+{{- printf "%s-openapi-headers" (include "oas2mcp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Key in the document-fetch-headers Secret: the existing Secret's key, else the generated default. */}}
+{{- define "oas2mcp.openapiSecretKey" -}}
+{{- if .Values.oas2mcp.openapi.existingSecret.name -}}
+{{- .Values.oas2mcp.openapi.existingSecret.key -}}
+{{- else -}}
+OPENAPI_HEADERS
 {{- end -}}
 {{- end -}}

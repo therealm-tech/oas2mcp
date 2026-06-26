@@ -12,8 +12,12 @@ writing a line of glue code.
 
 ## Features
 
-- **Input from a file or a URL** — the document is fetched/read once at
-  startup, in JSON or YAML.
+- **Input from a file or a URL** — the document is fetched/read at startup, in
+  JSON or YAML. A non-public document URL can be authenticated with
+  `--openapi-header`.
+- **Periodic reload** — with `--reload-every`, a document loaded from a URL is
+  re-fetched on an interval and the exposed tool set is rebuilt in place,
+  without restarting the server.
 - **One tool per operation** — `operationId` becomes the tool name (falling
   back to `<method>_<path>`); path, query and header parameters become
   top-level tool arguments, and a JSON request body is passed as a `body`
@@ -56,7 +60,9 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | Option            | Env              | Default          | Description                                                        |
 | ----------------- | ---------------- | ---------------- | ------------------------------------------------------------------ |
 | `--openapi-file`  | `OPENAPI_FILE`   | —                | Path to an OpenAPI document (JSON or YAML) on disk.                |
-| `--openapi-url`   | `OPENAPI_URL`    | —                | URL of an OpenAPI document fetched once at startup.                |
+| `--openapi-url`   | `OPENAPI_URL`    | —                | URL of an OpenAPI document fetched at startup (and on each reload).|
+| `--openapi-header`| `OPENAPI_HEADERS`| —                | `Name: Value` header sent when fetching `--openapi-url` (e.g. for a private document). Repeatable. |
+| `--reload-every`  | `RELOAD_EVERY`   | —                | Re-fetch `--openapi-url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Off by default; ignored for a file source. |
 | `--base-url`      | `BASE_URL`       | spec `servers`   | Upstream API base URL that tool calls are proxied to.              |
 | `--header`        | `UPSTREAM_HEADERS` | —              | Extra `Name: Value` header on every upstream request. Repeatable.  |
 | `--forward-header`| `FORWARD_HEADERS`  | —              | Name of an incoming request header to forward upstream (e.g. `Authorization`). Repeatable. `streamable-http` only. |
@@ -118,6 +124,30 @@ oas2mcp --openapi-file examples/petstore.yaml --transport sse
 # SSE stream:   GET  http://127.0.0.1:8000/sse
 # Client posts: POST http://127.0.0.1:8000/messages?sessionId=<id>
 ```
+
+### Reloading the document from a URL
+
+When the document lives behind a URL — and especially when that API still
+evolves — pass `--reload-every` to re-fetch it on an interval and rebuild the
+tool set in place. If the URL is private, authenticate the fetch with
+`--openapi-header` (this is the document URL's own auth, separate from the
+upstream `--header`):
+
+```bash
+oas2mcp \
+  --openapi-url https://api.example.com/openapi.json \
+  --openapi-header 'Authorization: Bearer <docs-token>' \
+  --reload-every 5m \
+  --transport streamable-http \
+  --bind-addr 0.0.0.0:8000
+```
+
+The interval accepts any `humantime` duration (`30s`, `5m`, `1h`, `90m`, …).
+If a reload fails to fetch or parse, the error is logged and the previously
+loaded tool set is kept, so a transient upstream blip never empties the server.
+`--reload-every` is ignored when the document is loaded from a file. Note that
+the server does not yet emit an MCP `tools/list_changed` notification, so a
+connected client picks up the new tools on its next `tools/list` call.
 
 ### Restricting the exposed operations
 

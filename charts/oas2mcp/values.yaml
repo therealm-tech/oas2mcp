@@ -19,6 +19,15 @@ oas2mcp:
     url: ~
     # -- (string) Inline OpenAPI document (JSON or YAML). Stored in a ConfigMap and mounted; takes precedence over `url`.
     inline: ~
+    # -- (list) `Name: Value` headers sent when fetching `url` (e.g. for a private document). Stored in a Secret. Ignored with `inline`.
+    headers: []
+    existingSecret:
+      # -- (string) Name of a pre-existing Secret holding the document-fetch headers. Set → takes precedence over `headers`.
+      name: ~
+      # -- Key in that Secret holding the newline-separated `Name: Value` headers.
+      key: OPENAPI_HEADERS
+    # -- (string) Re-fetch `url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Unset → load once at startup. Ignored with `inline`.
+    reloadEvery: ~
 
   # -- (string) Upstream API base URL the tool calls are proxied to. Unset → taken from the document `servers`.
   baseUrl: ~
@@ -29,8 +38,11 @@ oas2mcp:
   upstream:
     # -- (list) Static `Name: Value` headers added to every upstream request (e.g. `Authorization: Bearer ...`). Stored in a Secret.
     headers: []
-    # -- (string) Name of a pre-existing Secret holding key `UPSTREAM_HEADERS`. Takes precedence over `headers`.
-    existingSecret: ~
+    existingSecret:
+      # -- (string) Name of a pre-existing Secret holding the upstream headers. Set → takes precedence over `headers`.
+      name: ~
+      # -- Key in that Secret holding the newline-separated `Name: Value` headers.
+      key: UPSTREAM_HEADERS
     # -- (list) Names of incoming MCP-client request headers forwarded verbatim to the upstream API (e.g. `Authorization`). Per-call, not static; requires `transport: streamable-http`.
     forwardHeaders: []
 

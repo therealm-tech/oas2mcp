@@ -2,37 +2,48 @@
 
 use anyhow::{Context as _, bail};
 use openapiv3::OpenAPI;
+use url::Url;
 
 use crate::cli::Cli;
+use crate::server::parse_headers;
 
 /// Load the OpenAPI document from the source configured on the CLI (a local
 /// file or a URL), accepting either JSON or YAML.
 pub async fn load(cli: &Cli) -> anyhow::Result<OpenAPI> {
-    let (origin, bytes) = match (&cli.openapi_file, &cli.openapi_url) {
+    match (&cli.openapi_file, &cli.openapi_url) {
         (Some(path), _) => {
             tracing::debug!(path = %path.display(), "reading OpenAPI document from file");
             let bytes = tokio::fs::read(path)
                 .await
                 .with_context(|| format!("reading OpenAPI file {}", path.display()))?;
-            (path.display().to_string(), bytes)
+            parse(&bytes)
+                .with_context(|| format!("parsing OpenAPI document from {}", path.display()))
         }
-        (None, Some(url)) => {
-            tracing::debug!(%url, "fetching OpenAPI document over HTTP");
-            let bytes = reqwest::get(url.clone())
-                .await
-                .with_context(|| format!("fetching OpenAPI document from {url}"))?
-                .error_for_status()
-                .with_context(|| format!("OpenAPI document request to {url} failed"))?
-                .bytes()
-                .await
-                .with_context(|| format!("reading OpenAPI response body from {url}"))?
-                .to_vec();
-            (url.to_string(), bytes)
-        }
+        (None, Some(url)) => fetch(url, &cli.openapi_headers).await,
         (None, None) => bail!("no OpenAPI source: pass --openapi-file or --openapi-url"),
-    };
+    }
+}
 
-    parse(&bytes).with_context(|| format!("parsing OpenAPI document from {origin}"))
+/// Fetch and parse the OpenAPI document from `url`, attaching `raw_headers`
+/// (`Name: Value` strings) to authenticate against a non-public document URL.
+/// Used both for the initial load and for periodic reloads.
+pub async fn fetch(url: &Url, raw_headers: &[String]) -> anyhow::Result<OpenAPI> {
+    let headers = parse_headers(raw_headers).context("parsing --openapi-header values")?;
+
+    tracing::debug!(%url, "fetching OpenAPI document over HTTP");
+    let bytes = reqwest::Client::new()
+        .get(url.clone())
+        .headers(headers)
+        .send()
+        .await
+        .with_context(|| format!("fetching OpenAPI document from {url}"))?
+        .error_for_status()
+        .with_context(|| format!("OpenAPI document request to {url} failed"))?
+        .bytes()
+        .await
+        .with_context(|| format!("reading OpenAPI response body from {url}"))?;
+
+    parse(&bytes).with_context(|| format!("parsing OpenAPI document from {url}"))
 }
 
 /// Parse raw bytes as an OpenAPI document, trying JSON first and falling back
