@@ -66,6 +66,8 @@ oas2mcp:
     roleMapper: []
     # -- (string) JWT claim listing the caller's roles (an array or a whitespace-separated string). Unset → the binary default (`roles`). Maps to `OAUTH_ROLE_CLAIM`.
     roleClaim: ~
+    # -- (list) JWT claim names copied into the per-call tracing log as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`), for observability. Logged only, never a metric label. Needs `roleMapper` (claims come from the verified JWT). Maps to `TRACE_CLAIMS`.
+    traceClaims: []
     jwks:
       # -- (string) URL of a JWKS document, fetched at startup, whose keys verify incoming JWT signatures. Mutually exclusive with `file`. One of the two is required when `roleMapper` is set. Maps to `OAUTH_JWKS_URL`.
       url: ~
