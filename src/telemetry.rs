@@ -1,8 +1,9 @@
 //! OpenTelemetry metrics for tool calls.
 //!
 //! Every MCP tool call is counted and timed, attributed by the tool name and
-//! the call outcome, plus the caller's JWT `sub` when role-based authorization
-//! is enabled and the token carried one. The metrics are exported two ways,
+//! the call outcome. (Per-caller breakdown lives in the tracing logs via
+//! `--trace-claim`, not in metric labels, to keep metric cardinality bounded.)
+//! The metrics are exported two ways,
 //! enabled independently from the CLI:
 //!
 //! - **OTLP** (`--otlp-endpoint`): pushed to a collector over HTTP/protobuf.
@@ -58,8 +59,7 @@ impl Outcome {
 /// [`OpenApiServer`](crate::server::OpenApiServer) clone.
 #[derive(Clone)]
 pub struct Metrics {
-    /// Count of tool calls, attributed by `tool`, `outcome`, and — when JWT
-    /// authorization is enabled and the token carried one — `sub`.
+    /// Count of tool calls, attributed by `tool` and `outcome`.
     calls: Counter<u64>,
     /// Wall-clock duration of the proxied upstream request, in seconds.
     duration: Histogram<f64>,
@@ -70,7 +70,7 @@ impl Metrics {
         Self {
             calls: meter
                 .u64_counter("mcp.tool.calls")
-                .with_description("Number of MCP tool calls, by tool, outcome and subject.")
+                .with_description("Number of MCP tool calls, by tool and outcome.")
                 .build(),
             duration: meter
                 .f64_histogram("mcp.tool.call.duration")
@@ -88,17 +88,12 @@ impl Metrics {
         Self::new(&SdkMeterProvider::builder().build().meter(METER_NAME))
     }
 
-    /// Record one completed tool call. `sub` is the caller's JWT subject when
-    /// role-based authorization is enabled and the token carried a `sub` claim;
-    /// `None` leaves the attribute off entirely.
-    pub fn record_call(&self, tool: &str, outcome: Outcome, sub: Option<&str>, elapsed: Duration) {
-        let mut attrs = vec![
+    /// Record one completed tool call, attributed by tool name and outcome.
+    pub fn record_call(&self, tool: &str, outcome: Outcome, elapsed: Duration) {
+        let attrs = [
             KeyValue::new("tool", tool.to_string()),
             KeyValue::new("outcome", outcome.as_str()),
         ];
-        if let Some(sub) = sub {
-            attrs.push(KeyValue::new("sub", sub.to_string()));
-        }
         self.calls.add(1, &attrs);
         self.duration.record(elapsed.as_secs_f64(), &attrs);
     }
@@ -244,14 +239,9 @@ mod tests {
 
     #[test]
     fn disabled_metrics_record_without_panicking() {
-        // The no-op pipeline must accept recordings (with and without a sub).
+        // The no-op pipeline must accept recordings.
         let metrics = Metrics::disabled();
-        metrics.record_call("getPet", Outcome::Success, None, Duration::from_millis(5));
-        metrics.record_call(
-            "deletePet",
-            Outcome::Error,
-            Some("user-123"),
-            Duration::from_millis(9),
-        );
+        metrics.record_call("getPet", Outcome::Success, Duration::from_millis(5));
+        metrics.record_call("deletePet", Outcome::Error, Duration::from_millis(9));
     }
 }

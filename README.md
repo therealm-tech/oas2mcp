@@ -40,8 +40,8 @@ writing a line of glue code.
   verified token (e.g. `sub`, `email`, `tenant_id`) onto each tool-call log line
   to see who made each call, without inflating metric cardinality.
 - **OpenTelemetry metrics** — count and time every tool call, labelled by tool
-  and outcome (and the caller's JWT `sub` when role-based access is on),
-  exported over OTLP and/or a Prometheus `/metrics` endpoint.
+  and outcome (kept low-cardinality), exported over OTLP and/or a Prometheus
+  `/metrics` endpoint.
 - **Custom CA trust** — point `--ca-cert` at a PEM bundle to trust a private or
   corporate CA for every outbound TLS connection (upstream API, document fetch,
   OAuth, JWKS), on top of the built-in public roots.
@@ -277,10 +277,10 @@ Every tool call is counted and timed and exposed as OpenTelemetry metrics:
 | `mcp.tool.call.duration` | histogram (seconds) | Duration of the proxied upstream request. |
 
 Both carry the attributes `tool` (the tool/operation name) and `outcome`
-(`success` or `error`). When **role-based access is enabled** and the caller's
-JWT carried a `sub` claim, a `sub` attribute is added too — so you can break
-metrics down by caller. (Mind the cardinality: a `sub` per end user can
-multiply your time series.)
+(`success` or `error`) — and nothing else, so metric cardinality stays bounded.
+To break activity down by caller, log the relevant JWT claims with
+`--trace-claim` (see above) and aggregate them in your logging backend, rather
+than turning a per-user identifier into a metric label.
 
 Enable either exporter, both, or neither — they are independent:
 

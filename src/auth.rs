@@ -25,15 +25,13 @@ struct RoleRule {
     pattern: Regex,
 }
 
-/// The claims read from a verified token: the caller's roles, `sub`, and any
-/// extra claims selected for tracing.
+/// The claims read from a verified token: the caller's roles and the
+/// `--trace-claim` claims selected for tracing.
 pub struct VerifiedClaims {
     pub roles: HashSet<String>,
-    /// The `sub` (subject) claim, when the token carried one.
-    pub sub: Option<String>,
     /// The `--trace-claim` claims that were present in the token, keeping their
     /// JSON shape. Empty when none are configured or none were present. Surfaced
-    /// in the per-call tracing log, never in metric labels.
+    /// on the per-call tracing log, never in metric labels.
     pub traced: Map<String, Value>,
 }
 
@@ -101,11 +99,6 @@ impl Authorizer {
         let data = decode::<Value>(token, &key, &validation).context("verifying the JWT")?;
         Ok(VerifiedClaims {
             roles: extract_roles(&data.claims, &self.role_claim),
-            sub: data
-                .claims
-                .get("sub")
-                .and_then(Value::as_str)
-                .map(str::to_string),
             traced: extract_traced_claims(&data.claims, &self.trace_claims),
         })
     }
@@ -366,12 +359,11 @@ mod tests {
     }
 
     #[test]
-    fn verify_reads_roles_and_subject_from_a_valid_jwt() {
+    fn verify_reads_roles_and_traced_claims_from_a_valid_jwt() {
         let authz = test_authorizer();
         let token = sign(json!(["admin", "reader"]), in_one_hour(), Some(TEST_KID));
         let claims = authz.verify(&token).expect("valid token verifies");
         assert_eq!(claims.roles, roles(&["admin", "reader"]));
-        assert_eq!(claims.sub.as_deref(), Some("user-123"));
         assert!(authz.allows(&claims.roles, "deletePet"));
         // `sub` is configured for tracing and present; `email` is configured but
         // absent from the token, so it is not traced.
