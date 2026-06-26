@@ -135,10 +135,7 @@ async fn load_jwks(cli: &Cli) -> anyhow::Result<JwkSet> {
     let bytes = match (&cli.oauth_jwks_url, &cli.oauth_jwks_file) {
         (Some(url), _) => {
             tracing::debug!(%url, "fetching JWKS for JWT verification");
-            let client = reqwest::Client::builder()
-                .user_agent(concat!("oas2mcp/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .context("building the JWKS HTTP client")?;
+            let client = crate::http::client(cli).context("building the JWKS HTTP client")?;
             client
                 .get(url.clone())
                 .send()

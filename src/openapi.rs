@@ -25,10 +25,7 @@ impl DocAuth {
     /// `--openapi-header` values and, if configured, the OAuth provider. The
     /// HTTP client is shared with the OAuth token requests.
     pub fn from_cli(cli: &Cli) -> anyhow::Result<Self> {
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("oas2mcp/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .context("building the document-fetch HTTP client")?;
+        let client = crate::http::client(cli).context("building the document-fetch HTTP client")?;
         let static_headers =
             parse_headers(&cli.openapi_headers).context("parsing --openapi-header values")?;
         let oauth = TokenProvider::from_cli(cli, client.clone())?;

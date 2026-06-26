@@ -39,6 +39,9 @@ writing a line of glue code.
 - **OpenTelemetry metrics** — count and time every tool call, labelled by tool
   and outcome (and the caller's JWT `sub` when role-based access is on),
   exported over OTLP and/or a Prometheus `/metrics` endpoint.
+- **Custom CA trust** — point `--ca-cert` at a PEM bundle to trust a private or
+  corporate CA for every outbound TLS connection (upstream API, document fetch,
+  OAuth, JWKS), on top of the built-in public roots.
 - **Graceful shutdown** on `SIGTERM`/`SIGINT`.
 
 ## Install
@@ -77,6 +80,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--openapi-oauth-scope` | `OPENAPI_OAUTH_SCOPES` | —          | OAuth2 scope requested (sent space-joined). Repeatable; newline-separated via the env var. |
 | `--openapi-oauth-audience` | `OPENAPI_OAUTH_AUDIENCE` | —    | OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0). |
 | `--base-url`      | `BASE_URL`       | spec `servers`   | Upstream API base URL that tool calls are proxied to.              |
+| `--ca-cert`       | `CA_CERT_FILE`   | —                | Path to a PEM file with extra CA certificate(s) to trust for every outbound TLS connection (upstream, document fetch, OAuth, JWKS). Added on top of the built-in roots, so only your private/corporate CA is needed. Repeatable; newline-separated via the env var. |
 | `--header`        | `UPSTREAM_HEADERS` | —              | Extra `Name: Value` header on every upstream request. Repeatable.  |
 | `--forward-header`| `FORWARD_HEADERS`  | —              | Name of an incoming request header to forward upstream (e.g. `Authorization`). Repeatable. `streamable-http` only. |
 | `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:tool_name_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Requires a JWKS source below. `streamable-http` only. |
@@ -332,6 +336,25 @@ inline (`oas2mcp.openapi.inline`), in which case it is mounted from a
 `ConfigMap`. To reuse an existing `Secret` for the upstream headers, set
 `oas2mcp.upstream.existingSecret` (key `UPSTREAM_HEADERS`). See the chart's
 [README](charts/oas2mcp/README.md) for every value.
+
+To trust a private/corporate CA for outbound TLS, either drop the PEM bundle
+into `oas2mcp.caCerts.inline` (stored in a `Secret`, mounted, and wired to
+`CA_CERT_FILE` automatically), or mount it from a resource you already manage
+via `oas2mcp.caCerts.existing` (`kind: ConfigMap` or `Secret` — a `ConfigMap`
+is the natural home for public CA certs):
+
+```bash
+# inline PEM → generated Secret
+helm install petstore charts/oas2mcp \
+  --set oas2mcp.openapi.url=https://internal.example.com/openapi.json \
+  --set-file oas2mcp.caCerts.inline=./corp-ca.pem
+
+# or reference an existing ConfigMap
+helm install petstore charts/oas2mcp \
+  --set oas2mcp.openapi.url=https://internal.example.com/openapi.json \
+  --set oas2mcp.caCerts.existing.kind=ConfigMap \
+  --set oas2mcp.caCerts.existing.name=corp-ca
+```
 
 ## How operations map to tools
 

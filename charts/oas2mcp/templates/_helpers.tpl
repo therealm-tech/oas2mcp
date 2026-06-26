@@ -95,3 +95,51 @@ OPENAPI_HEADERS
 OPENAPI_OAUTH_CLIENT_SECRET
 {{- end -}}
 {{- end -}}
+
+{{/* Fail fast on an existing CA source with an invalid kind. */}}
+{{- define "oas2mcp.caCertsValidate" -}}
+{{- with .Values.oas2mcp.caCerts.existing.name -}}
+{{- if not (has $.Values.oas2mcp.caCerts.existing.kind (list "ConfigMap" "Secret")) -}}
+{{- fail "oas2mcp.caCerts.existing.kind must be \"ConfigMap\" or \"Secret\" when existing.name is set" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Whether any extra CA certificates are configured (inline or an existing resource). */}}
+{{- define "oas2mcp.caCertsEnabled" -}}
+{{- if or .Values.oas2mcp.caCerts.inline .Values.oas2mcp.caCerts.existing.name -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Whether the CA certificates are mounted from an existing ConfigMap. */}}
+{{- define "oas2mcp.caCertsFromConfigMap" -}}
+{{- if and .Values.oas2mcp.caCerts.existing.name (eq .Values.oas2mcp.caCerts.existing.kind "ConfigMap") -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Whether a Secret must be generated to hold the inline CA bundle (no existing resource chosen). */}}
+{{- define "oas2mcp.caCertsGenerateSecret" -}}
+{{- if and .Values.oas2mcp.caCerts.inline (not .Values.oas2mcp.caCerts.existing.name) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Name of the Secret holding the extra CA certificates (an existing Secret, else the generated one). Only meaningful for the Secret-backed cases. */}}
+{{- define "oas2mcp.caCertsSecretName" -}}
+{{- if and .Values.oas2mcp.caCerts.existing.name (eq .Values.oas2mcp.caCerts.existing.kind "Secret") -}}
+{{- .Values.oas2mcp.caCerts.existing.name -}}
+{{- else -}}
+{{- printf "%s-ca-certs" (include "oas2mcp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Key in the CA-certificates source (also the mounted file name): the existing resource's key, else the generated default. */}}
+{{- define "oas2mcp.caCertsKey" -}}
+{{- if .Values.oas2mcp.caCerts.existing.name -}}
+{{- .Values.oas2mcp.caCerts.existing.key -}}
+{{- else -}}
+ca-certificates.crt
+{{- end -}}
+{{- end -}}

@@ -1,6 +1,7 @@
 {{- if and (not .Values.oas2mcp.openapi.url) (not .Values.oas2mcp.openapi.inline) }}
 {{- fail "oas2mcp.openapi.url or oas2mcp.openapi.inline must be set" }}
 {{- end }}
+{{- include "oas2mcp.caCertsValidate" . }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -32,6 +33,9 @@ spec:
         {{- end }}
         {{- if and (not .Values.oas2mcp.openapi.inline) .Values.oas2mcp.openapi.oauth.clientSecret (not .Values.oas2mcp.openapi.oauth.existingSecret.name) }}
         checksum/openapi-oauth: {{ .Values.oas2mcp.openapi.oauth.clientSecret | sha256sum }}
+        {{- end }}
+        {{- if include "oas2mcp.caCertsGenerateSecret" . }}
+        checksum/ca-certs: {{ .Values.oas2mcp.caCerts.inline | sha256sum }}
         {{- end }}
         {{- with .Values.oas2mcp.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -167,6 +171,10 @@ spec:
             - name: METRICS_ADDR
               value: "0.0.0.0:{{ .Values.oas2mcp.metrics.prometheus.port }}"
             {{- end }}
+            {{- if include "oas2mcp.caCertsEnabled" . }}
+            - name: CA_CERT_FILE
+              value: /etc/oas2mcp-ca-certs/{{ include "oas2mcp.caCertsKey" . }}
+            {{- end }}
             {{- with .Values.oas2mcp.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -191,23 +199,38 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.oas2mcp.resources | nindent 12 }}
-          {{- if or .Values.oas2mcp.openapi.inline .Values.oas2mcp.extraVolumeMounts }}
+          {{- if or .Values.oas2mcp.openapi.inline (include "oas2mcp.caCertsEnabled" .) .Values.oas2mcp.extraVolumeMounts }}
           volumeMounts:
             {{- if .Values.oas2mcp.openapi.inline }}
             - name: openapi
               mountPath: /etc/oas2mcp
               readOnly: true
             {{- end }}
+            {{- if include "oas2mcp.caCertsEnabled" . }}
+            - name: ca-certs
+              mountPath: /etc/oas2mcp-ca-certs
+              readOnly: true
+            {{- end }}
             {{- with .Values.oas2mcp.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-      {{- if or .Values.oas2mcp.openapi.inline .Values.oas2mcp.extraVolumes }}
+      {{- if or .Values.oas2mcp.openapi.inline (include "oas2mcp.caCertsEnabled" .) .Values.oas2mcp.extraVolumes }}
       volumes:
         {{- if .Values.oas2mcp.openapi.inline }}
         - name: openapi
           configMap:
             name: {{ include "oas2mcp.fullname" . }}-openapi
+        {{- end }}
+        {{- if include "oas2mcp.caCertsEnabled" . }}
+        - name: ca-certs
+          {{- if include "oas2mcp.caCertsFromConfigMap" . }}
+          configMap:
+            name: {{ .Values.oas2mcp.caCerts.existing.name }}
+          {{- else }}
+          secret:
+            secretName: {{ include "oas2mcp.caCertsSecretName" . }}
+          {{- end }}
         {{- end }}
         {{- with .Values.oas2mcp.extraVolumes }}
         {{- toYaml . | nindent 8 }}
