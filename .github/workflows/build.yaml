@@ -97,6 +97,7 @@ jobs:
           # so Trivy can scan the exact image this commit produces.
           outputs: ${{ inputs.push && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || 'type=docker,dest=/tmp/image.tar' }}
 
+      # Two passes, for the reason documented in the `quality` workflow.
       - name: scan the image
         # Release builds push by digest and never materialise a local tarball;
         # the same tree is scanned on its pull request and on the push to main.
@@ -105,21 +106,31 @@ jobs:
         with:
           input: /tmp/image.tar
           scanners: vuln,secret
-          severity: HIGH,CRITICAL
           # debian:bookworm-slim ships ~20 HIGH/CRITICAL advisories with no
-          # released fix; gating on those would wedge the build permanently.
+          # released fix; reporting those would drown the dashboard.
           ignore-unfixed: true
           format: sarif
           output: trivy-image.sarif
-          exit-code: "1"
+          exit-code: "0"
 
       - name: publish the image findings
         # See the matching step in the `quality` workflow for the conditions.
-        if: ${{ always() && !inputs.push && github.actor != 'dependabot[bot]' && !github.event.pull_request.head.repo.fork }}
+        if: ${{ !inputs.push && github.actor != 'dependabot[bot]' && !github.event.pull_request.head.repo.fork }}
         uses: github/codeql-action/upload-sarif@4187e74d05793876e9989daffde9c3e66b4acd07  # v3.37.3
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image-${{ matrix.arch }}
+
+      - name: fail on high and critical findings
+        if: ${{ !inputs.push }}
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        with:
+          input: /tmp/image.tar
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
 
       - name: export digest
         if: ${{ inputs.push }}
