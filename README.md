@@ -433,16 +433,51 @@ This runs `cargo fmt --check`, `cargo clippy -D warnings`, `hadolint`,
 
 GitHub Actions workflows:
 
-- **quality** — runs `pre-commit` and the test suite on every push to `main` and
-  every pull request.
-- **build** — builds the container image (multi-arch on native runners); pushes
-  to `ghcr.io/therealm-tech/oas2mcp` only on manual dispatch or from a release.
+- **quality** — runs `pre-commit`, the test suite, and a Trivy scan of the
+  repository on every push to `main` and every pull request.
+- **build** — builds the container image (multi-arch on native runners) and
+  scans it with Trivy; pushes to `ghcr.io/therealm-tech/oas2mcp` only on manual
+  dispatch or from a release.
 - **chart** — publishes the Helm chart as an OCI artifact to
   `ghcr.io/therealm-tech/charts`, triggered by a `chart-X.Y.Z` tag (or manual
   dispatch). The chart is versioned and released independently of the app.
 - **release** — triggered by pushing a `vX.Y.Z` tag: builds and pushes the
   image (versioned from the tag) and creates a GitHub Release with
   auto-generated notes.
+
+### Security scanning
+
+[Trivy](https://trivy.dev) runs in two places, and both fail the build on a
+**HIGH** or **CRITICAL** finding that has a fix available:
+
+- **quality / trivy** — a filesystem scan of the repository: crate advisories
+  from `Cargo.lock`, leaked secrets, and `Dockerfile` and Helm chart
+  misconfiguration.
+- **build / scan the image** — scans the container image the commit actually
+  produces, which is what catches CVEs in the `debian:bookworm-slim` base.
+
+Each runs twice, deliberately: once reporting **every** severity to the
+repository's **Security** tab, then once more gating the build on HIGH and
+CRITICAL. Advisories with no released fix are excluded from both — the base
+image carries around twenty of them at any time and none are actionable here.
+
+Trivy renders the chart itself, but only when handed the values its templates
+require (`TRIVY_HELM_VALUES`). Without them it logs a render error, scans no
+chart at all, and still reports success — so keep that variable set.
+
+Reproduce either scan locally:
+
+```bash
+# What the quality workflow gates on:
+TRIVY_HELM_VALUES=charts/oas2mcp/values-lint.yaml \
+  trivy fs . --scanners vuln,secret,misconfig \
+    --severity HIGH,CRITICAL --ignore-unfixed \
+    --skip-files tests/fixtures/test_rsa_key.pem
+
+# What the build workflow gates on, against a locally built image:
+docker build -t oas2mcp:dev .
+trivy image oas2mcp:dev --severity HIGH,CRITICAL --ignore-unfixed
+```
 
 The app and the chart have separate release lifecycles:
 

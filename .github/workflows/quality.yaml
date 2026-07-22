@@ -74,3 +74,60 @@ jobs:
 
       - name: run the test suite
         run: cargo test --all --locked
+
+  trivy:
+    name: trivy
+    permissions:
+      contents: read
+      # Publishing the SARIF report to the Security tab.
+      security-events: write
+    runs-on: ubuntu-24.04
+    env:
+      # Trivy renders the chart itself, but only once it has the values the
+      # templates require. Without this it logs a render error and scans no
+      # chart at all — while still reporting success.
+      TRIVY_HELM_VALUES: charts/oas2mcp/values-lint.yaml
+    steps:
+      - name: check out the repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      # Two passes on purpose. The Security tab gets everything actionable at
+      # every severity; the build gate below only trips on HIGH/CRITICAL. One
+      # pass cannot do both: `limit-severities-for-sarif` defaults to false, so
+      # a SARIF run ignores `severity` and would fail the build on a LOW.
+      - name: scan the repository
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          # Advisories without a released fix are noise nobody can action;
+          # they would bury the dashboard under the base image's backlog.
+          ignore-unfixed: true
+          # A throwaway RSA key used only by the auth unit tests, never a real
+          # credential — `detect-private-key` skips it for the same reason.
+          skip-files: tests/fixtures/test_rsa_key.pem
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: "0"
+
+      - name: publish the findings
+        # Dependabot and fork pull requests run with a read-only token that
+        # cannot write security events, so skip the upload rather than fail.
+        if: ${{ github.actor != 'dependabot[bot]' && !github.event.pull_request.head.repo.fork }}
+        uses: github/codeql-action/upload-sarif@4187e74d05793876e9989daffde9c3e66b4acd07  # v3.37.3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: fail on high and critical findings
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          skip-files: tests/fixtures/test_rsa_key.pem
+          format: table
+          exit-code: "1"
