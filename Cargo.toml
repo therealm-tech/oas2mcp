@@ -35,7 +35,16 @@ reqwest = { version = "0.12", default-features = false, features = [
     "http2",
 ] }
 openapiv3 = "2.2"
-jsonwebtoken = "9"
+# `jsonwebtoken` 10 moved to pluggable crypto backends and no longer picks one
+# implicitly: exactly one of `rust_crypto` and `aws_lc_rs` must be enabled, or
+# every verification call panics at runtime. `rust_crypto` is pure Rust — no C
+# toolchain, no build-script surprises — and covers every algorithm reachable
+# from `auth::algorithms_for` (RS*, PS*, ES256/384, EdDSA).
+# `use_pem` is kept for `EncodingKey::from_rsa_pem` in the auth unit tests.
+jsonwebtoken = { version = "10.4", default-features = false, features = [
+    "rust_crypto",
+    "use_pem",
+] }
 arc-swap = "1"
 humantime = "2"
 regex = "1"
