@@ -11,7 +11,7 @@ use openapiv3::OpenAPI;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Content, Implementation, ListToolsResult,
+    CallToolRequestParams, CallToolResult, ContentBlock, Implementation, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::{RequestContext, RoleServer};
@@ -117,7 +117,7 @@ impl OpenApiServer {
     ) -> CallToolResult {
         let request = match self.build_request(spec, base_url, args, forwarded) {
             Ok(request) => request,
-            Err(err) => return CallToolResult::error(vec![Content::text(err.to_string())]),
+            Err(err) => return CallToolResult::error(vec![ContentBlock::text(err.to_string())]),
         };
 
         tracing::debug!(tool = %spec.name, method = %spec.method, "proxying upstream request");
@@ -126,14 +126,14 @@ impl OpenApiServer {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
                 let text = format!("HTTP {status}\n\n{body}");
-                let content = vec![Content::text(text)];
+                let content = vec![ContentBlock::text(text)];
                 if status.is_client_error() || status.is_server_error() {
                     CallToolResult::error(content)
                 } else {
                     CallToolResult::success(content)
                 }
             }
-            Err(err) => CallToolResult::error(vec![Content::text(format!(
+            Err(err) => CallToolResult::error(vec![ContentBlock::text(format!(
                 "upstream request failed: {err}"
             ))]),
         }
