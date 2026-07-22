@@ -93,15 +93,17 @@ jobs:
           # Per-arch Docker layer cache: the expensive thing to recompute.
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.arch }},mode=max
-          # Validation builds export a tarball instead of discarding the result,
-          # so Trivy can scan the exact image this commit produces.
-          outputs: ${{ inputs.push && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || 'type=docker,dest=/tmp/image.tar' }}
+          # Always export a tarball, on top of pushing when asked. A release
+          # must scan the artefact it actually publishes: `debian:bookworm-slim`
+          # is a mutable tag and the advisory database moves daily, so "the
+          # commit was scanned on its pull request" does not cover the image
+          # built from a tag days later.
+          outputs: |
+            type=docker,dest=/tmp/image.tar
+            ${{ inputs.push && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || 'type=cacheonly' }}
 
       # Two passes, for the reason documented in the `quality` workflow.
       - name: scan the image
-        # Release builds push by digest and never materialise a local tarball;
-        # the same tree is scanned on its pull request and on the push to main.
-        if: ${{ !inputs.push }}
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
         with:
           input: /tmp/image.tar
@@ -115,14 +117,15 @@ jobs:
 
       - name: publish the image findings
         # See the matching step in the `quality` workflow for the conditions.
-        if: ${{ !inputs.push && github.actor != 'dependabot[bot]' && !github.event.pull_request.head.repo.fork }}
+        if: ${{ github.actor != 'dependabot[bot]' && !github.event.pull_request.head.repo.fork }}
         uses: github/codeql-action/upload-sarif@4187e74d05793876e9989daffde9c3e66b4acd07  # v3.37.3
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image-${{ matrix.arch }}
 
       - name: fail on high and critical findings
-        if: ${{ !inputs.push }}
+        # On a release this blocks the `manifest` job, so the digests stay
+        # pushed but unreferenced and no usable tag ever appears.
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
         with:
           input: /tmp/image.tar
