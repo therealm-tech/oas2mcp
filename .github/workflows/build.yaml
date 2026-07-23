@@ -83,8 +83,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Build to a local tarball. Scan it, then push the very same bits — a
+      # release must scan the artefact it publishes, and debian:bookworm-slim
+      # is a mutable tag whose advisories move daily.
       - name: build the image
-        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
         with:
           context: .
@@ -93,15 +95,12 @@ jobs:
           # Per-arch Docker layer cache: the expensive thing to recompute.
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,scope=${{ matrix.arch }},mode=max
-          # Validation builds export a tarball instead of discarding the result,
-          # so Trivy can scan the exact image this commit produces.
-          outputs: ${{ inputs.push && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE) || 'type=docker,dest=/tmp/image.tar' }}
+          outputs: type=docker,dest=/tmp/image.tar
 
-      # Two passes, for the reason documented in the `quality` workflow.
+      # Two passes: report every severity to the Security tab, gate on HIGH and
+      # CRITICAL. One pass cannot do both — a SARIF run ignores `severity`, so it
+      # would fail the build on a LOW finding.
       - name: scan the image
-        # Release builds push by digest and never materialise a local tarball;
-        # the same tree is scanned on its pull request and on the push to main.
-        if: ${{ !inputs.push }}
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
         with:
           input: /tmp/image.tar
@@ -114,15 +113,17 @@ jobs:
           exit-code: "0"
 
       - name: publish the image findings
-        # See the matching step in the `quality` workflow for the conditions.
-        if: ${{ !inputs.push && github.actor != 'dependabot[bot]' && !github.event.pull_request.head.repo.fork }}
+        # Only a fork or Dependabot pull request lacks the token to upload, and
+        # both arrive as `pull_request`. Reporting happens from push events.
+        if: ${{ github.event_name != 'pull_request' }}
         uses: github/codeql-action/upload-sarif@4187e74d05793876e9989daffde9c3e66b4acd07  # v3.37.3
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image-${{ matrix.arch }}
 
       - name: fail on high and critical findings
-        if: ${{ !inputs.push }}
+        # A finding fails this job, which blocks the `manifest` job below, so a
+        # release pushes digests that no tag ever references.
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # 0.35.0
         with:
           input: /tmp/image.tar
@@ -131,6 +132,19 @@ jobs:
           ignore-unfixed: true
           format: table
           exit-code: "1"
+
+      # Push only when releasing. The layer cache from the build above makes
+      # this a cache hit, so the pushed digest is the image just scanned.
+      - name: push the image
+        id: build
+        if: ${{ inputs.push }}
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
       - name: export digest
         if: ${{ inputs.push }}

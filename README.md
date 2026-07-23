@@ -454,7 +454,11 @@ GitHub Actions workflows:
   from `Cargo.lock`, leaked secrets, and `Dockerfile` and Helm chart
   misconfiguration.
 - **build / scan the image** — scans the container image the commit actually
-  produces, which is what catches CVEs in the `debian:bookworm-slim` base.
+  produces, which is what catches CVEs in the `debian:bookworm-slim` base. This
+  runs on releases too: a HIGH/CRITICAL finding fails the build, which blocks
+  the `manifest` job, so no usable tag is ever published. Note it covers the
+  base layer only — the runtime image holds a compiled binary, so Trivy sees no
+  Rust dependencies there; those are covered by the `Cargo.lock` scan above.
 
 Each runs twice, deliberately: once reporting **every** severity to the
 repository's **Security** tab, then once more gating the build on HIGH and
