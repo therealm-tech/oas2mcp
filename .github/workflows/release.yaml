@@ -26,6 +26,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # The reusable build workflow uploads Trivy SARIF to the Security tab; a
+      # reusable workflow can never exceed the permissions its caller grants.
+      security-events: write
     uses: ./.github/workflows/build.yaml
     with:
       push: true
