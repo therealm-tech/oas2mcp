@@ -454,16 +454,20 @@ GitHub Actions workflows:
   from `Cargo.lock`, leaked secrets, and `Dockerfile` and Helm chart
   misconfiguration.
 - **build / scan the image** — scans the container image the commit actually
-  produces, which is what catches CVEs in the `debian:bookworm-slim` base. This
-  runs on releases too: a HIGH/CRITICAL finding fails the build, which blocks
-  the `manifest` job, so no usable tag is ever published. Note it covers the
-  base layer only — the runtime image holds a compiled binary, so Trivy sees no
-  Rust dependencies there; those are covered by the `Cargo.lock` scan above.
+  produces, which is what catches CVEs in the base layer. This runs on releases
+  too: a HIGH/CRITICAL finding fails the build, which blocks the `manifest`
+  job, so no usable tag is ever published. Note it covers the base layer only —
+  the runtime image holds a compiled binary, so Trivy sees no Rust dependencies
+  there; those are covered by the `Cargo.lock` scan above.
+
+The runtime image is `gcr.io/distroless/cc-debian12:nonroot`: no shell, no
+package manager, no OS package layer to speak of, so a scanner finds next to
+nothing to flag. That is a deliberate move away from `debian:bookworm-slim`,
+which carried around twenty unfixed HIGH/CRITICAL advisories at any time.
 
 Each runs twice, deliberately: once reporting **every** severity to the
 repository's **Security** tab, then once more gating the build on HIGH and
-CRITICAL. Advisories with no released fix are excluded from both — the base
-image carries around twenty of them at any time and none are actionable here.
+CRITICAL. Advisories with no released fix are excluded from both.
 
 Trivy renders the chart itself, but only when handed the values its templates
 require (`TRIVY_HELM_VALUES`). Without them it logs a render error, scans no

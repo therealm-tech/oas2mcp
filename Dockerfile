@@ -18,22 +18,18 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release --locked
 
-# --- runtime -----------------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
-# TLS roots for fetching specs / proxying to HTTPS upstreams.
-# hadolint ignore=DL3008
-RUN apt-get update \
- && apt-get install --no-install-recommends -y ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-
-RUN groupadd --system --gid 1000 oas2mcp \
- && useradd  --system --uid 1000 --gid oas2mcp \
-      --home /etc/oas2mcp --shell /usr/sbin/nologin oas2mcp
-
-COPY --from=builder --chown=oas2mcp:oas2mcp \
+# --- runtime: distroless -----------------------------------------------------
+# `cc` (not `static`) because the binary links glibc + libssl-style C deps
+# (aws-lc-sys). Distroless ships no shell, no package manager and no OS package
+# layer, so an image scanner finds essentially nothing to flag — unlike
+# debian:bookworm-slim, whose ~20 unfixed HIGH/CRITICAL advisories we used to
+# carry. TLS roots (ca-certificates) and a nonroot user (uid 65532) are baked
+# into the image.
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+COPY --from=builder \
      /usr/local/src/oas2mcp/target/release/oas2mcp /usr/local/bin/oas2mcp
 
-USER oas2mcp
+USER nonroot
 # Default to the remote transport; override TRANSPORT/BIND_ADDR as needed.
 ENV TRANSPORT=streamable-http \
     BIND_ADDR=0.0.0.0:8000
