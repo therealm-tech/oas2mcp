@@ -512,8 +512,9 @@ scripts/release.sh --chart 0.5.0
 scripts/release.sh 0.4.0 --chart 0.5.0
 ```
 
-A chart-only release leaves `appVersion` alone — it keeps pointing at the app
-image the chart already targets. The script refuses to run on a dirty tree, off
+A chart-only release points `appVersion` at the latest `vX.Y.Z` tag, so a chart
+published on its own still ships against the newest app image instead of
+quietly lagging behind it. The script refuses to run on a dirty tree, off
 `main`, out of sync with `origin/main`, or when a tag already exists. Useful
 flags: `--skip-tests`, `--no-push` (commit and tag locally only), `-y` (no
 confirmation prompt). Bumping the chart needs `helm` and `helm-docs` on `PATH`.
