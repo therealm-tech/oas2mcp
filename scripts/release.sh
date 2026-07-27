@@ -27,8 +27,8 @@ Arguments:
 Options:
   --chart <version>    Also release the Helm chart at this version: bumps the
                        chart `version` in `Chart.yaml` and tags `chart-X.Y.Z`.
-                       When an app version is released too, `appVersion` is
-                       pointed at it.
+                       `appVersion` is pointed at the app version released in
+                       the same run, or at the latest `vX.Y.Z` tag otherwise.
   --skip-tests         Skip the test suite before tagging.
   --no-push            Commit and tag locally, but push nothing.
   -y, --yes            Do not ask for confirmation before pushing.
@@ -36,7 +36,8 @@ Options:
 
 Examples:
   scripts/release.sh 0.4.0                  # app only
-  scripts/release.sh --chart 0.5.0          # chart only
+  scripts/release.sh --chart 0.5.0          # chart only, appVersion follows
+                                            # the latest vX.Y.Z tag
   scripts/release.sh 0.4.0 --chart 0.5.0    # both, appVersion becomes 0.4.0
 EOF
 }
@@ -98,6 +99,27 @@ set_chart_version() {
 
 set_chart_app_version() {
     rewrite "$CHART" 's/^appVersion:.*/appVersion: "'"$1"'"/'
+}
+
+chart_app_version() {
+    sed -n 's/^appVersion:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$CHART"
+}
+
+# The newest released app version, from the tags fetched above. Prints nothing
+# when the repo has none. A loop, not a `grep | head` pipeline: under `pipefail`
+# a grep that matches nothing fails the whole substitution, and `set -e` would
+# kill the script with no message at all.
+latest_app_version() {
+    local tag
+
+    while IFS= read -r tag; do
+        # Pre-releases are skipped — appVersion must name an image that exists.
+        # `--sort=-v:refname` already put the newest tag first.
+        if printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            printf '%s' "${tag#v}"
+            return 0
+        fi
+    done <<<"$(git tag --list 'v*' --sort=-v:refname)"
 }
 
 confirm() {
@@ -191,6 +213,21 @@ main() {
         require_tag_absent "$tag"
     done
 
+    # A chart release always ships against the newest app image: the one being
+    # released here, or the last `vX.Y.Z` tag when the chart moves on its own.
+    # Left to itself, appVersion silently rots behind the app. Resolved up
+    # front, before any file is touched.
+    local app_target=""
+    if [ -n "$chart" ]; then
+        if [ -n "$version" ]; then
+            app_target="$version"
+        else
+            app_target="$(latest_app_version)"
+            [ -n "$app_target" ] ||
+                die "no vX.Y.Z tag to take appVersion from — release the app first, or pass a version"
+        fi
+    fi
+
     if [ -n "$version" ]; then
         local current
         current="$(manifest_version)"
@@ -221,11 +258,12 @@ main() {
             [ "$(chart_version)" = "$chart" ] || die "failed to write the version to $CHART"
         fi
 
-        # An app release means the chart now targets that image; a chart-only
-        # release leaves appVersion alone, pointing at the app it shipped with.
-        if [ -n "$version" ]; then
-            info "pointing appVersion at $version"
-            set_chart_app_version "$version"
+        if [ "$(chart_app_version)" = "$app_target" ]; then
+            info "appVersion is already at $app_target"
+        else
+            info "pointing appVersion at $app_target"
+            set_chart_app_version "$app_target"
+            [ "$(chart_app_version)" = "$app_target" ] || die "failed to write appVersion to $CHART"
         fi
 
         info "regenerating the chart docs"
