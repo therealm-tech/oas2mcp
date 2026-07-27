@@ -11,6 +11,7 @@ metadata:
     {{- include "oas2mcp.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.oas2mcp.replicaCount }}
+  revisionHistoryLimit: {{ .Values.oas2mcp.revisionHistoryLimit }}
   selector:
     matchLabels:
       {{- include "oas2mcp.selectorLabels" . | nindent 6 }}
