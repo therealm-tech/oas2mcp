@@ -496,17 +496,27 @@ trivy image oas2mcp:dev --severity HIGH,CRITICAL --ignore-unfixed
 
 The app and the chart have separate release lifecycles.
 
-Release the application with the helper script — it bumps `Cargo.toml` (and
-`Cargo.lock`) to the requested version, runs the tests, commits, tags `vX.Y.Z`
-and pushes, which triggers the `release` workflow:
+The helper script bumps the version files, runs the checks, commits, tags and
+pushes — which is what triggers the workflows. Release either side, or both at
+once:
 
 ```bash
+# The application: bumps Cargo.toml + Cargo.lock, tags v0.4.0.
 scripts/release.sh 0.4.0
+
+# The chart: bumps Chart.yaml + the generated chart README, tags chart-0.5.0.
+scripts/release.sh --chart 0.5.0
+
+# Both: as above, and `appVersion` is pointed at the app version being
+# released, since the chart now targets that image.
+scripts/release.sh 0.4.0 --chart 0.5.0
 ```
 
-It refuses to run on a dirty tree, off `main`, out of sync with `origin/main`,
-or when the tag already exists. Useful flags: `--skip-tests`, `--no-push`
-(commit and tag locally only), `-y` (no confirmation prompt).
+A chart-only release leaves `appVersion` alone — it keeps pointing at the app
+image the chart already targets. The script refuses to run on a dirty tree, off
+`main`, out of sync with `origin/main`, or when a tag already exists. Useful
+flags: `--skip-tests`, `--no-push` (commit and tag locally only), `-y` (no
+confirmation prompt). Bumping the chart needs `helm` and `helm-docs` on `PATH`.
 
 Doing it by hand works too, as long as `Cargo.toml` already carries the same
 version — otherwise the `release` workflow fails the version check:
