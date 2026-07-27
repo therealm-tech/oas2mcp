@@ -3,6 +3,9 @@ oas2mcp:
   # -- Number of server replicas.
   replicaCount: 1
 
+  # -- Number of old ReplicaSets the Deployment keeps for rollback.
+  revisionHistoryLimit: 3
+
   image:
     # -- Container image repository.
     repository: ghcr.io/therealm-tech/oas2mcp
