@@ -34,6 +34,13 @@ repos:
           - rust
         pass_filenames: false
 
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types:
+          - shell
+
       - id: actionlint
         name: actionlint
         entry: actionlint

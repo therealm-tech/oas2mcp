@@ -427,7 +427,10 @@ pre-commit run --all-files
 ```
 
 This runs `cargo fmt --check`, `cargo clippy -D warnings`, `hadolint`,
-`actionlint`, `helm lint`, `helm-docs`, and the standard whitespace/merge hooks.
+`actionlint`, `shellcheck`, `helm lint`, `helm-docs`, and the standard
+whitespace/merge hooks. The hooks call the real binaries, so they need to be on
+`PATH`: `hadolint`, `actionlint`, `shellcheck`, `helm` and `helm-docs`
+(`brew install hadolint actionlint shellcheck helm norwoodj/tap/helm-docs`).
 
 ### CI / Release
 
@@ -441,9 +444,11 @@ GitHub Actions workflows:
 - **chart** — publishes the Helm chart as an OCI artifact to
   `ghcr.io/therealm-tech/charts`, triggered by a `chart-X.Y.Z` tag (or manual
   dispatch). The chart is versioned and released independently of the app.
-- **release** — triggered by pushing a `vX.Y.Z` tag: builds and pushes the
-  image (versioned from the tag) and creates a GitHub Release with
-  auto-generated notes.
+- **release** — triggered by pushing a `vX.Y.Z` tag: checks that the
+  `Cargo.toml` version matches the tag, builds and pushes the image (versioned
+  from the tag) and creates a GitHub Release with auto-generated notes. A
+  mismatch fails the job before anything is published — the tag names the image
+  but `Cargo.toml` is what `oas2mcp --version` reports, so the two must agree.
 
 ### Security scanning
 
@@ -487,7 +492,34 @@ docker build -t oas2mcp:dev .
 trivy image oas2mcp:dev --severity HIGH,CRITICAL --ignore-unfixed
 ```
 
-The app and the chart have separate release lifecycles:
+### Cutting a release
+
+The app and the chart have separate release lifecycles.
+
+The helper script bumps the version files, runs the checks, commits, tags and
+pushes — which is what triggers the workflows. Release either side, or both at
+once:
+
+```bash
+# The application: bumps Cargo.toml + Cargo.lock, tags v0.4.0.
+scripts/release.sh 0.4.0
+
+# The chart: bumps Chart.yaml + the generated chart README, tags chart-0.5.0.
+scripts/release.sh --chart 0.5.0
+
+# Both: as above, and `appVersion` is pointed at the app version being
+# released, since the chart now targets that image.
+scripts/release.sh 0.4.0 --chart 0.5.0
+```
+
+A chart-only release leaves `appVersion` alone — it keeps pointing at the app
+image the chart already targets. The script refuses to run on a dirty tree, off
+`main`, out of sync with `origin/main`, or when a tag already exists. Useful
+flags: `--skip-tests`, `--no-push` (commit and tag locally only), `-y` (no
+confirmation prompt). Bumping the chart needs `helm` and `helm-docs` on `PATH`.
+
+Doing it by hand works too, as long as `Cargo.toml` already carries the same
+version — otherwise the `release` workflow fails the version check:
 
 ```bash
 # Release the application (image + GitHub Release):

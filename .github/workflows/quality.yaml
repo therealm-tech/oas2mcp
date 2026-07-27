@@ -38,6 +38,13 @@ jobs:
           curl -fsSL "https://github.com/norwoodj/helm-docs/releases/download/v${HELM_DOCS_VERSION}/helm-docs_${HELM_DOCS_VERSION}_Linux_x86_64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin helm-docs
 
+      - name: install shellcheck
+        # Preinstalled on the ubuntu-24.04 image, but the hook must not depend
+        # on that staying true.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
       - name: install actionlint
         env:
           ACTIONLINT_VERSION: "1.7.12"
