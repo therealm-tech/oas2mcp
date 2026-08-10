@@ -5,6 +5,12 @@ on:
     tags:
       - "v*"
 
+# Serialise releases; a run that pushes images and cuts a GitHub Release must
+# never be cancelled half-way.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

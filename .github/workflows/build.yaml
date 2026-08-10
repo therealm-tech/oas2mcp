@@ -38,6 +38,14 @@ on:
         type: string
         default: ""
 
+# The group name is hardcoded rather than `${{ github.workflow }}`: in a
+# `workflow_call` run that expression resolves to the *caller* (`release`), so
+# the reusable build would queue behind the very job waiting on it.
+# Validation runs are cancellable; a run that may publish is left to finish.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

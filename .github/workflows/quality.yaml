@@ -6,6 +6,11 @@ on:
       - main
   pull_request:
 
+# One quality run per ref: a new push supersedes the one still in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
