@@ -175,6 +175,9 @@ fn algorithm_for(jwk: &Jwk) -> anyhow::Result<Algorithm> {
         AlgorithmParameters::OctetKey(_) => {
             bail!("symmetric (oct) JWKs are not supported for token verification")
         }
+        // `AlgorithmParameters` is `#[non_exhaustive]`: reject key types this
+        // build does not know rather than guessing an algorithm for them.
+        other => bail!("unsupported JWK key type {other:?} for token verification"),
     })
 }
 
@@ -195,6 +198,8 @@ fn algorithms_for(jwk: &Jwk) -> anyhow::Result<Vec<Algorithm>> {
         AlgorithmParameters::OctetKey(_) => {
             bail!("symmetric (oct) JWKs are not supported for token verification")
         }
+        // See `algorithm_for`: unknown key types get no algorithm allow-list.
+        other => bail!("unsupported JWK key type {other:?} for token verification"),
     })
 }
 
