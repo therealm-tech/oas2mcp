@@ -41,7 +41,7 @@ indexmap = { version = "2", features = ["serde"] }
 # toolchain, no build-script surprises — and covers every algorithm reachable
 # from `auth::algorithms_for` (RS*, PS*, ES256/384, EdDSA).
 # `use_pem` is kept for `EncodingKey::from_rsa_pem` in the auth unit tests.
-jsonwebtoken = { version = "10.4", default-features = false, features = [
+jsonwebtoken = { version = "11.0", default-features = false, features = [
     "rust_crypto",
     "use_pem",
 ] }
