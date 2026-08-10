@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, bail};
 use arc_swap::ArcSwap;
-use openapiv3::OpenAPI;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rmcp::model::{
@@ -22,6 +21,7 @@ use url::Url;
 use crate::auth::Authorizer;
 use crate::cli::Cli;
 use crate::filter::{FilterConfig, OperationFilter};
+use crate::openapi::Spec;
 use crate::telemetry::{Metrics, Outcome};
 use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
 
@@ -71,7 +71,7 @@ impl OpenApiServer {
     /// `authorizer`, when set, gates tool visibility and invocation on the
     /// caller's JWT roles.
     pub fn from_spec(
-        spec: &OpenAPI,
+        spec: &Spec,
         cli: &Cli,
         authorizer: Option<Arc<Authorizer>>,
         metrics: Metrics,
@@ -94,7 +94,7 @@ impl OpenApiServer {
     /// atomically. The static config (auth headers, forwarded header names, the
     /// HTTP client) is untouched. If the new document yields no usable tools,
     /// the swap still happens — that is what the document now says.
-    pub fn reload(&self, spec: &OpenAPI, cli: &Cli) -> anyhow::Result<()> {
+    pub fn reload(&self, spec: &Spec, cli: &Cli) -> anyhow::Result<()> {
         let snapshot = build_snapshot(spec, cli)?;
         let tools = snapshot.tools.len();
         self.state.store(Arc::new(snapshot));
@@ -420,7 +420,7 @@ fn filter_forwarded(allow: &[HeaderName], src: &HeaderMap) -> HeaderMap {
 /// Build the document-derived [`Snapshot`]: resolve the base URL, apply the
 /// operation filter, build the tools and their name index, and render the
 /// instructions. Shared by the initial build and every reload.
-fn build_snapshot(spec: &OpenAPI, cli: &Cli) -> anyhow::Result<Snapshot> {
+fn build_snapshot(spec: &Spec, cli: &Cli) -> anyhow::Result<Snapshot> {
     let base_url = resolve_base_url(spec, cli)?;
 
     let filter = OperationFilter::new(FilterConfig {
@@ -446,7 +446,9 @@ fn build_snapshot(spec: &OpenAPI, cli: &Cli) -> anyhow::Result<Snapshot> {
          Each tool maps to one OpenAPI operation and is executed as an HTTP \
          request against {}. Path/query/header parameters are top-level tool \
          arguments; a JSON request body is passed as the `body` argument.",
-        spec.info.title, spec.info.version, base_url,
+        spec.info().title,
+        spec.info().version,
+        base_url,
     );
 
     Ok(Snapshot {
@@ -459,11 +461,11 @@ fn build_snapshot(spec: &OpenAPI, cli: &Cli) -> anyhow::Result<Snapshot> {
 
 /// Determine the upstream base URL: the CLI override wins, otherwise the first
 /// absolute `servers` entry of the document.
-fn resolve_base_url(spec: &OpenAPI, cli: &Cli) -> anyhow::Result<Url> {
+fn resolve_base_url(spec: &Spec, cli: &Cli) -> anyhow::Result<Url> {
     if let Some(url) = &cli.base_url {
         return Ok(url.clone());
     }
-    for server in &spec.servers {
+    for server in spec.servers() {
         if let Ok(url) = Url::parse(&server.url) {
             return Ok(url);
         }
@@ -523,6 +525,11 @@ mod tests {
     use super::*;
     use clap::Parser as _;
 
+    fn spec_from(yaml: &str) -> Spec {
+        let raw: Value = serde_yaml_ng::from_str(yaml).expect("valid YAML");
+        Spec::from_value(raw).expect("supported document")
+    }
+
     #[test]
     fn reload_swaps_the_tool_set() {
         let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
@@ -542,12 +549,12 @@ paths:
   /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
   /b: { get: { operationId: getB, responses: { "200": { description: ok } } } }
 "#;
-        let spec_one: OpenAPI = serde_yaml_ng::from_str(ONE_OP).expect("valid spec");
+        let spec_one = spec_from(ONE_OP);
         let server = OpenApiServer::from_spec(&spec_one, &cli, None, Metrics::disabled())
             .expect("server builds");
         assert_eq!(server.tool_count(), 1);
 
-        let spec_two: OpenAPI = serde_yaml_ng::from_str(TWO_OPS).expect("valid spec");
+        let spec_two = spec_from(TWO_OPS);
         server.reload(&spec_two, &cli).expect("reload succeeds");
         assert_eq!(server.tool_count(), 2);
         assert!(server.state.load().index.contains_key("getB"));

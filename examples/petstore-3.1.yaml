@@ -1,0 +1,168 @@
+openapi: 3.1.0
+info:
+  title: Swagger Petstore (OpenAPI 3.1)
+  summary: The petstore, restated in OpenAPI 3.1.
+  version: "1.0.0"
+license:
+  name: Apache 2.0
+  identifier: Apache-2.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+servers:
+  - url: https://petstore3.swagger.io/api/v3
+paths:
+  /pet/{petId}:
+    parameters:
+      - $ref: "#/components/parameters/PetId"
+    get:
+      operationId: getPetById
+      summary: Find pet by ID
+      tags:
+        - pet
+      responses:
+        "200":
+          description: successful operation
+    delete:
+      operationId: deletePet
+      summary: Delete a pet
+      tags:
+        - pet
+      responses:
+        "200":
+          description: successful operation
+  /pet/findByStatus:
+    get:
+      operationId: findPetsByStatus
+      summary: Finds pets by status
+      tags:
+        - pet
+      parameters:
+        - name: status
+          in: query
+          description: Status values to filter on
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - available
+                - pending
+                - sold
+      responses:
+        "200":
+          description: successful operation
+  /pet:
+    post:
+      operationId: addPet
+      summary: Add a new pet to the store
+      tags:
+        - pet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Pet"
+              description: The pet to add.
+      responses:
+        "200":
+          description: successful operation
+    patch:
+      operationId: patchPet
+      summary: Partially update a pet
+      tags:
+        - pet
+      requestBody:
+        required: true
+        content:
+          # A structured `+json` suffix, which 3.1 documents use freely.
+          application/merge-patch+json:
+            schema:
+              $ref: "#/components/schemas/Pet"
+      responses:
+        "200":
+          description: successful operation
+  /store/inventory:
+    $ref: "#/components/pathItems/Inventory"
+webhooks:
+  # 3.1 only, and never a tool: the upstream API calls us, not the reverse.
+  petStatusChanged:
+    post:
+      operationId: petStatusChanged
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Pet"
+      responses:
+        "200":
+          description: acknowledged
+components:
+  pathItems:
+    Inventory:
+      get:
+        operationId: getInventory
+        summary: Return pet inventories by status
+        tags:
+          - store
+        responses:
+          "200":
+            description: successful operation
+  parameters:
+    PetId:
+      name: petId
+      in: path
+      required: true
+      description: ID of the pet
+      schema:
+        type: integer
+        format: int64
+        exclusiveMinimum: 0
+  schemas:
+    Pet:
+      type: object
+      required:
+        - name
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        # A union with null — 3.1 spells this as a `type` array, where 3.0
+        # needed the `nullable` keyword.
+        tag:
+          type:
+            - string
+            - "null"
+        category:
+          $ref: "#/components/schemas/Category"
+        status:
+          description: Pet status in the store
+          enum:
+            - available
+            - pending
+            - sold
+        photoUrls:
+          type: array
+          items:
+            type: string
+            format: uri
+        # 2020-12 keywords with no 3.0 equivalent.
+        speciesCode:
+          const: canis-familiaris
+        location:
+          type: array
+          prefixItems:
+            - type: number
+            - type: number
+        metadata:
+          type: object
+          additionalProperties: false
+    Category:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string

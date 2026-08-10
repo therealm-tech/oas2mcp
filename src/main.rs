@@ -65,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!(
         transport = %cli.transport,
+        openapi = spec.version(),
         tools = server.tool_count(),
         "starting MCP server"
     );

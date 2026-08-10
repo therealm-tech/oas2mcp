@@ -4,16 +4,15 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use openapiv3::{
-    OpenAPI, Operation, Parameter, ParameterSchemaOrContent, PathItem, ReferenceOr, RequestBody,
-    Schema,
-};
+use indexmap::IndexMap;
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 
 #[cfg(test)]
 use crate::filter::FilterConfig;
 use crate::filter::OperationFilter;
+use crate::openapi::Spec;
+use crate::openapi::spec::{MediaType, Operation, Parameter, PathItem};
 
 /// Where an OpenAPI parameter is carried in the HTTP request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,30 +47,19 @@ pub struct ToolSpec {
 
 /// Build one [`ToolSpec`] per operation defined in the document, keeping only
 /// the operations the [`OperationFilter`] selects.
-pub fn build_tools(spec: &OpenAPI, filter: &OperationFilter) -> Vec<ToolSpec> {
+pub fn build_tools(spec: &Spec, filter: &OperationFilter) -> Vec<ToolSpec> {
     let mut tools = Vec::new();
     let mut seen_names = HashSet::new();
     let mut filtered = 0usize;
 
-    for (path, item) in &spec.paths.paths {
-        let ReferenceOr::Item(item) = item else {
-            tracing::warn!(%path, "skipping path defined by a $ref (unsupported)");
-            continue;
-        };
-
-        for (method, operation) in operations(item) {
+    for (path, item) in spec.path_items() {
+        for (method, operation) in operations(&item) {
             if !filter.keeps(&operation_name(path, &method, operation), &operation.tags) {
                 filtered += 1;
                 continue;
             }
 
-            let mut tool = match build_tool(spec, item, path, method.clone(), operation) {
-                Ok(tool) => tool,
-                Err(err) => {
-                    tracing::warn!(%path, %method, error = %err, "skipping operation");
-                    continue;
-                }
-            };
+            let mut tool = build_tool(spec, &item, path, method.clone(), operation);
 
             // MCP tool names must be unique; disambiguate collisions.
             let mut name = tool.name.clone();
@@ -126,12 +114,12 @@ fn operation_name(path: &str, method: &Method, operation: &Operation) -> String 
 }
 
 fn build_tool(
-    spec: &OpenAPI,
+    spec: &Spec,
     item: &PathItem,
     path: &str,
     method: Method,
     operation: &Operation,
-) -> anyhow::Result<ToolSpec> {
+) -> ToolSpec {
     let name = operation_name(path, &method, operation);
 
     // Use the summary as a headline and the description as detail. Many specs
@@ -150,15 +138,16 @@ fn build_tool(
     let mut params = Vec::new();
 
     for param_ref in item.parameters.iter().chain(operation.parameters.iter()) {
-        let ReferenceOr::Item(parameter) = param_ref else {
-            // Resolve a referenced parameter from components.
-            let Some(parameter) = resolve_parameter(spec, param_ref) else {
-                continue;
-            };
-            push_param(spec, parameter, &mut properties, &mut required, &mut params);
+        let Some(parameter) = spec.resolve(param_ref) else {
             continue;
         };
-        push_param(spec, parameter, &mut properties, &mut required, &mut params);
+        push_param(
+            spec,
+            &parameter,
+            &mut properties,
+            &mut required,
+            &mut params,
+        );
     }
 
     let has_body = add_request_body(spec, operation, &mut properties, &mut required);
@@ -170,7 +159,7 @@ fn build_tool(
         input_schema.insert("required".into(), json!(required));
     }
 
-    Ok(ToolSpec {
+    ToolSpec {
         name,
         description,
         method,
@@ -178,48 +167,54 @@ fn build_tool(
         params,
         has_body,
         input_schema: Arc::new(input_schema),
-    })
+    }
 }
 
 fn push_param(
-    spec: &OpenAPI,
+    spec: &Spec,
     parameter: &Parameter,
     properties: &mut Map<String, Value>,
     required: &mut Vec<String>,
     params: &mut Vec<Param>,
 ) {
-    let (data, location) = match parameter {
-        Parameter::Query { parameter_data, .. } => (parameter_data, ParamLocation::Query),
-        Parameter::Path { parameter_data, .. } => (parameter_data, ParamLocation::Path),
-        Parameter::Header { parameter_data, .. } => (parameter_data, ParamLocation::Header),
+    let location = match parameter.location.as_str() {
+        "path" => ParamLocation::Path,
+        "query" => ParamLocation::Query,
+        "header" => ParamLocation::Header,
         // Cookie parameters are not proxied.
-        Parameter::Cookie { parameter_data, .. } => {
-            tracing::debug!(name = %parameter_data.name, "ignoring cookie parameter");
+        other => {
+            tracing::debug!(name = %parameter.name, location = other, "ignoring parameter");
             return;
         }
     };
 
     // Path parameters are always required regardless of the document.
-    let is_required = data.required || location == ParamLocation::Path;
+    let is_required = parameter.required || location == ParamLocation::Path;
 
-    let mut schema = match &data.format {
-        ParameterSchemaOrContent::Schema(schema) => {
-            schema_to_json(spec, schema, &mut HashSet::new())
-        }
-        ParameterSchemaOrContent::Content(_) => json!({ "type": "string" }),
+    // A `content`-typed parameter carries a serialised media type rather than
+    // a plain value; its schema still describes what the caller must supply.
+    let raw_schema = parameter.schema.as_ref().or_else(|| {
+        parameter
+            .content
+            .first()
+            .and_then(|(_, m)| m.schema.as_ref())
+    });
+    let mut schema = match raw_schema {
+        Some(schema) => inlined(spec, schema),
+        None => json!({ "type": "string" }),
     };
-    if let (Some(obj), Some(desc)) = (schema.as_object_mut(), data.description.as_ref())
+    if let (Some(obj), Some(desc)) = (schema.as_object_mut(), parameter.description.as_ref())
         && !obj.contains_key("description")
     {
         obj.insert("description".into(), json!(desc));
     }
 
-    properties.insert(data.name.clone(), schema);
+    properties.insert(parameter.name.clone(), schema);
     if is_required {
-        required.push(data.name.clone());
+        required.push(parameter.name.clone());
     }
     params.push(Param {
-        name: data.name.clone(),
+        name: parameter.name.clone(),
         location,
     });
 }
@@ -227,7 +222,7 @@ fn push_param(
 /// Add the JSON request body (if any) as a `body` property. Returns whether a
 /// body is accepted.
 fn add_request_body(
-    spec: &OpenAPI,
+    spec: &Spec,
     operation: &Operation,
     properties: &mut Map<String, Value>,
     required: &mut Vec<String>,
@@ -235,82 +230,100 @@ fn add_request_body(
     let Some(body_ref) = &operation.request_body else {
         return false;
     };
-    let body: &RequestBody = match body_ref {
-        ReferenceOr::Item(body) => body,
-        ReferenceOr::Reference { .. } => {
-            let Some(body) = resolve_request_body(spec, body_ref) else {
-                return false;
-            };
-            body
-        }
+    let Some(body) = spec.resolve(body_ref) else {
+        return false;
     };
-
-    // We proxy JSON bodies only.
-    let Some(media) = body
-        .content
-        .get("application/json")
-        .or_else(|| body.content.first().map(|(_, m)| m))
-    else {
+    let Some((media_type, media)) = json_content(&body.content) else {
         return false;
     };
 
     let schema = media
         .schema
         .as_ref()
-        .map(|s| schema_to_json(spec, s, &mut HashSet::new()))
+        .map(|schema| inlined(spec, schema))
         .unwrap_or_else(|| json!({ "type": "object" }));
 
     properties.insert("body".into(), schema);
     if body.required {
         required.push("body".into());
     }
+    tracing::debug!(media_type, "operation accepts a request body");
     true
 }
 
-/// Serialize an OpenAPI schema to a JSON Schema value, inlining local
-/// `#/components/schemas` references so MCP clients need no extra context.
-fn schema_to_json(
-    spec: &OpenAPI,
-    schema: &ReferenceOr<Schema>,
-    seen: &mut HashSet<String>,
-) -> Value {
-    match schema {
-        ReferenceOr::Reference { reference } => resolve_schema_ref(spec, reference, seen),
-        ReferenceOr::Item(schema) => {
-            let mut value = serde_json::to_value(schema).unwrap_or_else(|_| json!({}));
-            inline_refs(spec, &mut value, seen);
-            value
-        }
-    }
+/// Pick the `content` entry describing the request body: an exact
+/// `application/json`, else any type with the `+json` structured suffix
+/// (`application/merge-patch+json`, `application/vnd.api+json`, …), else
+/// whatever comes first — the body is sent as JSON either way.
+fn json_content(content: &IndexMap<String, MediaType>) -> Option<(&str, &MediaType)> {
+    // Media types may carry parameters (`application/json; charset=utf-8`) and
+    // are case-insensitive.
+    let essence = |raw: &str| {
+        raw.split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+    };
+
+    let exact = content
+        .iter()
+        .find(|(name, _)| essence(name) == "application/json");
+    let suffixed = || {
+        content
+            .iter()
+            .find(|(name, _)| essence(name).ends_with("+json"))
+    };
+    exact
+        .or_else(suffixed)
+        .or_else(|| content.first())
+        .map(|(name, media)| (name.as_str(), media))
 }
 
-fn resolve_schema_ref(spec: &OpenAPI, reference: &str, seen: &mut HashSet<String>) -> Value {
-    // Guard against recursive schemas: a second visit collapses to `object`.
-    if !seen.insert(reference.to_string()) {
-        return json!({ "type": "object" });
-    }
-    let resolved = ref_name(reference, "schemas")
-        .and_then(|name| spec.components.as_ref()?.schemas.get(name))
-        .map(|schema| schema_to_json(spec, schema, seen))
-        .unwrap_or_else(|| json!({ "type": "object" }));
-    seen.remove(reference);
-    resolved
+/// Copy a schema out of the document with its local `$ref`s inlined, so MCP
+/// clients need no extra context. The schema is otherwise untouched: whatever
+/// dialect the document uses — 3.0's modified draft-04 or 3.1's JSON Schema
+/// 2020-12 — reaches the client as written.
+fn inlined(spec: &Spec, schema: &Value) -> Value {
+    let mut value = schema.clone();
+    inline_refs(spec, &mut value, &mut HashSet::new());
+    value
 }
 
-/// Recursively replace `{ "$ref": "#/components/schemas/X" }` nodes in a
-/// serialized schema with the inlined target schema.
-fn inline_refs(spec: &OpenAPI, value: &mut Value, seen: &mut HashSet<String>) {
+/// Recursively replace `{ "$ref": "#/components/schemas/X" }` nodes with the
+/// schema they point at.
+fn inline_refs(spec: &Spec, value: &mut Value, seen: &mut HashSet<String>) {
     match value {
         Value::Object(map) => {
-            if let Some(Value::String(reference)) = map.get("$ref")
-                && map.len() == 1
+            let reference = match map.get("$ref") {
+                Some(Value::String(reference)) => reference.clone(),
+                _ => {
+                    for child in map.values_mut() {
+                        inline_refs(spec, child, seen);
+                    }
+                    return;
+                }
+            };
+
+            let siblings = std::mem::take(map);
+            let mut resolved = resolve_schema_ref(spec, &reference, seen);
+
+            // OpenAPI 3.1 — and JSON Schema 2020-12 generally — allow keywords
+            // beside `$ref`, where they refine the referenced schema. OpenAPI
+            // 3.0 forbade them, so this only ever fires on a 3.1 document.
+            if siblings.len() > 1
+                && let Some(target) = resolved.as_object_mut()
             {
-                *value = resolve_schema_ref(spec, &reference.clone(), seen);
-                return;
+                for (key, mut sibling) in siblings {
+                    if key == "$ref" {
+                        continue;
+                    }
+                    inline_refs(spec, &mut sibling, seen);
+                    target.insert(key, sibling);
+                }
             }
-            for child in map.values_mut() {
-                inline_refs(spec, child, seen);
-            }
+
+            *value = resolved;
         }
         Value::Array(items) => {
             for item in items {
@@ -321,37 +334,28 @@ fn inline_refs(spec: &OpenAPI, value: &mut Value, seen: &mut HashSet<String>) {
     }
 }
 
-fn resolve_parameter<'a>(
-    spec: &'a OpenAPI,
-    param: &ReferenceOr<Parameter>,
-) -> Option<&'a Parameter> {
-    let ReferenceOr::Reference { reference } = param else {
-        return None;
-    };
-    let name = ref_name(reference, "parameters")?;
-    match spec.components.as_ref()?.parameters.get(name)? {
-        ReferenceOr::Item(parameter) => Some(parameter),
-        ReferenceOr::Reference { .. } => None,
+fn resolve_schema_ref(spec: &Spec, reference: &str, seen: &mut HashSet<String>) -> Value {
+    // Guard against recursive schemas: a second visit collapses to `object`.
+    if !seen.insert(reference.to_string()) {
+        tracing::debug!(reference, "collapsing a recursive schema reference");
+        return json!({ "type": "object" });
     }
-}
-
-fn resolve_request_body<'a>(
-    spec: &'a OpenAPI,
-    body: &ReferenceOr<RequestBody>,
-) -> Option<&'a RequestBody> {
-    let ReferenceOr::Reference { reference } = body else {
-        return None;
+    let resolved = match spec.resolve_value(reference) {
+        Some(target) => {
+            let mut value = target.clone();
+            inline_refs(spec, &mut value, seen);
+            value
+        }
+        None => {
+            tracing::debug!(
+                reference,
+                "substituting a bare object for an unresolved schema"
+            );
+            json!({ "type": "object" })
+        }
     };
-    let name = ref_name(reference, "requestBodies")?;
-    match spec.components.as_ref()?.request_bodies.get(name)? {
-        ReferenceOr::Item(body) => Some(body),
-        ReferenceOr::Reference { .. } => None,
-    }
-}
-
-/// Extract `X` from `#/components/<kind>/X`.
-fn ref_name<'a>(reference: &'a str, kind: &str) -> Option<&'a str> {
-    reference.strip_prefix(&format!("#/components/{kind}/"))
+    seen.remove(reference);
+    resolved
 }
 
 /// Turn an arbitrary string into a valid MCP tool name (`[A-Za-z0-9_-]+`).
@@ -378,8 +382,13 @@ fn sanitize_name(raw: &str) -> String {
 mod tests {
     use super::*;
 
-    fn spec_from(yaml: &str) -> OpenAPI {
-        serde_yaml_ng::from_str(yaml).expect("valid spec")
+    fn spec_from(yaml: &str) -> Spec {
+        let raw: Value = serde_yaml_ng::from_str(yaml).expect("valid YAML");
+        Spec::from_value(raw).expect("supported document")
+    }
+
+    fn tools_from(yaml: &str) -> Vec<ToolSpec> {
+        build_tools(&spec_from(yaml), &OperationFilter::default())
     }
 
     const PETSTORE: &str = r##"
@@ -430,9 +439,67 @@ components:
           type: string
 "##;
 
+    /// The same API as [`PETSTORE`], written as OpenAPI 3.1: a JSON Schema
+    /// 2020-12 `type` array instead of `nullable`, and a `$ref` carrying a
+    /// sibling `description`.
+    const PETSTORE_31: &str = r##"
+openapi: 3.1.0
+info:
+  title: Pets
+  version: "1.0"
+paths:
+  /pets/{petId}:
+    get:
+      operationId: getPet
+      parameters:
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: ok
+  /pets:
+    post:
+      operationId: createPet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Pet"
+              description: The pet to create.
+      responses:
+        "201":
+          description: created
+components:
+  schemas:
+    Pet:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        tag:
+          type: [string, "null"]
+        status:
+          const: available
+        legs:
+          type: integer
+          exclusiveMinimum: 0
+        coords:
+          type: array
+          prefixItems:
+            - type: number
+            - type: number
+        extras:
+          additionalProperties: false
+"##;
+
     #[test]
     fn builds_one_tool_per_operation() {
-        let tools = build_tools(&spec_from(PETSTORE), &OperationFilter::default());
+        let tools = tools_from(PETSTORE);
         let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"getPet"));
         assert!(names.contains(&"createPet"));
@@ -441,7 +508,7 @@ components:
 
     #[test]
     fn path_param_is_required_and_present() {
-        let tools = build_tools(&spec_from(PETSTORE), &OperationFilter::default());
+        let tools = tools_from(PETSTORE);
         let get_pet = tools.iter().find(|t| t.name == "getPet").unwrap();
         let pet_id = get_pet.params.iter().find(|p| p.name == "petId").unwrap();
         assert_eq!(pet_id.location, ParamLocation::Path);
@@ -451,7 +518,7 @@ components:
 
     #[test]
     fn request_body_ref_is_inlined() {
-        let tools = build_tools(&spec_from(PETSTORE), &OperationFilter::default());
+        let tools = tools_from(PETSTORE);
         let create = tools.iter().find(|t| t.name == "createPet").unwrap();
         assert!(create.has_body);
         let body = &create.input_schema["properties"]["body"];
@@ -462,7 +529,7 @@ components:
 
     #[test]
     fn description_combines_summary_and_detail() {
-        let tools = build_tools(&spec_from(PETSTORE), &OperationFilter::default());
+        let tools = tools_from(PETSTORE);
         // Both present: summary headlines, description follows.
         let create = tools.iter().find(|t| t.name == "createPet").unwrap();
         assert_eq!(
@@ -491,7 +558,7 @@ paths:
       description: Just a description
       responses: { "200": { description: ok } }
 "##;
-        let tools = build_tools(&spec_from(SPEC), &OperationFilter::default());
+        let tools = tools_from(SPEC);
         let only_summary = tools.iter().find(|t| t.name == "onlySummary").unwrap();
         assert_eq!(only_summary.description.as_deref(), Some("Just a summary"));
         let only_desc = tools.iter().find(|t| t.name == "onlyDescription").unwrap();
@@ -516,5 +583,180 @@ paths:
             "get__pets__petId_".trim_matches('_')
         );
         assert_eq!(sanitize_name("//"), "operation");
+    }
+
+    #[test]
+    fn builds_the_same_tools_from_a_3_1_document() {
+        let tools = tools_from(PETSTORE_31);
+        let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"getPet"));
+        assert!(names.contains(&"createPet"));
+    }
+
+    #[test]
+    fn keeps_json_schema_2020_12_keywords_verbatim() {
+        let tools = tools_from(PETSTORE_31);
+        let create = tools.iter().find(|t| t.name == "createPet").unwrap();
+        let properties = &create.input_schema["properties"]["body"]["properties"];
+
+        // A nullable union type, which cannot be expressed in the 3.0 model.
+        assert_eq!(properties["tag"]["type"], json!(["string", "null"]));
+        // Keywords 3.0 has no place for at all.
+        assert_eq!(properties["status"]["const"], "available");
+        assert_eq!(properties["coords"]["prefixItems"][1]["type"], "number");
+        // `exclusiveMinimum` is a number in 2020-12, a boolean in 3.0.
+        assert_eq!(properties["legs"]["exclusiveMinimum"], json!(0));
+        // A boolean schema is a schema in 2020-12.
+        assert_eq!(properties["extras"]["additionalProperties"], json!(false));
+    }
+
+    #[test]
+    fn keeps_keywords_written_beside_a_ref() {
+        // 3.1 allows `$ref` siblings, which refine the referenced schema.
+        let tools = tools_from(PETSTORE_31);
+        let create = tools.iter().find(|t| t.name == "createPet").unwrap();
+        let body = &create.input_schema["properties"]["body"];
+        assert!(body.get("$ref").is_none());
+        assert_eq!(body["description"], "The pet to create.");
+        assert_eq!(body["type"], "object");
+    }
+
+    #[test]
+    fn keeps_3_0_schemas_verbatim_too() {
+        // `nullable` is 3.0's spelling and must survive untouched, rather than
+        // being normalised away or dropped.
+        const SPEC: &str = r##"
+openapi: 3.0.3
+info: { title: T, version: "1" }
+paths:
+  /a:
+    get:
+      operationId: getA
+      parameters:
+        - name: tag
+          in: query
+          schema: { type: string, nullable: true, minLength: 2 }
+"##;
+        let tools = tools_from(SPEC);
+        let schema = &tools[0].input_schema["properties"]["tag"];
+        assert_eq!(schema["nullable"], json!(true));
+        assert_eq!(schema["minLength"], json!(2));
+    }
+
+    #[test]
+    fn resolves_a_pointer_into_defs() {
+        // 2020-12 keeps reusable subschemas in `$defs`; the pointer is resolved
+        // against the document root, like any other local reference.
+        const SPEC: &str = r##"
+openapi: 3.1.0
+info: { title: T, version: "1" }
+paths:
+  /a:
+    post:
+      operationId: postA
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/$defs/Body" }
+$defs:
+  Body: { type: object, properties: { id: { type: string } } }
+"##;
+        let tools = tools_from(SPEC);
+        let body = &tools[0].input_schema["properties"]["body"];
+        assert_eq!(body["properties"]["id"]["type"], "string");
+    }
+
+    #[test]
+    fn prefers_a_json_media_type_over_the_first_entry() {
+        const SPEC: &str = r##"
+openapi: 3.1.0
+info: { title: T, version: "1" }
+paths:
+  /a:
+    post:
+      operationId: postA
+      requestBody:
+        content:
+          text/plain:
+            schema: { type: string }
+          application/vnd.api+json:
+            schema: { type: object, properties: { data: { type: object } } }
+"##;
+        let tools = tools_from(SPEC);
+        let body = &tools[0].input_schema["properties"]["body"];
+        assert_eq!(body["type"], "object");
+        assert!(body["properties"].get("data").is_some());
+    }
+
+    #[test]
+    fn shared_path_item_parameters_apply_to_every_operation() {
+        const SPEC: &str = r##"
+openapi: 3.1.0
+info: { title: T, version: "1" }
+paths:
+  /pets/{petId}:
+    parameters:
+      - name: petId
+        in: path
+        required: true
+        schema: { type: string }
+    get: { operationId: getPet }
+    delete: { operationId: deletePet }
+"##;
+        let tools = tools_from(SPEC);
+        assert_eq!(tools.len(), 2);
+        for tool in &tools {
+            assert_eq!(tool.params.len(), 1);
+            assert_eq!(tool.params[0].location, ParamLocation::Path);
+        }
+    }
+
+    #[test]
+    fn recursive_schemas_terminate() {
+        const SPEC: &str = r##"
+openapi: 3.1.0
+info: { title: T, version: "1" }
+paths:
+  /a:
+    post:
+      operationId: postA
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Node" }
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        children:
+          type: array
+          items: { $ref: "#/components/schemas/Node" }
+"##;
+        let tools = tools_from(SPEC);
+        let body = &tools[0].input_schema["properties"]["body"];
+        // The cycle collapses to a bare object rather than expanding forever.
+        assert_eq!(
+            body["properties"]["children"]["items"],
+            json!({"type": "object"})
+        );
+    }
+
+    #[test]
+    fn ignores_cookie_parameters() {
+        const SPEC: &str = r##"
+openapi: 3.1.0
+info: { title: T, version: "1" }
+paths:
+  /a:
+    get:
+      operationId: getA
+      parameters:
+        - { name: session, in: cookie, schema: { type: string } }
+        - { name: q, in: query, schema: { type: string } }
+"##;
+        let tools = tools_from(SPEC);
+        let names: Vec<_> = tools[0].params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["q"]);
     }
 }

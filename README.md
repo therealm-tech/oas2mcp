@@ -15,6 +15,13 @@ writing a line of glue code.
 - **Input from a file or a URL** — the document is fetched/read at startup, in
   JSON or YAML. A non-public document URL can be authenticated with
   `--openapi-header`.
+- **OpenAPI 3.0 and 3.1** — both revisions are read by the same code path.
+  Schemas are passed through to MCP clients exactly as the document writes
+  them, so 3.1's JSON Schema 2020-12 keywords (`type` arrays such as
+  `[string, "null"]`, `const`, `prefixItems`, numeric `exclusiveMinimum`,
+  boolean schemas, `$defs`) survive intact, as do 3.0's (`nullable`,
+  `example`). 3.1's `components.pathItems`, `$ref` siblings and optional
+  `paths` are supported too.
 - **Periodic reload** — with `--reload-every`, a document loaded from a URL is
   re-fetched on an interval and the exposed tool set is rebuilt in place,
   without restarting the server. The fetch can authenticate via OAuth2
@@ -23,7 +30,9 @@ writing a line of glue code.
 - **One tool per operation** — `operationId` becomes the tool name (falling
   back to `<method>_<path>`); path, query and header parameters become
   top-level tool arguments, and a JSON request body is passed as a `body`
-  argument. Local `$ref`s are inlined into each tool's input schema.
+  argument. Local `$ref`s are inlined into each tool's input schema, whatever
+  they point at (`#/components/schemas/…`, `#/$defs/…`, …); a recursive schema
+  collapses to a bare object rather than expanding forever.
 - **Three transports** — the MCP server can be exposed over:
   - `stdio` — for a local subprocess MCP client.
   - `streamable-http` — the current remote transport, single `POST /mcp`
@@ -120,6 +129,14 @@ Expose the bundled Petstore example over stdio:
 
 ```bash
 oas2mcp --openapi-file examples/petstore.yaml
+```
+
+The same API restated in OpenAPI 3.1 — union types, `const`, `prefixItems`,
+`components.pathItems`, a `webhooks` section — is in
+`examples/petstore-3.1.yaml`, and needs no different invocation:
+
+```bash
+oas2mcp --openapi-file examples/petstore-3.1.yaml
 ```
 
 Serve a remote API over Streamable HTTP, forwarding a bearer token upstream:
@@ -532,10 +549,19 @@ git tag chart-0.1.0 && git push origin chart-0.1.0
 
 ## Limitations
 
-- OpenAPI **3.0.x** is supported (via [`openapiv3`](https://docs.rs/openapiv3));
-  3.1-only documents may not parse.
-- Only `application/json` request bodies are proxied.
+- OpenAPI **3.0.x** and **3.1.x** are supported. A newer 3.x revision is read
+  on a best-effort basis (as 3.1) with a warning; Swagger 2.0 is rejected —
+  convert it first, e.g. with `swagger2openapi`.
+- Only **local** `$ref`s are resolved. A reference into another file or a URL
+  is not fetched; it degrades to a bare `object` in the tool's input schema.
+- Request bodies are always sent as JSON. An operation whose `content` offers
+  no `application/json` (or `…+json`) media type still gets a `body` argument,
+  built from the first media type it does declare.
+- OpenAPI 3.1 `webhooks` are not exposed as tools: a webhook is a callback the
+  upstream API sends *to* the server, not an operation the server can call.
 - Cookie parameters are ignored.
+- Templated `servers` URLs (`https://{region}.example.com`) are not expanded;
+  pass `--base-url` for those.
 - The legacy `sse` transport is kept for compatibility but is deprecated by the
   MCP specification; prefer `streamable-http` for new remote deployments.
 
