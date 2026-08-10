@@ -5,11 +5,10 @@ on:
     tags:
       - "v*"
 
-# Serialise releases; a run that pushes images and cuts a GitHub Release must
-# never be cancelled half-way.
+# One release per ref: a newer run supersedes the one still in flight.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read

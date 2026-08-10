@@ -11,11 +11,10 @@ on:
         type: string
         required: true
 
-# Serialise publishes; never cancel one mid-push, or GHCR keeps a half-written
-# chart version.
+# One publish per ref: a newer run supersedes the one still in flight.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
