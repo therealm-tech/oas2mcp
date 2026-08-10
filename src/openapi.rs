@@ -1,13 +1,17 @@
 //! Loading and parsing of the OpenAPI document.
 
+pub mod spec;
+
 use anyhow::{Context as _, bail};
-use openapiv3::OpenAPI;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use serde_json::Value;
 use url::Url;
 
 use crate::cli::Cli;
 use crate::oauth::TokenProvider;
 use crate::server::parse_headers;
+
+pub use spec::Spec;
 
 /// Authentication for the OpenAPI document fetch: optional static headers and
 /// an optional OAuth `client_credentials` token provider. Cheap to clone — the
@@ -55,7 +59,7 @@ impl DocAuth {
 
     /// Fetch and parse the OpenAPI document from `url`, applying the configured
     /// auth. Used both for the initial load and for periodic reloads.
-    pub async fn fetch(&self, url: &Url) -> anyhow::Result<OpenAPI> {
+    pub async fn fetch(&self, url: &Url) -> anyhow::Result<Spec> {
         let headers = self.headers().await?;
 
         tracing::debug!(%url, "fetching OpenAPI document over HTTP");
@@ -79,7 +83,7 @@ impl DocAuth {
 /// Load the OpenAPI document from the source configured on the CLI (a local
 /// file or a URL), accepting either JSON or YAML. `auth` applies to the URL
 /// source only.
-pub async fn load(cli: &Cli, auth: &DocAuth) -> anyhow::Result<OpenAPI> {
+pub async fn load(cli: &Cli, auth: &DocAuth) -> anyhow::Result<Spec> {
     match (&cli.openapi_file, &cli.openapi_url) {
         (Some(path), _) => {
             tracing::debug!(path = %path.display(), "reading OpenAPI document from file");
@@ -96,14 +100,35 @@ pub async fn load(cli: &Cli, auth: &DocAuth) -> anyhow::Result<OpenAPI> {
 
 /// Parse raw bytes as an OpenAPI document, trying JSON first and falling back
 /// to YAML (a superset, so YAML covers `.json` too, but JSON is the common and
-/// faster case).
-fn parse(bytes: &[u8]) -> anyhow::Result<OpenAPI> {
-    match serde_json::from_slice::<OpenAPI>(bytes) {
-        Ok(spec) => Ok(spec),
-        Err(json_err) => serde_yaml_ng::from_slice::<OpenAPI>(bytes).map_err(|yaml_err| {
-            anyhow::anyhow!(
-                "document is neither valid OpenAPI JSON ({json_err}) nor YAML ({yaml_err})"
-            )
-        }),
+/// faster case). The document is decoded to plain JSON before being read as a
+/// spec, so the OpenAPI version only has to be interpreted in one place.
+fn parse(bytes: &[u8]) -> anyhow::Result<Spec> {
+    let raw = match serde_json::from_slice::<Value>(bytes) {
+        Ok(raw) => raw,
+        Err(json_err) => serde_yaml_ng::from_slice::<Value>(bytes).map_err(|yaml_err| {
+            anyhow::anyhow!("document is neither valid JSON ({json_err}) nor YAML ({yaml_err})")
+        })?,
+    };
+    Spec::from_value(raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_json_and_yaml_alike() {
+        const JSON: &[u8] = br#"{"openapi":"3.1.0","info":{"title":"T","version":"1"},"paths":{}}"#;
+        const YAML: &[u8] = b"openapi: 3.1.0\ninfo:\n  title: T\n  version: '1'\npaths: {}\n";
+
+        assert_eq!(parse(JSON).expect("JSON parses").info().title, "T");
+        assert_eq!(parse(YAML).expect("YAML parses").info().title, "T");
+    }
+
+    #[test]
+    fn reports_both_decoders_when_neither_reads_the_bytes() {
+        let err = parse(b"\x00not a document").expect_err("undecodable bytes");
+        let message = format!("{err}");
+        assert!(message.contains("neither valid JSON"), "{message}");
     }
 }
