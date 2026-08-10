@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
 
+# One release per ref: a newer run supersedes the one still in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

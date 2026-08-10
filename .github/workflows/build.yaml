@@ -38,6 +38,14 @@ on:
         type: string
         default: ""
 
+# The group name is hardcoded rather than `${{ github.workflow }}`: in a
+# `workflow_call` run that expression resolves to the *caller* (`release`), so
+# the reusable build would share a group with — and cancel — the very job
+# waiting on it.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

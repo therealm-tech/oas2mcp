@@ -11,6 +11,11 @@ on:
         type: string
         required: true
 
+# One publish per ref: a newer run supersedes the one still in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
