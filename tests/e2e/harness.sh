@@ -26,7 +26,9 @@ pids=()
 cleanup() {
   local status=$?
   for pid in "${pids[@]:-}"; do
-    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    if [ -n "$pid" ]; then
+      kill "$pid" 2>/dev/null || true
+    fi
   done
   if [ "$status" -ne 0 ]; then
     for log in "$logs"/*.log; do

@@ -1,7 +1,10 @@
 # Dependencies of the end-to-end harness: the sandbox API and the suite itself.
-# Pinned so a CI run and a laptop exercise the same versions.
-cryptography==46.0.3
-fastapi==0.121.3
+# Pinned so a CI run and a laptop exercise the same versions, and kept at or above
+# the versions that close the advisories `trivy` gates the build on — notably
+# CVE-2026-48526 in PyJWT, an authentication bypass via forged tokens, which would
+# be a poor thing to carry in a suite about verifying tokens.
+cryptography==50.0.0
+fastapi==0.141.1
 httpx==0.28.1
-pyjwt==2.12.1
-uvicorn==0.41.0
+pyjwt==2.13.0
+uvicorn==0.52.1
