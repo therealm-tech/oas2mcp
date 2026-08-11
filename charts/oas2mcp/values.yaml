@@ -86,6 +86,12 @@ oas2mcp:
     roleMapper: []
     # -- (string) JWT claim listing the caller's roles (an array or a whitespace-separated string). Unset → the binary default (`roles`). Maps to `OAUTH_ROLE_CLAIM`.
     roleClaim: ~
+    # -- (list) Audiences the incoming JWT's `aud` must match; the token passes if any matches. **Set this**: unset, any JWT the JWKS can verify is accepted, including one your provider issued for a different service. Setting it also makes `aud` mandatory. Maps to `OAUTH_EXPECTED_AUDIENCES`.
+    expectedAudiences: []
+    # -- (list) Issuers the incoming JWT's `iss` must match. Defence in depth next to the JWKS — it catches a key shared across logical issuers (a staging and a production realm, say). Setting it also makes `iss` mandatory. Maps to `OAUTH_EXPECTED_ISSUERS`.
+    expectedIssuers: []
+    # -- (string) Clock skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). Unset → the binary default (`60s`). Raise it when tokens are rejected intermittently because the provider's clock and this server's disagree. Maps to `OAUTH_CLOCK_SKEW`.
+    clockSkew: ~
     # -- (list) JWT claim names copied into the per-call tracing log as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`), for observability. Logged only, never a metric label. Needs `roleMapper` (claims come from the verified JWT). Defaults to `[sub]`; set `[]` to disable. Maps to `TRACE_CLAIMS`.
     traceClaims:
       - sub

@@ -471,6 +471,52 @@ pub struct Cli {
     #[arg(long = "oauth-jwks-file", env = "OAUTH_JWKS_FILE")]
     pub oauth_jwks_file: Option<PathBuf>,
 
+    /// Audience the incoming JWT must be addressed to, checked against its `aud`
+    /// claim. Repeatable; the token is accepted if its `aud` matches any of them.
+    ///
+    /// **Set this.** Unset, oas2mcp accepts any token its JWKS can verify — so a
+    /// token your identity provider minted for a *different* service is good
+    /// enough to call tools here. `aud` is what scopes a token to one audience,
+    /// and checking it is what stops it being replayed against another. Left
+    /// opt-in only because turning it on unconditionally would reject the tokens
+    /// of anyone already running without it. Only used with
+    /// `--oauth-role-mapper`. When set via the environment variable, separate
+    /// values with newlines.
+    #[arg(
+        long = "oauth-expected-audience",
+        env = "OAUTH_EXPECTED_AUDIENCES",
+        value_delimiter = '\n'
+    )]
+    pub oauth_expected_audiences: Vec<String>,
+
+    /// Issuer the incoming JWT must come from, checked against its `iss` claim.
+    /// Repeatable; the token is accepted if its `iss` matches any of them.
+    ///
+    /// Defence in depth next to the JWKS, which already pins *who signed* the
+    /// token: it catches a key deliberately shared across logical issuers, such
+    /// as a staging and a production realm behind one key set. Worth setting when
+    /// delegation is on, since the issuer is half of the identity a delegated
+    /// token is cached under. Only used with `--oauth-role-mapper`. When set via
+    /// the environment variable, separate values with newlines.
+    #[arg(
+        long = "oauth-expected-issuer",
+        env = "OAUTH_EXPECTED_ISSUERS",
+        value_delimiter = '\n'
+    )]
+    pub oauth_expected_issuers: Vec<String>,
+
+    /// Clock skew tolerated when checking the incoming JWT's `exp` and `nbf`
+    /// (e.g. `30s`, `2m`). Defaults to `60s`. Raise it if your provider and this
+    /// server disagree about the time — the symptom is tokens that are rejected
+    /// intermittently, right after being issued or right before expiring. Only
+    /// used with `--oauth-role-mapper`.
+    #[arg(
+        long = "oauth-clock-skew",
+        env = "OAUTH_CLOCK_SKEW",
+        value_parser = humantime::parse_duration
+    )]
+    pub oauth_clock_skew: Option<Duration>,
+
     /// Name of the JWT claim listing the caller's roles. The claim value may be
     /// an array of strings or a single whitespace-separated string. Only used
     /// when `--oauth-role-mapper` is set.
