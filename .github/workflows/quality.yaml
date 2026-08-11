@@ -87,6 +87,52 @@ jobs:
       - name: run the test suite
         run: cargo test --all --locked
 
+  # What the unit tests cannot answer is whether a real authorization server
+  # accepts what we send. This drives the RFC 7523 paths against Keycloak:
+  # `private_key_jwt` client authentication (§2.2) for the document fetch, and the
+  # `jwt-bearer` grant (§2.1) relaying a caller's assertion for a per-caller
+  # upstream token.
+  e2e:
+    name: e2e
+    runs-on: ubuntu-24.04
+    services:
+      # `command` is what makes this possible: the Keycloak image has no default
+      # CMD, so without it the container prints its usage and exits.
+      keycloak:
+        image: quay.io/keycloak/keycloak:26.7
+        command: start-dev
+        env:
+          KC_BOOTSTRAP_ADMIN_USERNAME: admin
+          KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+        ports:
+          - 8080:8080
+    steps:
+      - name: check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: install the Rust toolchain
+        run: rustup component add clippy
+
+      - name: cache cargo build artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+
+      - name: build oas2mcp
+        run: cargo build --locked
+
+      - name: set up python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: install the harness dependencies
+        run: pip install --requirement tests/e2e/requirements.txt
+
+      # The realm is imported through Keycloak's admin API rather than a mounted
+      # file: a service container starts before the repository is checked out, so
+      # there is nothing to mount at that point.
+      - name: run the end-to-end suite
+        run: tests/e2e/harness.sh
+
   trivy:
     name: trivy
     permissions:

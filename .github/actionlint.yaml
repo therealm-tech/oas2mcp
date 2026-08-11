@@ -1,0 +1,13 @@
+# actionlint configuration.
+#
+# `jobs.<id>.services.<id>.command` and `.entrypoint` are documented GitHub
+# Actions keys, but actionlint does not know them yet (still absent from the
+# latest release, 1.7.12). Its schema check therefore rejects a valid workflow.
+#
+# Scoped to that one message on that one file rather than disabling the check:
+# every other unexpected key in the same file still fails the build. Drop this
+# once actionlint learns the keys.
+paths:
+  .github/workflows/quality.yaml:
+    ignore:
+      - 'unexpected key "command" for "services" section'
