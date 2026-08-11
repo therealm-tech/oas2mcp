@@ -81,6 +81,13 @@ fn default_bind_addr() -> SocketAddr {
         .args(["openapi_oauth_client_secret", "openapi_oauth_private_key"])
         .multiple(false)
 ))]
+// Same rule for the upstream grant, which is configured independently: the two
+// may well authenticate against different providers with different credentials.
+#[command(group(
+    ArgGroup::new("upstream_oauth_client_auth")
+        .args(["upstream_oauth_client_secret", "upstream_oauth_private_key"])
+        .multiple(false)
+))]
 pub struct Cli {
     /// Path to an OpenAPI document (JSON or YAML) on disk.
     #[arg(long, env = "OPENAPI_FILE", conflicts_with = "openapi_url")]
@@ -234,6 +241,99 @@ pub struct Cli {
         value_delimiter = '\n'
     )]
     pub forward_headers: Vec<String>,
+
+    /// OAuth 2.0 token endpoint for the `client_credentials` grant used to
+    /// authenticate **upstream API calls**. When set, every proxied tool call
+    /// carries an `Authorization: Bearer` obtained here and refreshed
+    /// automatically before it expires — use it instead of a static
+    /// `--header Authorization` that would go stale on a long-running server.
+    /// Independent of `--openapi-oauth-token-url`, which covers the document
+    /// fetch: the two may target different providers. Requires
+    /// `--upstream-oauth-client-id` plus one of
+    /// `--upstream-oauth-client-secret` / `--upstream-oauth-private-key`.
+    #[arg(
+        long = "upstream-oauth-token-url",
+        env = "UPSTREAM_OAUTH_TOKEN_URL",
+        requires_all = ["upstream_oauth_client_id", "upstream_oauth_client_auth"]
+    )]
+    pub upstream_oauth_token_url: Option<Url>,
+
+    /// OAuth 2.0 client ID for the upstream-API token.
+    #[arg(long = "upstream-oauth-client-id", env = "UPSTREAM_OAUTH_CLIENT_ID")]
+    pub upstream_oauth_client_id: Option<String>,
+
+    /// OAuth 2.0 client secret for the upstream-API token, sent over HTTP Basic.
+    /// Prefer the environment variable over the command line so the secret does
+    /// not leak into the process list. Mutually exclusive with
+    /// `--upstream-oauth-private-key`.
+    #[arg(
+        long = "upstream-oauth-client-secret",
+        env = "UPSTREAM_OAUTH_CLIENT_SECRET"
+    )]
+    pub upstream_oauth_client_secret: Option<String>,
+
+    /// Path to a PEM file holding the client's private key, to authenticate the
+    /// upstream-API grant with a signed JWT assertion instead of a shared secret
+    /// (`private_key_jwt`, RFC 7523 §2.2). PKCS#8 PEM is expected; the algorithm
+    /// is `--upstream-oauth-signing-alg`. Mutually exclusive with
+    /// `--upstream-oauth-client-secret`.
+    #[arg(
+        long = "upstream-oauth-private-key",
+        env = "UPSTREAM_OAUTH_PRIVATE_KEY_FILE"
+    )]
+    pub upstream_oauth_private_key: Option<PathBuf>,
+
+    /// `kid` header to put on the upstream-API client assertion. Only used with
+    /// `--upstream-oauth-private-key`.
+    #[arg(
+        long = "upstream-oauth-key-id",
+        env = "UPSTREAM_OAUTH_KEY_ID",
+        requires = "upstream_oauth_private_key"
+    )]
+    pub upstream_oauth_key_id: Option<String>,
+
+    /// Algorithm used to sign the upstream-API client assertion. Must match the
+    /// key type of `--upstream-oauth-private-key`. Only used with that flag.
+    #[arg(
+        long = "upstream-oauth-signing-alg",
+        env = "UPSTREAM_OAUTH_SIGNING_ALG",
+        default_value_t = SigningAlg::Rs256
+    )]
+    pub upstream_oauth_signing_alg: SigningAlg,
+
+    /// `aud` claim of the upstream-API client assertion. Defaults to the token
+    /// endpoint URL. Only used with `--upstream-oauth-private-key`.
+    #[arg(
+        long = "upstream-oauth-assertion-audience",
+        env = "UPSTREAM_OAUTH_ASSERTION_AUDIENCE",
+        requires = "upstream_oauth_private_key"
+    )]
+    pub upstream_oauth_assertion_audience: Option<String>,
+
+    /// How long an upstream-API client assertion stays valid (e.g. `30s`).
+    /// Defaults to `60s`. Only used with `--upstream-oauth-private-key`.
+    #[arg(
+        long = "upstream-oauth-assertion-lifetime",
+        env = "UPSTREAM_OAUTH_ASSERTION_LIFETIME",
+        value_parser = humantime::parse_duration,
+        requires = "upstream_oauth_private_key"
+    )]
+    pub upstream_oauth_assertion_lifetime: Option<Duration>,
+
+    /// OAuth 2.0 scope requested for the upstream-API token. Repeatable; sent
+    /// space-joined as the `scope` parameter. When set via the environment
+    /// variable, separate scopes with newlines.
+    #[arg(
+        long = "upstream-oauth-scope",
+        env = "UPSTREAM_OAUTH_SCOPES",
+        value_delimiter = '\n'
+    )]
+    pub upstream_oauth_scopes: Vec<String>,
+
+    /// OAuth 2.0 `audience` parameter for the upstream-API token. Some providers
+    /// (e.g. Auth0) require it to issue a token for the target API.
+    #[arg(long = "upstream-oauth-audience", env = "UPSTREAM_OAUTH_AUDIENCE")]
+    pub upstream_oauth_audience: Option<String>,
 
     /// Restrict which tools a caller may see and invoke based on the roles
     /// carried in their JWT, as `role:tool_name_regex` (e.g.
@@ -523,6 +623,71 @@ mod tests {
             "kid-1",
         ]))
         .expect("clap accepts this combination; the config layer warns");
+    }
+
+    #[test]
+    fn the_upstream_grant_has_the_same_credential_rules() {
+        // Its own arg group, so it needs its own coverage: a typo in the group's
+        // member names would only show up here.
+        let err = Cli::try_parse_from([
+            "oas2mcp",
+            "--upstream-oauth-token-url",
+            "https://idp.example.com/token",
+        ])
+        .expect_err("token-url without credentials must fail");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+
+        Cli::try_parse_from([
+            "oas2mcp",
+            "--upstream-oauth-token-url",
+            "https://idp.example.com/token",
+            "--upstream-oauth-client-id",
+            "id",
+            "--upstream-oauth-private-key",
+            "/keys/client.pem",
+        ])
+        .expect("a private key completes the config");
+
+        let err = Cli::try_parse_from([
+            "oas2mcp",
+            "--upstream-oauth-token-url",
+            "https://idp.example.com/token",
+            "--upstream-oauth-client-id",
+            "id",
+            "--upstream-oauth-client-secret",
+            "secret",
+            "--upstream-oauth-private-key",
+            "/keys/client.pem",
+        ])
+        .expect_err("a secret and a key together must be rejected");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn the_two_grants_are_configured_independently() {
+        // The document and the API may sit behind different providers, so the
+        // two groups must not interfere.
+        let cli = Cli::try_parse_from([
+            "oas2mcp",
+            "--openapi-oauth-token-url",
+            "https://docs-idp.example.com/token",
+            "--openapi-oauth-client-id",
+            "docs",
+            "--openapi-oauth-private-key",
+            "/keys/docs.pem",
+            "--upstream-oauth-token-url",
+            "https://api-idp.example.com/token",
+            "--upstream-oauth-client-id",
+            "api",
+            "--upstream-oauth-client-secret",
+            "secret",
+        ])
+        .expect("both grants configured at once parses");
+
+        assert_eq!(cli.openapi_oauth_client_id.as_deref(), Some("docs"));
+        assert!(cli.openapi_oauth_private_key.is_some());
+        assert_eq!(cli.upstream_oauth_client_id.as_deref(), Some("api"));
+        assert!(cli.upstream_oauth_private_key.is_none());
     }
 
     #[test]

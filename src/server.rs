@@ -8,7 +8,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, bail};
 use arc_swap::ArcSwap;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ContentBlock, Implementation, ListToolsResult,
     PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
@@ -21,6 +21,7 @@ use url::Url;
 use crate::auth::Authorizer;
 use crate::cli::Cli;
 use crate::filter::{FilterConfig, OperationFilter};
+use crate::oauth::TokenProvider;
 use crate::openapi::Spec;
 use crate::telemetry::{Metrics, Outcome};
 use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
@@ -50,6 +51,9 @@ pub struct OpenApiServer {
     forward_headers: Arc<Vec<HeaderName>>,
     /// Optional JWT role-based tool authorization. `None` exposes every tool.
     authorizer: Option<Arc<Authorizer>>,
+    /// Optional OAuth token provider for upstream API calls. `None` leaves the
+    /// upstream `Authorization` to `--header` / `--forward-header`.
+    upstream_token: Option<TokenProvider>,
     /// Tool-call metrics. No-op when telemetry is disabled.
     metrics: Metrics,
 }
@@ -79,13 +83,19 @@ impl OpenApiServer {
         let extra_headers = parse_headers(&cli.headers)?;
         let forward_headers = parse_header_names(&cli.forward_headers)?;
         let snapshot = build_snapshot(spec, cli)?;
+        let client = crate::http::client(cli).context("building the upstream HTTP client")?;
+        // Shares the upstream client, so token requests reuse its connection
+        // pool and TLS trust (including `--ca-cert`).
+        let upstream_token = TokenProvider::for_upstream(cli, client.clone())
+            .context("configuring the upstream OAuth token provider")?;
 
         Ok(Self {
             state: Arc::new(ArcSwap::from_pointee(snapshot)),
-            client: crate::http::client(cli).context("building the upstream HTTP client")?,
+            client,
             extra_headers: Arc::new(extra_headers),
             forward_headers: Arc::new(forward_headers),
             authorizer,
+            upstream_token,
             metrics,
         })
     }
@@ -114,8 +124,9 @@ impl OpenApiServer {
         base_url: &Url,
         args: &Map<String, Value>,
         forwarded: &HeaderMap,
+        bearer: Option<&str>,
     ) -> CallToolResult {
-        let request = match self.build_request(spec, base_url, args, forwarded) {
+        let request = match self.build_request(spec, base_url, args, forwarded, bearer) {
             Ok(request) => request,
             Err(err) => return CallToolResult::error(vec![ContentBlock::text(err.to_string())]),
         };
@@ -147,6 +158,7 @@ impl OpenApiServer {
         base_url: &Url,
         args: &Map<String, Value>,
         forwarded: &HeaderMap,
+        bearer: Option<&str>,
     ) -> anyhow::Result<reqwest::RequestBuilder> {
         // Resolve path parameters into the template.
         let mut path = spec.path_template.clone();
@@ -200,15 +212,30 @@ impl OpenApiServer {
             }
         }
 
+        // `Authorization` can come from three places, so pick exactly one — the
+        // upstream must never receive two. A static `--header` is the operator's
+        // explicit override and wins; then the OAuth token; then a header
+        // forwarded from the caller.
+        let oauth_bearer = bearer.filter(|_| !self.extra_headers.contains_key(AUTHORIZATION));
+
         // Forwarded incoming-request headers, unless a static header of the
         // same name is configured (static headers win).
         for name in forwarded.keys() {
             if self.extra_headers.contains_key(name) {
                 continue;
             }
+            if oauth_bearer.is_some() && name == AUTHORIZATION {
+                continue;
+            }
             for value in forwarded.get_all(name) {
                 request = request.header(name.clone(), value.clone());
             }
+        }
+
+        if let Some(token) = oauth_bearer {
+            let value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .context("building the Authorization header from the upstream OAuth token")?;
+            request = request.header(AUTHORIZATION, value);
         }
 
         // Static headers (auth, etc.) apply to every request.
@@ -311,7 +338,34 @@ impl ServerHandler for OpenApiServer {
         let forwarded = self.forwarded_headers(&context);
 
         let started = std::time::Instant::now();
-        let result = self.execute(spec, &state.base_url, &args, &forwarded).await;
+
+        // Obtain the upstream OAuth bearer before building the request. A failure
+        // here fails the call rather than proxying it unauthenticated, which
+        // would surface as a puzzling 401 from the upstream instead of the real
+        // cause. The detail stays in the log: the MCP client has no business
+        // knowing our provider's internals.
+        let bearer = match &self.upstream_token {
+            Some(provider) => match provider.access_token().await {
+                Ok(token) => Some(token),
+                Err(err) => {
+                    tracing::error!(
+                        tool = %spec.name,
+                        error = %format!("{err:#}"),
+                        "failed to obtain the upstream OAuth token; not calling the API",
+                    );
+                    self.metrics
+                        .record_call(&spec.name, Outcome::AuthError, started.elapsed());
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
+                        "could not obtain an upstream OAuth token; see the server logs",
+                    )]));
+                }
+            },
+            None => None,
+        };
+
+        let result = self
+            .execute(spec, &state.base_url, &args, &forwarded, bearer.as_deref())
+            .await;
         let outcome = if result.is_error.unwrap_or(false) {
             Outcome::Error
         } else {
@@ -558,6 +612,181 @@ paths:
         server.reload(&spec_two, &cli).expect("reload succeeds");
         assert_eq!(server.tool_count(), 2);
         assert!(server.state.load().index.contains_key("getB"));
+    }
+
+    const ONE_GET: &str = r#"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
+"#;
+
+    /// Build the request one tool call would send, and hand back its headers.
+    ///
+    /// Goes through the real `build_request` rather than re-deriving the
+    /// precedence rules, so the test fails if the rules change underneath it.
+    fn authorization_of(
+        args: &[&str],
+        forwarded: &[(&str, &str)],
+        bearer: Option<&str>,
+    ) -> Vec<String> {
+        let cli = Cli::try_parse_from(std::iter::once("oas2mcp").chain(args.iter().copied()))
+            .expect("CLI parses");
+        let spec = spec_from(ONE_GET);
+        let server = OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled())
+            .expect("server builds");
+
+        let mut incoming = HeaderMap::new();
+        for (name, value) in forwarded {
+            incoming.append(
+                HeaderName::from_bytes(name.as_bytes()).expect("valid header name"),
+                HeaderValue::from_str(value).expect("valid header value"),
+            );
+        }
+
+        let state = server.state.load();
+        let request = server
+            .build_request(
+                &state.tools[0],
+                &state.base_url,
+                &Map::new(),
+                &incoming,
+                bearer,
+            )
+            .expect("the request builds")
+            .build()
+            .expect("the request is well-formed");
+
+        request
+            .headers()
+            .get_all(AUTHORIZATION)
+            .iter()
+            .map(|value| value.to_str().expect("ASCII header").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn the_oauth_token_becomes_the_upstream_authorization() {
+        assert_eq!(
+            authorization_of(&[], &[], Some("tok-1")),
+            vec!["Bearer tok-1".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_static_header_outranks_the_oauth_token() {
+        // `--header` is the operator's explicit override, so it wins — and the
+        // token must not be added alongside it.
+        assert_eq!(
+            authorization_of(
+                &["--header", "Authorization: Basic static"],
+                &[],
+                Some("tok-1")
+            ),
+            vec!["Basic static".to_string()]
+        );
+    }
+
+    #[test]
+    fn the_oauth_token_outranks_a_forwarded_authorization() {
+        let auth = authorization_of(
+            &["--forward-header", "Authorization"],
+            &[("authorization", "Bearer from-caller")],
+            Some("tok-1"),
+        );
+        // Exactly one value: two `Authorization` headers is precisely the bug
+        // this precedence exists to prevent.
+        assert_eq!(auth, vec!["Bearer tok-1".to_string()]);
+    }
+
+    #[test]
+    fn a_forwarded_authorization_still_applies_without_a_token() {
+        // No upstream OAuth configured: the previous behaviour is untouched.
+        assert_eq!(
+            authorization_of(
+                &["--forward-header", "Authorization"],
+                &[("authorization", "Bearer from-caller")],
+                None,
+            ),
+            vec!["Bearer from-caller".to_string()]
+        );
+    }
+
+    #[test]
+    fn other_forwarded_headers_are_untouched_by_the_token() {
+        let cli = Cli::try_parse_from([
+            "oas2mcp",
+            "--forward-header",
+            "X-Tenant",
+            "--forward-header",
+            "Authorization",
+        ])
+        .expect("CLI parses");
+        let spec = spec_from(ONE_GET);
+        let server = OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled())
+            .expect("server builds");
+
+        let mut incoming = HeaderMap::new();
+        incoming.insert("x-tenant", HeaderValue::from_static("acme"));
+        incoming.insert("authorization", HeaderValue::from_static("Bearer caller"));
+
+        let state = server.state.load();
+        let request = server
+            .build_request(
+                &state.tools[0],
+                &state.base_url,
+                &Map::new(),
+                &incoming,
+                Some("tok-1"),
+            )
+            .expect("the request builds")
+            .build()
+            .expect("the request is well-formed");
+
+        // Only `Authorization` is displaced by the OAuth token; the rest of the
+        // forwarding allow-list keeps working.
+        assert_eq!(
+            request
+                .headers()
+                .get("x-tenant")
+                .map(|v| v.to_str().unwrap()),
+            Some("acme")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get(AUTHORIZATION)
+                .map(|v| v.to_str().unwrap()),
+            Some("Bearer tok-1")
+        );
+    }
+
+    #[test]
+    fn no_upstream_oauth_means_no_provider() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        let spec = spec_from(ONE_GET);
+        let server = OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled())
+            .expect("server builds");
+        assert!(server.upstream_token.is_none());
+    }
+
+    #[test]
+    fn upstream_oauth_flags_build_a_provider() {
+        let cli = Cli::try_parse_from([
+            "oas2mcp",
+            "--upstream-oauth-token-url",
+            "https://idp.example.com/token",
+            "--upstream-oauth-client-id",
+            "id",
+            "--upstream-oauth-client-secret",
+            "secret",
+        ])
+        .expect("CLI parses");
+        let spec = spec_from(ONE_GET);
+        let server = OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled())
+            .expect("server builds");
+        assert!(server.upstream_token.is_some());
     }
 
     #[test]

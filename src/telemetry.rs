@@ -43,6 +43,10 @@ const DURATION_BUCKETS_SECONDS: &[f64] = &[
 pub enum Outcome {
     Success,
     Error,
+    /// The upstream OAuth token could not be obtained, so no API request was
+    /// made. Kept distinct from `Error`: it points at the provider or the
+    /// credential, not at the upstream API or the tool arguments.
+    AuthError,
 }
 
 impl Outcome {
@@ -50,6 +54,7 @@ impl Outcome {
         match self {
             Self::Success => "success",
             Self::Error => "error",
+            Self::AuthError => "auth_error",
         }
     }
 }

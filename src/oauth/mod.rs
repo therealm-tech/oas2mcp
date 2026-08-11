@@ -20,12 +20,13 @@ mod assertion;
 mod key;
 mod provider;
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use url::Url;
 
-use crate::cli::Cli;
+use crate::cli::{Cli, SigningAlg};
 
 pub use assertion::AssertionConfig;
 pub use key::SigningKey;
@@ -57,102 +58,156 @@ pub struct TokenConfig {
     pub audience: Option<String>,
 }
 
+/// The flags describing one grant, gathered so the shared construction below is
+/// written once and fed twice: for the document fetch and for the upstream API.
+struct GrantFlags<'a> {
+    /// Flag prefix (e.g. `--openapi-oauth`), so an error names the flag the
+    /// operator actually typed rather than a generic one.
+    prefix: &'static str,
+    token_url: Url,
+    client_id: Option<&'a String>,
+    client_secret: Option<&'a String>,
+    private_key: Option<&'a PathBuf>,
+    key_id: Option<&'a String>,
+    signing_alg: SigningAlg,
+    assertion_audience: Option<&'a String>,
+    assertion_lifetime: Option<Duration>,
+    scopes: &'a [String],
+    audience: Option<&'a String>,
+}
+
+/// The document-fetch grant's flags, or `None` when no token URL is configured.
+fn document_flags(cli: &Cli) -> Option<GrantFlags<'_>> {
+    Some(GrantFlags {
+        prefix: "--openapi-oauth",
+        token_url: cli.openapi_oauth_token_url.clone()?,
+        client_id: cli.openapi_oauth_client_id.as_ref(),
+        client_secret: cli.openapi_oauth_client_secret.as_ref(),
+        private_key: cli.openapi_oauth_private_key.as_ref(),
+        key_id: cli.openapi_oauth_key_id.as_ref(),
+        signing_alg: cli.openapi_oauth_signing_alg,
+        assertion_audience: cli.openapi_oauth_assertion_audience.as_ref(),
+        assertion_lifetime: cli.openapi_oauth_assertion_lifetime,
+        scopes: &cli.openapi_oauth_scopes,
+        audience: cli.openapi_oauth_audience.as_ref(),
+    })
+}
+
+/// The upstream-API grant's flags, or `None` when no token URL is configured.
+fn upstream_flags(cli: &Cli) -> Option<GrantFlags<'_>> {
+    Some(GrantFlags {
+        prefix: "--upstream-oauth",
+        token_url: cli.upstream_oauth_token_url.clone()?,
+        client_id: cli.upstream_oauth_client_id.as_ref(),
+        client_secret: cli.upstream_oauth_client_secret.as_ref(),
+        private_key: cli.upstream_oauth_private_key.as_ref(),
+        key_id: cli.upstream_oauth_key_id.as_ref(),
+        signing_alg: cli.upstream_oauth_signing_alg,
+        assertion_audience: cli.upstream_oauth_assertion_audience.as_ref(),
+        assertion_lifetime: cli.upstream_oauth_assertion_lifetime,
+        scopes: &cli.upstream_oauth_scopes,
+        audience: cli.upstream_oauth_audience.as_ref(),
+    })
+}
+
 impl TokenConfig {
-    /// Read the document-fetch grant off the CLI, or `None` when no OAuth token
-    /// URL is configured.
-    fn from_cli(cli: &Cli) -> anyhow::Result<Option<Self>> {
-        let Some(token_url) = cli.openapi_oauth_token_url.clone() else {
-            return Ok(None);
-        };
+    /// The document-fetch grant, or `None` when no token URL is configured.
+    fn for_document(cli: &Cli) -> anyhow::Result<Option<Self>> {
+        document_flags(cli).map(Self::from_flags).transpose()
+    }
+
+    /// The upstream-API grant, or `None` when no token URL is configured.
+    fn for_upstream(cli: &Cli) -> anyhow::Result<Option<Self>> {
+        upstream_flags(cli).map(Self::from_flags).transpose()
+    }
+
+    /// Resolve one grant's flags into a usable configuration, loading the signing
+    /// key when the client authenticates with an assertion.
+    fn from_flags(flags: GrantFlags<'_>) -> anyhow::Result<Self> {
+        let prefix = flags.prefix;
         // clap enforces this via `requires_all`, but fail loudly rather than
         // panic if that ever changes.
-        let client_id = cli
-            .openapi_oauth_client_id
-            .clone()
-            .context("--openapi-oauth-client-id is required with --openapi-oauth-token-url")?;
+        let client_id = flags
+            .client_id
+            .cloned()
+            .with_context(|| format!("{prefix}-client-id is required with {prefix}-token-url"))?;
 
-        let client_auth = match (
-            &cli.openapi_oauth_private_key,
-            &cli.openapi_oauth_client_secret,
-        ) {
+        let client_auth = match (flags.private_key, flags.client_secret) {
             // clap's arg group rejects this pair; refuse it here too rather than
             // silently picking one credential over the other.
             (Some(_), Some(_)) => bail!(
-                "--openapi-oauth-private-key and --openapi-oauth-client-secret are mutually \
-                 exclusive; pick one way to authenticate the client"
+                "{prefix}-private-key and {prefix}-client-secret are mutually exclusive; \
+                 pick one way to authenticate the client"
             ),
             (Some(path), None) => {
-                let key = key::load(
-                    path,
-                    cli.openapi_oauth_signing_alg,
-                    cli.openapi_oauth_key_id.clone(),
-                )
-                .context("loading the OAuth client signing key")?;
+                let key = key::load(path, flags.signing_alg, flags.key_id.cloned())
+                    .context("loading the OAuth client signing key")?;
                 ClientAuth::PrivateKeyJwt {
                     assertion: AssertionConfig {
                         // RFC 7523 §3: for client authentication the assertion
                         // is issued by, and speaks for, the client itself.
                         issuer: client_id.clone(),
                         subject: client_id.clone(),
-                        audience: cli
-                            .openapi_oauth_assertion_audience
-                            .clone()
-                            .unwrap_or_else(|| token_url.to_string()),
-                        lifetime: cli
-                            .openapi_oauth_assertion_lifetime
+                        audience: flags
+                            .assertion_audience
+                            .cloned()
+                            .unwrap_or_else(|| flags.token_url.to_string()),
+                        lifetime: flags
+                            .assertion_lifetime
                             .unwrap_or(DEFAULT_ASSERTION_LIFETIME),
                     },
                     key,
                 }
             }
             (None, Some(secret)) => {
-                // clap excuses `requires = openapi_oauth_private_key` on these
-                // flags when a conflicting argument (the secret) is present, so
-                // they reach us silently ineffective. Say so rather than let the
+                // clap excuses `requires = <prefix>-private-key` on these flags
+                // when a conflicting argument (the secret) is present, so they
+                // reach us silently ineffective. Say so rather than let the
                 // operator believe a `kid` is going out on the wire.
-                let ignored = ineffective_assertion_flags(cli);
+                let ignored = ineffective_assertion_flags(&flags);
                 if !ignored.is_empty() {
                     tracing::warn!(
                         flags = ignored.join(", "),
-                        "these flags only apply to --openapi-oauth-private-key and are ignored \
-                         with --openapi-oauth-client-secret"
+                        "these flags only apply to {prefix}-private-key and are ignored with \
+                         {prefix}-client-secret"
                     );
                 }
                 ClientAuth::Secret(secret.clone())
             }
             (None, None) => bail!(
-                "--openapi-oauth-token-url needs a client credential; pass \
-                 --openapi-oauth-client-secret or --openapi-oauth-private-key"
+                "{prefix}-token-url needs a client credential; pass \
+                 {prefix}-client-secret or {prefix}-private-key"
             ),
         };
 
-        Ok(Some(Self {
-            token_url,
+        Ok(Self {
+            token_url: flags.token_url,
             client_id,
             client_auth,
-            scopes: cli.openapi_oauth_scopes.clone(),
-            audience: cli.openapi_oauth_audience.clone(),
-        }))
+            scopes: flags.scopes.to_vec(),
+            audience: flags.audience.cloned(),
+        })
     }
 }
 
 /// The assertion-only flags that are set but cannot apply, because the client
 /// authenticates with a shared secret instead of a signed assertion.
 ///
-/// `--openapi-oauth-signing-alg` is left out on purpose: it carries a default,
-/// so it is always "set" and reporting it would cry wolf on every run.
-fn ineffective_assertion_flags(cli: &Cli) -> Vec<&'static str> {
-    let mut flags = Vec::new();
-    if cli.openapi_oauth_key_id.is_some() {
-        flags.push("--openapi-oauth-key-id");
+/// The signing algorithm is left out on purpose: it carries a default, so it is
+/// always "set" and reporting it would cry wolf on every run.
+fn ineffective_assertion_flags(flags: &GrantFlags<'_>) -> Vec<String> {
+    let prefix = flags.prefix;
+    let mut ignored = Vec::new();
+    if flags.key_id.is_some() {
+        ignored.push(format!("{prefix}-key-id"));
     }
-    if cli.openapi_oauth_assertion_audience.is_some() {
-        flags.push("--openapi-oauth-assertion-audience");
+    if flags.assertion_audience.is_some() {
+        ignored.push(format!("{prefix}-assertion-audience"));
     }
-    if cli.openapi_oauth_assertion_lifetime.is_some() {
-        flags.push("--openapi-oauth-assertion-lifetime");
+    if flags.assertion_lifetime.is_some() {
+        ignored.push(format!("{prefix}-assertion-lifetime"));
     }
-    flags
+    ignored
 }
 
 #[cfg(test)]
@@ -169,7 +224,7 @@ mod tests {
     #[test]
     fn no_token_url_means_no_grant() {
         let config =
-            TokenConfig::from_cli(&cli_from(&[])).expect("no OAuth config is not an error");
+            TokenConfig::for_document(&cli_from(&[])).expect("no OAuth config is not an error");
         assert!(config.is_none());
     }
 
@@ -187,7 +242,7 @@ mod tests {
             "--openapi-oauth-audience",
             "api://target",
         ]);
-        let config = TokenConfig::from_cli(&cli)
+        let config = TokenConfig::for_document(&cli)
             .expect("the grant is well-formed")
             .expect("a token URL was given");
 
@@ -208,7 +263,7 @@ mod tests {
             "--openapi-oauth-private-key",
             "tests/fixtures/test_rsa_key.pem",
         ]);
-        let config = TokenConfig::from_cli(&cli)
+        let config = TokenConfig::for_document(&cli)
             .expect("the grant is well-formed")
             .expect("a token URL was given");
 
@@ -237,7 +292,7 @@ mod tests {
             "--openapi-oauth-assertion-lifetime",
             "30s",
         ]);
-        let config = TokenConfig::from_cli(&cli)
+        let config = TokenConfig::for_document(&cli)
             .expect("the grant is well-formed")
             .expect("a token URL was given");
 
@@ -261,7 +316,7 @@ mod tests {
             "kid-1",
         ]);
         assert_eq!(
-            ineffective_assertion_flags(&cli),
+            ineffective_assertion_flags(&document_flags(&cli).expect("a token url is set")),
             vec!["--openapi-oauth-key-id"]
         );
 
@@ -277,7 +332,10 @@ mod tests {
             "--openapi-oauth-signing-alg",
             "es256",
         ]);
-        assert!(ineffective_assertion_flags(&cli).is_empty());
+        assert!(
+            ineffective_assertion_flags(&document_flags(&cli).expect("a token url is set"))
+                .is_empty()
+        );
     }
 
     #[test]
@@ -294,7 +352,7 @@ mod tests {
         // the document fetch can never authenticate. (`err()` rather than
         // `expect_err`: `TokenConfig` holds a `SigningKey`, which has no `Debug`
         // impl on purpose.)
-        let err = TokenConfig::from_cli(&cli)
+        let err = TokenConfig::for_document(&cli)
             .err()
             .expect("a missing key must fail");
         assert!(

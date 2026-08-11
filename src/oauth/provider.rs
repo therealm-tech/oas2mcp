@@ -64,10 +64,16 @@ impl TokenProvider {
         }
     }
 
-    /// Build the provider from the CLI, or `None` when no OAuth token URL is
-    /// configured.
-    pub fn from_cli(cli: &Cli, client: reqwest::Client) -> anyhow::Result<Option<Self>> {
-        Ok(super::TokenConfig::from_cli(cli)?.map(|config| Self::new(config, client)))
+    /// Provider for the OpenAPI document fetch, or `None` when
+    /// `--openapi-oauth-token-url` is unset.
+    pub fn for_document(cli: &Cli, client: reqwest::Client) -> anyhow::Result<Option<Self>> {
+        Ok(TokenConfig::for_document(cli)?.map(|config| Self::new(config, client)))
+    }
+
+    /// Provider for upstream API calls, or `None` when
+    /// `--upstream-oauth-token-url` is unset.
+    pub fn for_upstream(cli: &Cli, client: reqwest::Client) -> anyhow::Result<Option<Self>> {
+        Ok(TokenConfig::for_upstream(cli)?.map(|config| Self::new(config, client)))
     }
 
     /// Return a valid access token, fetching a fresh one when the cache is
