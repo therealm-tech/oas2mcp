@@ -49,6 +49,11 @@ writing a line of glue code.
 - **Auth passthrough** — attach arbitrary static headers (e.g. a bearer token)
   to every upstream request, or forward the MCP client's own request headers
   (e.g. `Authorization`) upstream per call (`streamable-http` only).
+- **OAuth for the upstream API** — obtain the upstream `Authorization: Bearer`
+  from an OAuth2 `client_credentials` grant, refreshed automatically before it
+  expires, instead of a static token that goes stale. Authenticates with a
+  client secret or a signed JWT assertion (RFC 7523 §2.2), and is configured
+  independently of the document-fetch grant.
 - **Role-based tool access** — verify the caller's JWT against a JWKS and gate
   which tools they can see and call, mapping each `role` to a tool-name regex
   (`streamable-http` only).
@@ -107,6 +112,16 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--ca-cert`       | `CA_CERT_FILE`   | —                | Path to a PEM file with extra CA certificate(s) to trust for every outbound TLS connection (upstream, document fetch, OAuth, JWKS). Added on top of the built-in roots, so only your private/corporate CA is needed. Repeatable; newline-separated via the env var. |
 | `--header`        | `UPSTREAM_HEADERS` | —              | Extra `Name: Value` header on every upstream request. Repeatable.  |
 | `--forward-header`| `FORWARD_HEADERS`  | —              | Name of an incoming request header to forward upstream (e.g. `Authorization`). Repeatable. `streamable-http` only. |
+| `--upstream-oauth-token-url` | `UPSTREAM_OAUTH_TOKEN_URL` | — | OAuth2 `client_credentials` token endpoint for **upstream API calls**. Set → every proxied call carries an auto-refreshed bearer. Requires `--upstream-oauth-client-id` plus one credential below. |
+| `--upstream-oauth-client-id` | `UPSTREAM_OAUTH_CLIENT_ID` | —  | OAuth2 client ID for the upstream token.                           |
+| `--upstream-oauth-client-secret` | `UPSTREAM_OAUTH_CLIENT_SECRET` | — | OAuth2 client secret, sent over HTTP Basic. Mutually exclusive with `--upstream-oauth-private-key`. |
+| `--upstream-oauth-private-key` | `UPSTREAM_OAUTH_PRIVATE_KEY_FILE` | — | PKCS#8 PEM key: authenticate with a signed JWT assertion (RFC 7523 §2.2) instead of a secret. |
+| `--upstream-oauth-key-id` | `UPSTREAM_OAUTH_KEY_ID` | —          | `kid` header on the upstream client assertion. Needs the private key. |
+| `--upstream-oauth-signing-alg` | `UPSTREAM_OAUTH_SIGNING_ALG` | `rs256` | Assertion signature algorithm. Must match the key type. |
+| `--upstream-oauth-assertion-audience` | `UPSTREAM_OAUTH_ASSERTION_AUDIENCE` | token endpoint | `aud` claim of the upstream client assertion. |
+| `--upstream-oauth-assertion-lifetime` | `UPSTREAM_OAUTH_ASSERTION_LIFETIME` | `60s` | Upstream client assertion validity window. |
+| `--upstream-oauth-scope` | `UPSTREAM_OAUTH_SCOPES` | —          | OAuth2 scope requested for the upstream token. Repeatable; newline-separated via the env var. |
+| `--upstream-oauth-audience` | `UPSTREAM_OAUTH_AUDIENCE` | —      | OAuth2 `audience` parameter for the upstream token (e.g. Auth0). |
 | `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:tool_name_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Requires a JWKS source below. `streamable-http` only. |
 | `--oauth-jwks-url` | `OAUTH_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Required with `--oauth-role-mapper` (or use `--oauth-jwks-file`). |
 | `--oauth-jwks-file` | `OAUTH_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--oauth-jwks-url`. |
@@ -274,6 +289,49 @@ to yourself:
   an HMAC keyed on the client secret is no better than sending the secret, so
   `hs256` and friends are not accepted.
 
+### OAuth for the upstream API
+
+`--header 'Authorization: Bearer …'` works, until the token expires. To
+authenticate the **proxied tool calls** with a token that renews itself, point
+`--upstream-oauth-token-url` at your provider: every call then carries a bearer
+obtained from a `client_credentials` grant, cached and refreshed shortly before
+expiry.
+
+```bash
+oas2mcp \
+  --openapi-url https://api.example.com/openapi.json \
+  --upstream-oauth-token-url https://idp.example.com/oauth/token \
+  --upstream-oauth-client-id "$CLIENT_ID" \
+  --upstream-oauth-client-secret "$CLIENT_SECRET" \
+  --upstream-oauth-scope read:pets \
+  --upstream-oauth-audience 'https://api.example.com'
+```
+
+This is configured independently of `--openapi-oauth-*`: the document and the
+API may live behind different providers, with different credentials. Both
+support the same two client-authentication modes, so
+`--upstream-oauth-private-key` gives you `private_key_jwt` here too.
+
+#### Which `Authorization` wins
+
+Three things can set the upstream `Authorization`, so exactly one is picked —
+the upstream never receives two:
+
+| Priority | Source | Why it ranks there |
+| --- | --- | --- |
+| 1 | `--header 'Authorization: …'` | An explicit static override by the operator. |
+| 2 | `--upstream-oauth-*` token | The managed credential. |
+| 3 | `--forward-header Authorization` | The caller's own token, passed through. |
+
+Every other forwarded header is unaffected — only `Authorization` is contested.
+
+If the token cannot be obtained, the tool call **fails** and no request reaches
+the API: proxying it unauthenticated would surface as a puzzling `401` from the
+upstream rather than the real cause. The failure is logged with the provider's
+own diagnosis and counted as `outcome="auth_error"` in the metrics, kept
+distinct from an upstream error so a broken credential is not mistaken for a
+broken API.
+
 ### Role-based tool access from the caller's JWT
 
 The filters above are global: every MCP client sees the same tools. When the
@@ -347,8 +405,15 @@ Every tool call is counted and timed and exposed as OpenTelemetry metrics:
 | `mcp.tool.calls` | counter | Number of tool calls. |
 | `mcp.tool.call.duration` | histogram (seconds) | Duration of the proxied upstream request. |
 
-Both carry the attributes `tool` (the tool/operation name) and `outcome`
-(`success` or `error`) — and nothing else, so metric cardinality stays bounded.
+Both carry the attributes `tool` (the tool/operation name) and `outcome` — and
+nothing else, so metric cardinality stays bounded. `outcome` is one of:
+
+| Value | Meaning |
+| --- | --- |
+| `success` | The upstream answered with a non-error status. |
+| `error` | The upstream answered with a 4xx/5xx, or the request could not be built or sent. |
+| `auth_error` | The upstream OAuth token could not be obtained, so **no** request was made. Points at the provider or the credential, not at the API. |
+
 To break activity down by caller, log the relevant JWT claims with
 `--trace-claim` (see above) and aggregate them in your logging backend, rather
 than turning a per-user identifier into a metric label.

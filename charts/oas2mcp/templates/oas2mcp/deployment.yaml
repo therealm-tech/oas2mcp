@@ -3,6 +3,7 @@
 {{- end }}
 {{- include "oas2mcp.caCertsValidate" . }}
 {{- include "oas2mcp.oauthClientAuthValidate" . }}
+{{- include "oas2mcp.upstreamOauthClientAuthValidate" . }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -38,6 +39,12 @@ spec:
         {{- end }}
         {{- if and (not .Values.oas2mcp.openapi.inline) (include "oas2mcp.oauthPrivateKeyGenerateSecret" .) }}
         checksum/openapi-oauth-key: {{ .Values.oas2mcp.openapi.oauth.privateKey.inline | sha256sum }}
+        {{- end }}
+        {{- if and .Values.oas2mcp.upstream.oauth.clientSecret (not .Values.oas2mcp.upstream.oauth.existingSecret.name) }}
+        checksum/upstream-oauth: {{ .Values.oas2mcp.upstream.oauth.clientSecret | sha256sum }}
+        {{- end }}
+        {{- if include "oas2mcp.upstreamOauthPrivateKeyGenerateSecret" . }}
+        checksum/upstream-oauth-key: {{ .Values.oas2mcp.upstream.oauth.privateKey.inline | sha256sum }}
         {{- end }}
         {{- if include "oas2mcp.caCertsGenerateSecret" . }}
         checksum/ca-certs: {{ .Values.oas2mcp.caCerts.inline | sha256sum }}
@@ -148,6 +155,49 @@ spec:
             - name: FORWARD_HEADERS
               value: {{ join "\n" . | quote }}
             {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.tokenUrl }}
+            - name: UPSTREAM_OAUTH_TOKEN_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.clientId }}
+            - name: UPSTREAM_OAUTH_CLIENT_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if or .Values.oas2mcp.upstream.oauth.existingSecret.name .Values.oas2mcp.upstream.oauth.clientSecret }}
+            - name: UPSTREAM_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "oas2mcp.upstreamOauthSecretName" . }}
+                  key: {{ include "oas2mcp.upstreamOauthSecretKey" . }}
+            {{- end }}
+            {{- if include "oas2mcp.upstreamOauthPrivateKeyEnabled" . }}
+            - name: UPSTREAM_OAUTH_PRIVATE_KEY_FILE
+              value: /etc/oas2mcp-upstream-oauth-key/{{ include "oas2mcp.upstreamOauthPrivateKeyKey" . }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.privateKey.keyId }}
+            - name: UPSTREAM_OAUTH_KEY_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.privateKey.signingAlg }}
+            - name: UPSTREAM_OAUTH_SIGNING_ALG
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.privateKey.assertionAudience }}
+            - name: UPSTREAM_OAUTH_ASSERTION_AUDIENCE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.privateKey.assertionLifetime }}
+            - name: UPSTREAM_OAUTH_ASSERTION_LIFETIME
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.scopes }}
+            - name: UPSTREAM_OAUTH_SCOPES
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.audience }}
+            - name: UPSTREAM_OAUTH_AUDIENCE
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.oas2mcp.operations.include }}
             - name: INCLUDE_OPERATIONS
               value: {{ join "\n" . | quote }}
@@ -232,7 +282,7 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.oas2mcp.resources | nindent 12 }}
-          {{- if or .Values.oas2mcp.openapi.inline (include "oas2mcp.caCertsEnabled" .) (include "oas2mcp.oauthPrivateKeyEnabled" .) .Values.oas2mcp.extraVolumeMounts }}
+          {{- if or .Values.oas2mcp.openapi.inline (include "oas2mcp.caCertsEnabled" .) (include "oas2mcp.oauthPrivateKeyEnabled" .) (include "oas2mcp.upstreamOauthPrivateKeyEnabled" .) .Values.oas2mcp.extraVolumeMounts }}
           volumeMounts:
             {{- if .Values.oas2mcp.openapi.inline }}
             - name: openapi
@@ -249,11 +299,16 @@ spec:
               mountPath: /etc/oas2mcp-oauth-key
               readOnly: true
             {{- end }}
+            {{- if include "oas2mcp.upstreamOauthPrivateKeyEnabled" . }}
+            - name: upstream-oauth-private-key
+              mountPath: /etc/oas2mcp-upstream-oauth-key
+              readOnly: true
+            {{- end }}
             {{- with .Values.oas2mcp.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-      {{- if or .Values.oas2mcp.openapi.inline (include "oas2mcp.caCertsEnabled" .) (include "oas2mcp.oauthPrivateKeyEnabled" .) .Values.oas2mcp.extraVolumes }}
+      {{- if or .Values.oas2mcp.openapi.inline (include "oas2mcp.caCertsEnabled" .) (include "oas2mcp.oauthPrivateKeyEnabled" .) (include "oas2mcp.upstreamOauthPrivateKeyEnabled" .) .Values.oas2mcp.extraVolumes }}
       volumes:
         {{- if .Values.oas2mcp.openapi.inline }}
         - name: openapi
@@ -276,6 +331,12 @@ spec:
             secretName: {{ include "oas2mcp.oauthPrivateKeySecretName" . }}
             # Root-owned and readable through fsGroup: 0400 would leave the
             # non-root container unable to read its own signing key.
+            defaultMode: 0440
+        {{- end }}
+        {{- if include "oas2mcp.upstreamOauthPrivateKeyEnabled" . }}
+        - name: upstream-oauth-private-key
+          secret:
+            secretName: {{ include "oas2mcp.upstreamOauthPrivateKeySecretName" . }}
             defaultMode: 0440
         {{- end }}
         {{- with .Values.oas2mcp.extraVolumes }}

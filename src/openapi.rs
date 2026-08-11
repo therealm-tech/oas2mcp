@@ -32,7 +32,7 @@ impl DocAuth {
         let client = crate::http::client(cli).context("building the document-fetch HTTP client")?;
         let static_headers =
             parse_headers(&cli.openapi_headers).context("parsing --openapi-header values")?;
-        let oauth = TokenProvider::from_cli(cli, client.clone())?;
+        let oauth = TokenProvider::for_document(cli, client.clone())?;
         Ok(Self {
             client,
             static_headers,

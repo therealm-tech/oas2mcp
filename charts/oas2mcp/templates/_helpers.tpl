@@ -96,6 +96,68 @@ OPENAPI_OAUTH_CLIENT_SECRET
 {{- end -}}
 {{- end -}}
 
+{{/*
+  The upstream grant repeats the document grant's shape below. Kept as two
+  explicit copies rather than one dict-parameterised helper: there are exactly
+  two grants and never a third, and passing maps through `include` reads worse
+  than the duplication saves.
+*/}}
+
+{{/* Name of the Secret holding the upstream OAuth client secret (existing or generated). */}}
+{{- define "oas2mcp.upstreamOauthSecretName" -}}
+{{- if .Values.oas2mcp.upstream.oauth.existingSecret.name -}}
+{{- .Values.oas2mcp.upstream.oauth.existingSecret.name -}}
+{{- else -}}
+{{- printf "%s-upstream-oauth" (include "oas2mcp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Key in the upstream OAuth client-secret Secret. */}}
+{{- define "oas2mcp.upstreamOauthSecretKey" -}}
+{{- if .Values.oas2mcp.upstream.oauth.existingSecret.name -}}
+{{- .Values.oas2mcp.upstream.oauth.existingSecret.key -}}
+{{- else -}}
+UPSTREAM_OAUTH_CLIENT_SECRET
+{{- end -}}
+{{- end -}}
+
+{{/* Whether the upstream client authenticates with a signed assertion. */}}
+{{- define "oas2mcp.upstreamOauthPrivateKeyEnabled" -}}
+{{- if or .Values.oas2mcp.upstream.oauth.privateKey.inline .Values.oas2mcp.upstream.oauth.privateKey.existingSecret.name -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Refuse two upstream client credentials at once, matching the binary. */}}
+{{- define "oas2mcp.upstreamOauthClientAuthValidate" -}}
+{{- if include "oas2mcp.upstreamOauthPrivateKeyEnabled" . -}}
+{{- if or .Values.oas2mcp.upstream.oauth.clientSecret .Values.oas2mcp.upstream.oauth.existingSecret.name -}}
+{{- fail "oas2mcp.upstream.oauth.privateKey and oas2mcp.upstream.oauth.clientSecret/existingSecret are mutually exclusive; pick one way to authenticate the client" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Whether a Secret must be generated to hold the inline upstream signing key. */}}
+{{- define "oas2mcp.upstreamOauthPrivateKeyGenerateSecret" -}}
+{{- if and .Values.oas2mcp.upstream.oauth.privateKey.inline (not .Values.oas2mcp.upstream.oauth.privateKey.existingSecret.name) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Name of the Secret holding the upstream OAuth signing key (existing or generated). */}}
+{{- define "oas2mcp.upstreamOauthPrivateKeySecretName" -}}
+{{- if .Values.oas2mcp.upstream.oauth.privateKey.existingSecret.name -}}
+{{- .Values.oas2mcp.upstream.oauth.privateKey.existingSecret.name -}}
+{{- else -}}
+{{- printf "%s-upstream-oauth-key" (include "oas2mcp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Key in the upstream signing-key Secret (also the mounted file name). */}}
+{{- define "oas2mcp.upstreamOauthPrivateKeyKey" -}}
+{{- .Values.oas2mcp.upstream.oauth.privateKey.existingSecret.key -}}
+{{- end -}}
+
 {{/* Whether the client authenticates with a signed assertion (inline key or an existing Secret). */}}
 {{- define "oas2mcp.oauthPrivateKeyEnabled" -}}
 {{- if or .Values.oas2mcp.openapi.oauth.privateKey.inline .Values.oas2mcp.openapi.oauth.privateKey.existingSecret.name -}}

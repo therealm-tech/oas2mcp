@@ -127,6 +127,40 @@ oas2mcp:
       key: UPSTREAM_HEADERS
     # -- (list) Names of incoming MCP-client request headers forwarded verbatim to the upstream API (e.g. `Authorization`). Per-call, not static; requires `transport: streamable-http`.
     forwardHeaders: []
+    # -- Obtain the upstream `Authorization: Bearer` from an OAuth2 `client_credentials` grant, auto-refreshed before expiry, instead of a static token in `headers`. Configured independently of `openapi.oauth` — the document and the API may sit behind different providers. When a token is configured it outranks a forwarded `Authorization` but not a static one in `headers`.
+    oauth:
+      # -- (string) OAuth2 `client_credentials` token endpoint for upstream calls. Set → enables the whole block; requires `clientId` plus one credential.
+      tokenUrl: ~
+      # -- (string) OAuth2 client ID.
+      clientId: ~
+      # -- (string) OAuth2 client secret, sent over HTTP Basic. Stored in a Secret. Ignored when `existingSecret.name` is set. Mutually exclusive with `privateKey`.
+      clientSecret: ~
+      existingSecret:
+        # -- (string) Name of a pre-existing Secret holding the client secret. Set → takes precedence over `clientSecret`.
+        name: ~
+        # -- Key in that Secret holding the client secret.
+        key: UPSTREAM_OAUTH_CLIENT_SECRET
+      # -- (list) OAuth2 scopes requested for the upstream token.
+      scopes: []
+      # -- (string) OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0).
+      audience: ~
+      # -- Authenticate with a JWT assertion signed per request (`private_key_jwt`, RFC 7523 §2.2) instead of a shared secret. Mutually exclusive with `clientSecret`/`existingSecret`; setting both fails the render.
+      privateKey:
+        # -- (string) Inline PKCS#8 PEM private key. Stored in a Secret and mounted read-only at mode `0440`. Ignored when `existingSecret.name` is set.
+        inline: ~
+        existingSecret:
+          # -- (string) Name of a pre-existing Secret holding the PEM private key. Set → takes precedence over `inline`.
+          name: ~
+          # -- Key in that Secret holding the PEM private key. Doubles as the mounted file name.
+          key: upstream-client-key.pem
+        # -- (string) `kid` header put on the client assertion. Maps to `UPSTREAM_OAUTH_KEY_ID`.
+        keyId: ~
+        # -- (string) Assertion signature algorithm — `rs256`/`rs384`/`rs512`, `ps256`/`ps384`/`ps512`, `es256`/`es384`, `eddsa`. Must match the key type. Unset → the binary default (`rs256`). Maps to `UPSTREAM_OAUTH_SIGNING_ALG`.
+        signingAlg: ~
+        # -- (string) `aud` claim of the client assertion. Unset → the token endpoint URL. Maps to `UPSTREAM_OAUTH_ASSERTION_AUDIENCE`.
+        assertionAudience: ~
+        # -- (string) How long a client assertion stays valid (e.g. `30s`). Unset → the binary default (`60s`). Maps to `UPSTREAM_OAUTH_ASSERTION_LIFETIME`.
+        assertionLifetime: ~
 
   # -- `tracing` filter directive, mapped to `RUST_LOG`.
   logFilter: info
