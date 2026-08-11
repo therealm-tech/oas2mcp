@@ -25,14 +25,26 @@ struct RoleRule {
     pattern: Regex,
 }
 
-/// The claims read from a verified token: the caller's roles and the
-/// `--trace-claim` claims selected for tracing.
+/// The claims read from a verified token: the caller's roles, the identity used
+/// for delegated upstream tokens, and the `--trace-claim` claims selected for
+/// tracing.
 pub struct VerifiedClaims {
     pub roles: HashSet<String>,
     /// The `--trace-claim` claims that were present in the token, keeping their
     /// JSON shape. Empty when none are configured or none were present. Surfaced
     /// on the per-call tracing log, never in metric labels.
     pub traced: Map<String, Value>,
+    /// Value of the delegation subject claim (`--upstream-oauth-subject-claim`,
+    /// `sub` by default). `None` when the claim is absent or is not a string —
+    /// which denies delegation rather than falling back to another identity.
+    pub subject: Option<String>,
+    /// The token's `iss`. Part of the delegated-token cache key: `sub` is only
+    /// unique *within* an issuer, so two providers both minting `sub: alice`
+    /// must not share a cache entry.
+    pub issuer: Option<String>,
+    /// The token's `exp`, in seconds since the Unix epoch. A delegated upstream
+    /// token is never cached past the caller session it was minted for.
+    pub expiry: Option<u64>,
 }
 
 /// Verifies incoming JWTs against a JWKS and decides which tools a caller may
@@ -41,6 +53,10 @@ pub struct VerifiedClaims {
 pub struct Authorizer {
     jwks: JwkSet,
     role_claim: String,
+    /// Claim carrying the identity to delegate as. Lives here because this is
+    /// where the token is decoded, even though the flag that sets it belongs to
+    /// the upstream OAuth group.
+    subject_claim: String,
     rules: Vec<RoleRule>,
     /// Names of the claims to copy into the per-call tracing log, from
     /// `--trace-claim`. Empty disables claim tracing.
@@ -69,6 +85,7 @@ impl Authorizer {
         Ok(Some(Arc::new(Self {
             jwks,
             role_claim: cli.oauth_role_claim.clone(),
+            subject_claim: cli.upstream_oauth_subject_claim.clone(),
             rules,
             trace_claims: cli.trace_claims.clone(),
         })))
@@ -100,6 +117,9 @@ impl Authorizer {
         Ok(VerifiedClaims {
             roles: extract_roles(&data.claims, &self.role_claim),
             traced: extract_traced_claims(&data.claims, &self.trace_claims),
+            subject: extract_string(&data.claims, &self.subject_claim),
+            issuer: extract_string(&data.claims, "iss"),
+            expiry: data.claims.get("exp").and_then(Value::as_u64),
         })
     }
 
@@ -217,6 +237,16 @@ fn extract_roles(claims: &Value, claim: &str) -> HashSet<String> {
     }
 }
 
+/// Read a claim that must be a string. A claim of any other shape yields `None`
+/// rather than a stringified value: an identity derived from coercing a number
+/// or an array is not an identity anyone registered with a provider.
+fn extract_string(claims: &Value, claim: &str) -> Option<String> {
+    match claims.get(claim) {
+        Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
+        _ => None,
+    }
+}
+
 /// Pick the `--trace-claim` claims out of the token, preserving each value's
 /// JSON shape (string, number, array, …). Claims absent from the token are
 /// skipped — only what was actually present is traced.
@@ -258,6 +288,7 @@ mod tests {
         let authz = Authorizer {
             jwks: JwkSet { keys: vec![] },
             role_claim: "roles".into(),
+            subject_claim: "sub".into(),
             rules: parse_rules(&["admin:.*".into(), "reader:^get".into()]).expect("valid mappings"),
             trace_claims: vec![],
         };
@@ -338,6 +369,7 @@ mod tests {
         Authorizer {
             jwks,
             role_claim: "roles".into(),
+            subject_claim: "sub".into(),
             rules: parse_rules(&["admin:.*".into()]).expect("valid mapping"),
             trace_claims: vec!["sub".into(), "email".into()],
         }
@@ -346,10 +378,17 @@ mod tests {
     /// Sign a token with the test key, `kid` header, a fixed `sub`, and the
     /// given expiry.
     fn sign(roles_claim: Value, exp_unix: u64, kid: Option<&str>) -> String {
+        sign_claims(
+            json!({ "roles": roles_claim, "sub": "user-123", "exp": exp_unix }),
+            kid,
+        )
+    }
+
+    /// Sign an arbitrary claim set with the test key.
+    fn sign_claims(claims: Value, kid: Option<&str>) -> String {
         use jsonwebtoken::{EncodingKey, Header};
         let mut header = Header::new(Algorithm::RS256);
         header.kid = kid.map(str::to_string);
-        let claims = json!({ "roles": roles_claim, "sub": "user-123", "exp": exp_unix });
         let key = EncodingKey::from_rsa_pem(TEST_PRIV_PEM.as_bytes()).expect("test key parses");
         jsonwebtoken::encode(&header, &claims, &key).expect("signing succeeds")
     }
@@ -394,5 +433,90 @@ mod tests {
         // Unknown kid: no matching JWK.
         let unknown = sign(json!(["admin"]), in_one_hour(), Some("other-key"));
         assert!(authz.verify(&unknown).is_err());
+    }
+
+    #[test]
+    fn verify_reads_the_delegation_identity() {
+        let authz = test_authorizer();
+        let exp = in_one_hour();
+        let token = sign_claims(
+            json!({
+                "roles": ["admin"],
+                "sub": "user-123",
+                "iss": "https://idp.example.com/",
+                "exp": exp,
+            }),
+            Some(TEST_KID),
+        );
+        let claims = authz.verify(&token).expect("valid token verifies");
+        assert_eq!(claims.subject.as_deref(), Some("user-123"));
+        // The issuer scopes the subject: it is half of the delegated cache key.
+        assert_eq!(claims.issuer.as_deref(), Some("https://idp.example.com/"));
+        assert_eq!(claims.expiry, Some(exp));
+    }
+
+    #[test]
+    fn the_delegation_subject_can_come_from_another_claim() {
+        // Many providers mint an opaque `sub` the upstream does not know, so the
+        // claim is configurable.
+        let mut authz = test_authorizer();
+        authz.subject_claim = "email".into();
+        let token = sign_claims(
+            json!({ "roles": ["admin"], "sub": "opaque-guid", "email": "a@b.com", "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        let claims = authz.verify(&token).expect("valid token verifies");
+        assert_eq!(claims.subject.as_deref(), Some("a@b.com"));
+    }
+
+    #[test]
+    fn a_missing_or_non_string_subject_claim_denies_delegation() {
+        let authz = test_authorizer();
+
+        // Absent: no identity to act as.
+        let token = sign_claims(
+            json!({ "roles": ["admin"], "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        assert!(authz.verify(&token).expect("verifies").subject.is_none());
+
+        // Empty is not an identity either.
+        let token = sign_claims(
+            json!({ "roles": ["admin"], "sub": "", "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        assert!(authz.verify(&token).expect("verifies").subject.is_none());
+
+        // A non-string claim must never become an identity. Which layer refuses
+        // it varies — `jsonwebtoken` types the registered claims itself and
+        // rejects a composite value outright, while a scalar reaches our own
+        // guard — so assert the property that matters rather than the mechanism.
+        for shape in [json!(42), json!(["a"]), json!(null), json!({ "a": 1 })] {
+            let token = sign_claims(
+                json!({ "roles": ["admin"], "sub": shape.clone(), "exp": in_one_hour() }),
+                Some(TEST_KID),
+            );
+            let subject = authz.verify(&token).ok().and_then(|claims| claims.subject);
+            assert!(
+                subject.is_none(),
+                "a `sub` of {shape} must not yield an identity, got {subject:?}"
+            );
+        }
+
+        // A *custom* claim is not one `jsonwebtoken` knows about, so this is
+        // where our own guard earns its keep: no identity, rather than a
+        // stringified number.
+        let mut authz = test_authorizer();
+        authz.subject_claim = "tenant_id".into();
+        for shape in [json!(42), json!(["a"]), json!(null)] {
+            let token = sign_claims(
+                json!({ "roles": ["admin"], "sub": "user-123", "tenant_id": shape.clone(), "exp": in_one_hour() }),
+                Some(TEST_KID),
+            );
+            assert!(
+                authz.verify(&token).expect("verifies").subject.is_none(),
+                "a claim of {shape} must not yield a subject"
+            );
+        }
     }
 }

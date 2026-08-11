@@ -43,6 +43,49 @@ impl std::fmt::Display for SigningAlg {
     }
 }
 
+/// Which OAuth grant obtains the upstream token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum UpstreamGrant {
+    /// RFC 6749 — the server acts as itself. One token for every caller.
+    ClientCredentials,
+    /// RFC 7523 §2.1 — a JWT assertion *is* the grant, so the token can be
+    /// obtained on behalf of a subject rather than for the server itself.
+    JwtBearer,
+}
+
+impl std::fmt::Display for UpstreamGrant {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ClientCredentials => "client-credentials",
+            Self::JwtBearer => "jwt-bearer",
+        })
+    }
+}
+
+/// Who signs the RFC 7523 §2.1 assertion presented as the grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum AssertionSource {
+    /// oas2mcp signs the assertion with its own key, naming the subject it
+    /// speaks for. The authorization server must trust oas2mcp to assert that
+    /// subject.
+    SelfSigned,
+    /// The caller's own verified JWT is relayed as the assertion. No key needed,
+    /// but the caller's token must be addressed (`aud`) to the authorization
+    /// server, which most identity providers do not do by default.
+    Caller,
+}
+
+impl std::fmt::Display for AssertionSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::SelfSigned => "self-signed",
+            Self::Caller => "caller",
+        })
+    }
+}
+
 /// MCP transport to expose the server over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
@@ -319,6 +362,66 @@ pub struct Cli {
         requires = "upstream_oauth_private_key"
     )]
     pub upstream_oauth_assertion_lifetime: Option<Duration>,
+
+    /// Which grant obtains the upstream token. `client-credentials` (the
+    /// default) gets one token for the server itself, shared by every caller.
+    /// `jwt-bearer` (RFC 7523 §2.1) presents a JWT assertion as the grant, which
+    /// is what lets the token be obtained **on behalf of the caller** — so the
+    /// upstream API sees who is really acting and can apply its own
+    /// authorization, instead of every call arriving as one service account.
+    #[arg(
+        long = "upstream-oauth-grant",
+        env = "UPSTREAM_OAUTH_GRANT",
+        default_value_t = UpstreamGrant::ClientCredentials
+    )]
+    pub upstream_oauth_grant: UpstreamGrant,
+
+    /// Who signs the `jwt-bearer` assertion. `self-signed` (the default) has
+    /// oas2mcp sign it with `--upstream-oauth-private-key`; `caller` relays the
+    /// caller's own verified JWT instead, which needs no key but requires the
+    /// caller's token to be addressed to the authorization server. Only used
+    /// with `--upstream-oauth-grant jwt-bearer`.
+    #[arg(
+        long = "upstream-oauth-assertion",
+        env = "UPSTREAM_OAUTH_ASSERTION",
+        default_value_t = AssertionSource::SelfSigned
+    )]
+    pub upstream_oauth_assertion: AssertionSource,
+
+    /// `iss` claim of the `jwt-bearer` assertion, identifying oas2mcp to the
+    /// authorization server. Defaults to `--upstream-oauth-client-id`. Only used
+    /// with a `self-signed` assertion.
+    #[arg(long = "upstream-oauth-issuer", env = "UPSTREAM_OAUTH_ISSUER")]
+    pub upstream_oauth_issuer: Option<String>,
+
+    /// Fixed `sub` for the `jwt-bearer` assertion: every call obtains a token for
+    /// this one subject, whoever the caller is. Use it for a service account.
+    /// Mutually exclusive with `--upstream-oauth-subject-claim`, which is the
+    /// per-caller alternative and the default.
+    #[arg(
+        long = "upstream-oauth-subject",
+        env = "UPSTREAM_OAUTH_SUBJECT",
+        conflicts_with = "upstream_oauth_subject_claim"
+    )]
+    pub upstream_oauth_subject: Option<String>,
+
+    /// Name of the claim in the **caller's verified JWT** whose value becomes the
+    /// `sub` of the `jwt-bearer` assertion — i.e. the identity oas2mcp acts on
+    /// behalf of. Defaults to `sub`; many providers need `email` or
+    /// `preferred_username` instead, because their `sub` is an opaque identifier
+    /// the upstream authorization server does not know.
+    ///
+    /// Delegation requires a verified caller identity, so this mode needs
+    /// `--oauth-role-mapper` with a JWKS and the `streamable-http` transport. A
+    /// call whose token lacks the claim is **rejected**: falling back to a
+    /// broader identity would turn a configuration slip into a privilege
+    /// escalation.
+    #[arg(
+        long = "upstream-oauth-subject-claim",
+        env = "UPSTREAM_OAUTH_SUBJECT_CLAIM",
+        default_value = "sub"
+    )]
+    pub upstream_oauth_subject_claim: String,
 
     /// OAuth 2.0 scope requested for the upstream-API token. Repeatable; sent
     /// space-joined as the `scope` parameter. When set via the environment
@@ -688,6 +791,51 @@ mod tests {
         assert!(cli.openapi_oauth_private_key.is_some());
         assert_eq!(cli.upstream_oauth_client_id.as_deref(), Some("api"));
         assert!(cli.upstream_oauth_private_key.is_none());
+    }
+
+    #[test]
+    fn a_fixed_subject_and_a_subject_claim_are_mutually_exclusive() {
+        // Two different answers to "who do we act as" — accepting both would
+        // leave the precedence up to a coin toss.
+        let err = Cli::try_parse_from([
+            "oas2mcp",
+            "--upstream-oauth-subject",
+            "service-acct",
+            "--upstream-oauth-subject-claim",
+            "email",
+        ])
+        .expect_err("a fixed subject and a claim together must be rejected");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn the_grant_and_assertion_source_default_to_the_safe_choices() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
+        // Delegation is opt-in: the default grant asks for nothing about callers.
+        assert_eq!(cli.upstream_oauth_grant, UpstreamGrant::ClientCredentials);
+        assert_eq!(cli.upstream_oauth_assertion, AssertionSource::SelfSigned);
+        assert_eq!(cli.upstream_oauth_subject_claim, "sub");
+        assert!(cli.upstream_oauth_subject.is_none());
+
+        for (rendered, expected) in [
+            ("client-credentials", UpstreamGrant::ClientCredentials),
+            ("jwt-bearer", UpstreamGrant::JwtBearer),
+        ] {
+            let cli = Cli::try_parse_from(["oas2mcp", "--upstream-oauth-grant", rendered])
+                .unwrap_or_else(|err| panic!("`{rendered}` must parse: {err}"));
+            assert_eq!(cli.upstream_oauth_grant, expected);
+        }
+        // `default_value_t` renders through `Display`, so both names must parse back.
+        for grant in [UpstreamGrant::ClientCredentials, UpstreamGrant::JwtBearer] {
+            let rendered = grant.to_string();
+            Cli::try_parse_from(["oas2mcp", "--upstream-oauth-grant", &rendered])
+                .unwrap_or_else(|err| panic!("`{rendered}` must round-trip: {err}"));
+        }
+        for source in [AssertionSource::SelfSigned, AssertionSource::Caller] {
+            let rendered = source.to_string();
+            Cli::try_parse_from(["oas2mcp", "--upstream-oauth-assertion", &rendered])
+                .unwrap_or_else(|err| panic!("`{rendered}` must round-trip: {err}"));
+        }
     }
 
     #[test]

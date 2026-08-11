@@ -56,6 +56,8 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    check_delegation_is_possible(&cli, authorizer.is_some())?;
+
     let telemetry =
         telemetry::Telemetry::from_cli(&cli).context("configuring metrics telemetry")?;
 
@@ -114,6 +116,41 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Refuse to start when the upstream grant delegates but no call could ever
+/// supply a caller identity.
+///
+/// This is an error, not a warning. The other "ineffective flag" cases degrade
+/// into doing less; this one would leave a server that accepts calls and fails
+/// every single one of them, which is worse discovered at startup than at the
+/// first tool call. And the alternative — falling back to the client's own
+/// identity — is exactly the privilege escalation the delegation exists to
+/// avoid.
+fn check_delegation_is_possible(cli: &Cli, has_authorizer: bool) -> anyhow::Result<()> {
+    let delegates = cli.upstream_oauth_token_url.is_some()
+        && cli.upstream_oauth_grant == cli::UpstreamGrant::JwtBearer
+        && cli.upstream_oauth_subject.is_none();
+    if !delegates {
+        return Ok(());
+    }
+
+    if !has_authorizer {
+        anyhow::bail!(
+            "--upstream-oauth-grant jwt-bearer acts on behalf of the caller, which needs a \
+             verified caller identity: configure --oauth-role-mapper with a JWKS, or pin a \
+             fixed identity with --upstream-oauth-subject"
+        );
+    }
+    if cli.transport != cli::Transport::StreamableHttp {
+        anyhow::bail!(
+            "--upstream-oauth-grant jwt-bearer acts on behalf of the caller, but the {} \
+             transport exposes no client JWT: use --transport streamable-http, or pin a fixed \
+             identity with --upstream-oauth-subject",
+            cli.transport
+        );
+    }
+    Ok(())
+}
+
 /// Periodically re-fetch the OpenAPI document from `url` and swap the server's
 /// tool set. A failed fetch or rebuild is logged and the previous tool set is
 /// kept, so a transient upstream blip never empties the server.
@@ -143,5 +180,85 @@ async fn reload_loop(
                 "failed to fetch the OpenAPI document for reload; keeping the current set"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+
+    use super::*;
+
+    fn cli_from(args: &[&str]) -> Cli {
+        Cli::try_parse_from(std::iter::once("oas2mcp").chain(args.iter().copied()))
+            .expect("CLI parses")
+    }
+
+    /// The flags that turn on a delegating upstream grant.
+    fn delegating(extra: &[&str]) -> Vec<String> {
+        let mut args: Vec<String> = [
+            "--upstream-oauth-token-url",
+            "https://idp.example.com/token",
+            "--upstream-oauth-client-id",
+            "id",
+            "--upstream-oauth-private-key",
+            "tests/fixtures/test_rsa_key.pem",
+            "--upstream-oauth-grant",
+            "jwt-bearer",
+        ]
+        .iter()
+        .map(|arg| (*arg).to_string())
+        .collect();
+        args.extend(extra.iter().map(|arg| (*arg).to_string()));
+        args
+    }
+
+    #[test]
+    fn delegation_needs_a_verified_caller() {
+        let args = delegating(&["--transport", "streamable-http"]);
+        let cli = cli_from(&args.iter().map(String::as_str).collect::<Vec<_>>());
+
+        // Without an authorizer there is no verified identity, so every call
+        // would fail. Better to say so now than at the first tool call.
+        let err = check_delegation_is_possible(&cli, false)
+            .expect_err("delegation without an authorizer must be refused");
+        assert!(
+            format!("{err:#}").contains("verified caller identity"),
+            "{err:#}"
+        );
+
+        check_delegation_is_possible(&cli, true).expect("with an authorizer it is fine");
+    }
+
+    #[test]
+    fn delegation_needs_a_transport_that_carries_a_jwt() {
+        let args = delegating(&[]);
+        let cli = cli_from(&args.iter().map(String::as_str).collect::<Vec<_>>());
+        // Default transport is stdio, which exposes no client headers.
+        let err =
+            check_delegation_is_possible(&cli, true).expect_err("stdio cannot carry a caller JWT");
+        assert!(format!("{err:#}").contains("streamable-http"), "{err:#}");
+    }
+
+    #[test]
+    fn a_fixed_subject_needs_neither() {
+        // A service account acts as itself, so it works on any transport with no
+        // authorizer at all.
+        let args = delegating(&["--upstream-oauth-subject", "service-acct"]);
+        let cli = cli_from(&args.iter().map(String::as_str).collect::<Vec<_>>());
+        check_delegation_is_possible(&cli, false).expect("a fixed subject delegates to nobody");
+    }
+
+    #[test]
+    fn client_credentials_is_never_gated() {
+        let cli = cli_from(&[
+            "--upstream-oauth-token-url",
+            "https://idp.example.com/token",
+            "--upstream-oauth-client-id",
+            "id",
+            "--upstream-oauth-client-secret",
+            "secret",
+        ]);
+        check_delegation_is_possible(&cli, false).expect("client_credentials delegates to nobody");
     }
 }

@@ -4,6 +4,7 @@
 {{- include "oas2mcp.caCertsValidate" . }}
 {{- include "oas2mcp.oauthClientAuthValidate" . }}
 {{- include "oas2mcp.upstreamOauthClientAuthValidate" . }}
+{{- include "oas2mcp.upstreamDelegationValidate" . }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -188,6 +189,26 @@ spec:
             {{- end }}
             {{- with .Values.oas2mcp.upstream.oauth.privateKey.assertionLifetime }}
             - name: UPSTREAM_OAUTH_ASSERTION_LIFETIME
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.grant }}
+            - name: UPSTREAM_OAUTH_GRANT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.assertion }}
+            - name: UPSTREAM_OAUTH_ASSERTION
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.issuer }}
+            - name: UPSTREAM_OAUTH_ISSUER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.subject }}
+            - name: UPSTREAM_OAUTH_SUBJECT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.upstream.oauth.subjectClaim }}
+            - name: UPSTREAM_OAUTH_SUBJECT_CLAIM
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.upstream.oauth.scopes }}

@@ -78,3 +78,4 @@ prometheus = { version = "0.14.0", default-features = false }
 uuid = { version = "1.24.0", features = ["v4"] }
 
 [dev-dependencies]
+base64 = "0.23.1"

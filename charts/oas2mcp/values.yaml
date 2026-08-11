@@ -144,7 +144,17 @@ oas2mcp:
       scopes: []
       # -- (string) OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0).
       audience: ~
-      # -- Authenticate with a JWT assertion signed per request (`private_key_jwt`, RFC 7523 §2.2) instead of a shared secret. Mutually exclusive with `clientSecret`/`existingSecret`; setting both fails the render.
+      # -- (string) Which grant obtains the token: `client-credentials` (the default) gets one token for the server itself, shared by every caller; `jwt-bearer` (RFC 7523 §2.1) obtains one **per caller**, so the upstream API sees who is really acting. Unset → the binary default. Maps to `UPSTREAM_OAUTH_GRANT`.
+      grant: ~
+      # -- (string) Who signs the `jwt-bearer` assertion: `self-signed` (the default, needs `privateKey`) or `caller` (relays the caller's own verified JWT, needs no key but requires their token's `aud` to be the authorization server). Maps to `UPSTREAM_OAUTH_ASSERTION`.
+      assertion: ~
+      # -- (string) `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. Unset → `clientId`. Maps to `UPSTREAM_OAUTH_ISSUER`.
+      issuer: ~
+      # -- (string) Fixed `sub` for the `jwt-bearer` assertion — a named service account, the same for every caller. Mutually exclusive with `subjectClaim`. Maps to `UPSTREAM_OAUTH_SUBJECT`.
+      subject: ~
+      # -- (string) Claim of the **caller's** verified JWT whose value becomes the assertion's `sub` — i.e. per-caller delegation. Unset → the binary default (`sub`); many providers need `email` instead. Requires `auth.roleMapper` with a JWKS and `transport: streamable-http`; the server refuses to start otherwise. Maps to `UPSTREAM_OAUTH_SUBJECT_CLAIM`.
+      subjectClaim: ~
+      # -- Authenticate with a JWT assertion signed per request (`private_key_jwt`, RFC 7523 §2.2) instead of a shared secret. Also signs the `jwt-bearer` grant assertion when `grant: jwt-bearer` with a `self-signed` assertion — one key, loaded once. Mutually exclusive with `clientSecret`/`existingSecret`; setting both fails the render.
       privateKey:
         # -- (string) Inline PKCS#8 PEM private key. Stored in a Secret and mounted read-only at mode `0440`. Ignored when `existingSecret.name` is set.
         inline: ~
