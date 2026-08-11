@@ -128,6 +128,22 @@ true
 {{- end -}}
 {{- end -}}
 
+{{/*
+  Refuse a delegating upstream grant that no call could ever satisfy — the binary
+  exits on this, so catching it at render time turns a CrashLoopBackOff into a
+  readable `helm` error.
+*/}}
+{{- define "oas2mcp.upstreamDelegationValidate" -}}
+{{- if and .Values.oas2mcp.upstream.oauth.tokenUrl (eq (.Values.oas2mcp.upstream.oauth.grant | toString) "jwt-bearer") (not .Values.oas2mcp.upstream.oauth.subject) -}}
+{{- if not .Values.oas2mcp.auth.roleMapper -}}
+{{- fail "oas2mcp.upstream.oauth.grant=jwt-bearer acts on behalf of the caller, which needs a verified identity: set oas2mcp.auth.roleMapper with a JWKS, or pin oas2mcp.upstream.oauth.subject" -}}
+{{- end -}}
+{{- if ne .Values.oas2mcp.transport "streamable-http" -}}
+{{- fail "oas2mcp.upstream.oauth.grant=jwt-bearer acts on behalf of the caller, which needs transport=streamable-http (no other transport carries a client JWT), or pin oas2mcp.upstream.oauth.subject" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Refuse two upstream client credentials at once, matching the binary. */}}
 {{- define "oas2mcp.upstreamOauthClientAuthValidate" -}}
 {{- if include "oas2mcp.upstreamOauthPrivateKeyEnabled" . -}}

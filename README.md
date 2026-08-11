@@ -50,10 +50,14 @@ writing a line of glue code.
   to every upstream request, or forward the MCP client's own request headers
   (e.g. `Authorization`) upstream per call (`streamable-http` only).
 - **OAuth for the upstream API** — obtain the upstream `Authorization: Bearer`
-  from an OAuth2 `client_credentials` grant, refreshed automatically before it
-  expires, instead of a static token that goes stale. Authenticates with a
-  client secret or a signed JWT assertion (RFC 7523 §2.2), and is configured
-  independently of the document-fetch grant.
+  from an OAuth2 grant, refreshed automatically before it expires, instead of a
+  static token that goes stale. Authenticates with a client secret or a signed
+  JWT assertion (RFC 7523 §2.2), and is configured independently of the
+  document-fetch grant.
+- **Acting on behalf of the caller** — with the `jwt-bearer` grant (RFC 7523
+  §2.1), obtain a *per-caller* upstream token from the identity in their verified
+  JWT, so the upstream API sees who is really acting and applies its own
+  authorization, instead of every call arriving as one shared service account.
 - **Role-based tool access** — verify the caller's JWT against a JWKS and gate
   which tools they can see and call, mapping each `role` to a tool-name regex
   (`streamable-http` only).
@@ -122,6 +126,11 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--upstream-oauth-assertion-lifetime` | `UPSTREAM_OAUTH_ASSERTION_LIFETIME` | `60s` | Upstream client assertion validity window. |
 | `--upstream-oauth-scope` | `UPSTREAM_OAUTH_SCOPES` | —          | OAuth2 scope requested for the upstream token. Repeatable; newline-separated via the env var. |
 | `--upstream-oauth-audience` | `UPSTREAM_OAUTH_AUDIENCE` | —      | OAuth2 `audience` parameter for the upstream token (e.g. Auth0). |
+| `--upstream-oauth-grant` | `UPSTREAM_OAUTH_GRANT` | `client-credentials` | `client-credentials`, or `jwt-bearer` (RFC 7523 §2.1) to obtain the token on behalf of a subject. |
+| `--upstream-oauth-assertion` | `UPSTREAM_OAUTH_ASSERTION` | `self-signed` | Who signs the `jwt-bearer` assertion: `self-signed` (by oas2mcp) or `caller` (relay the caller's own JWT). |
+| `--upstream-oauth-issuer` | `UPSTREAM_OAUTH_ISSUER` | client id | `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. |
+| `--upstream-oauth-subject` | `UPSTREAM_OAUTH_SUBJECT` | —      | Fixed `sub` for the assertion — a service account. Every caller shares one token. Mutually exclusive with the claim below. |
+| `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs `--oauth-role-mapper` and `streamable-http`. |
 | `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:tool_name_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Requires a JWKS source below. `streamable-http` only. |
 | `--oauth-jwks-url` | `OAUTH_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Required with `--oauth-role-mapper` (or use `--oauth-jwks-file`). |
 | `--oauth-jwks-file` | `OAUTH_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--oauth-jwks-url`. |
@@ -331,6 +340,84 @@ upstream rather than the real cause. The failure is logged with the provider's
 own diagnosis and counted as `outcome="auth_error"` in the metrics, kept
 distinct from an upstream error so a broken credential is not mistaken for a
 broken API.
+
+#### Acting on behalf of the caller
+
+`client_credentials` gets one token for the server itself, so every tool call
+reaches the API as the same principal. The upstream audit log shows one identity,
+and the API can no longer apply per-user authorization — the only gate left is
+`--oauth-role-mapper`, which filters *tool names*, not data. A `reader:^get`
+rule lets `getAllCustomers` through for the intern as readily as for the CFO.
+
+The `jwt-bearer` grant (RFC 7523 §2.1) fixes that: oas2mcp presents a signed
+assertion naming the caller, and the provider issues a token *for that user*.
+
+```bash
+oas2mcp \
+  --openapi-url https://api.example.com/openapi.json \
+  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+  --oauth-jwks-url https://idp.example.com/.well-known/jwks.json \
+  --oauth-role-mapper 'user:.*' \
+  --upstream-oauth-token-url https://idp.example.com/oauth/token \
+  --upstream-oauth-client-id "$CLIENT_ID" \
+  --upstream-oauth-private-key /etc/oas2mcp/upstream-key.pem \
+  --upstream-oauth-grant jwt-bearer \
+  --upstream-oauth-subject-claim email
+```
+
+The caller's JWT is verified against the JWKS, the named claim becomes the
+assertion's `sub`, and the resulting upstream token is cached **per caller**.
+`sub` is the default claim, but many providers mint an opaque identifier the
+upstream authorization server does not recognise — hence `email` above.
+
+Three properties worth knowing, because they are the difference between
+delegation and a security hole:
+
+- **No fallback.** A call with no verified identity is refused, and counted as
+  `auth_error`. Quietly falling back to the client's own token would hand the
+  least-authorized caller the broadest identity the server has, turning a
+  configuration slip into a privilege escalation. For the same reason the server
+  **refuses to start** if the grant delegates but no call could ever carry an
+  identity (no JWKS, or a transport with no client headers).
+- **Tokens are cached per `(issuer, subject)`, not per subject.** A `sub` is only
+  unique *within* an issuer, so two providers both minting `sub: alice` would
+  otherwise share one entry — and one tenant would receive another's token. The
+  cache is bounded (10k entries, evicting whatever expires soonest), because it
+  grows with your active user count.
+- **A delegated token is never cached past the caller's own `exp`.** Otherwise
+  revoking a user leaves a usable upstream token behind until the *upstream*
+  token expires, which can be much later.
+
+##### Choosing the mode
+
+| You want | Flags |
+| --- | --- |
+| One shared service identity | `--upstream-oauth-grant client-credentials` (the default) |
+| A named service account | `--upstream-oauth-grant jwt-bearer --upstream-oauth-subject svc@example.com` |
+| Per-caller delegation | `--upstream-oauth-grant jwt-bearer` (subject from the caller's claim) |
+| Relay the caller's own token | `--upstream-oauth-grant jwt-bearer --upstream-oauth-assertion caller` |
+
+A `self-signed` assertion needs `--upstream-oauth-private-key`: a shared secret
+cannot sign one, and oas2mcp says so at startup rather than failing every call.
+The same key signs both the client assertion (§2.2) and the grant assertion
+(§2.1) — it is loaded once.
+
+**The `self-signed` mode is a powerful credential.** The provider must be
+configured to trust oas2mcp to assert those subjects, which makes that key, in
+effect, "speak as anyone". Keep the provider's trust configuration as narrow as
+it goes, scope the upstream token to the minimum, and treat the key accordingly.
+
+The `caller` mode signs nothing and needs no key: the caller's verified JWT is
+relayed as the assertion, so the provider trusts *their* issuer rather than us.
+It is the cleanest option when it works, but it requires the caller's token to be
+addressed (`aud`) to the authorization server, which most identity providers do
+not do by default. When that is not the case, the mechanism you actually want is
+RFC 8693 token exchange, which oas2mcp does not implement.
+
+> Client authentication is still required alongside the `jwt-bearer` grant
+> (`--upstream-oauth-client-secret` or `--upstream-oauth-private-key`).
+> Providers that accept an assertion-only grant with no client authentication are
+> not supported.
 
 ### Role-based tool access from the caller's JWT
 

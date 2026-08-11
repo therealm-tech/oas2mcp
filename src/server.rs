@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, bail};
 use arc_swap::ArcSwap;
@@ -21,7 +22,7 @@ use url::Url;
 use crate::auth::Authorizer;
 use crate::cli::Cli;
 use crate::filter::{FilterConfig, OperationFilter};
-use crate::oauth::TokenProvider;
+use crate::oauth::{Delegation, TokenProvider};
 use crate::openapi::Spec;
 use crate::telemetry::{Metrics, Outcome};
 use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
@@ -59,7 +60,8 @@ pub struct OpenApiServer {
 }
 
 /// The authenticated caller of a request: their JWT roles (when authorization
-/// is enabled) and `sub` claim (when the token carried one).
+/// is enabled), the claims selected for tracing, and the identity a delegated
+/// upstream token is obtained for.
 struct Caller {
     /// `None` when no authorizer is configured (no restriction); `Some` carries
     /// the verified roles, empty when the token is missing or invalid.
@@ -68,6 +70,22 @@ struct Caller {
     /// tool call. Empty unless claim tracing is configured and the token carried
     /// them.
     traced_claims: Map<String, Value>,
+    /// The verified identity to delegate as, from a **successfully verified**
+    /// token only. `None` denies delegation.
+    identity: Option<Identity>,
+}
+
+/// A verified caller identity, everything a delegated token request needs.
+struct Identity {
+    /// Value of the delegation subject claim.
+    subject: String,
+    /// The token's `iss`, which scopes the subject: part of the cache key.
+    issuer: Option<String>,
+    /// The token's `exp` as an instant, so a delegated token is not cached past
+    /// the caller session that justified it.
+    expiry: Option<Instant>,
+    /// The caller's raw JWT, relayed by the `caller` assertion mode.
+    token: String,
 }
 
 impl OpenApiServer {
@@ -326,7 +344,7 @@ impl ServerHandler for OpenApiServer {
         // only (never a metric label), and only when `--trace-claim` selected
         // claims that the token actually carried.
         if !caller.traced_claims.is_empty() {
-            let claims = Value::Object(caller.traced_claims);
+            let claims = Value::Object(caller.traced_claims.clone());
             tracing::info!(
                 tool = %spec.name,
                 jwt.claims = %claims,
@@ -345,21 +363,58 @@ impl ServerHandler for OpenApiServer {
         // cause. The detail stays in the log: the MCP client has no business
         // knowing our provider's internals.
         let bearer = match &self.upstream_token {
-            Some(provider) => match provider.access_token().await {
-                Ok(token) => Some(token),
-                Err(err) => {
-                    tracing::error!(
-                        tool = %spec.name,
-                        error = %format!("{err:#}"),
-                        "failed to obtain the upstream OAuth token; not calling the API",
-                    );
-                    self.metrics
-                        .record_call(&spec.name, Outcome::AuthError, started.elapsed());
-                    return Ok(CallToolResult::error(vec![ContentBlock::text(
-                        "could not obtain an upstream OAuth token; see the server logs",
-                    )]));
+            Some(provider) => {
+                // A delegating grant needs a verified caller. No identity means
+                // no token — never a quiet fall back to the client's own, which
+                // would hand this caller the broadest identity the server has.
+                let delegation = if provider.needs_caller_identity() {
+                    match &caller.identity {
+                        Some(identity) => Some(Delegation {
+                            issuer: identity.issuer.as_deref(),
+                            subject: &identity.subject,
+                            expiry: identity.expiry,
+                            token: &identity.token,
+                        }),
+                        None => {
+                            tracing::warn!(
+                                tool = %spec.name,
+                                "denying tool call: the upstream grant delegates, but this call \
+                                 carries no verified caller identity",
+                            );
+                            self.metrics.record_call(
+                                &spec.name,
+                                Outcome::AuthError,
+                                started.elapsed(),
+                            );
+                            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                                "no verified caller identity to obtain an upstream token for",
+                            )]));
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let issued = match &delegation {
+                    Some(delegation) => provider.delegated_token(delegation).await,
+                    None => provider.access_token().await,
+                };
+                match issued {
+                    Ok(token) => Some(token),
+                    Err(err) => {
+                        tracing::error!(
+                            tool = %spec.name,
+                            error = %format!("{err:#}"),
+                            "failed to obtain the upstream OAuth token; not calling the API",
+                        );
+                        self.metrics
+                            .record_call(&spec.name, Outcome::AuthError, started.elapsed());
+                        return Ok(CallToolResult::error(vec![ContentBlock::text(
+                            "could not obtain an upstream OAuth token; see the server logs",
+                        )]));
+                    }
                 }
-            },
+            }
             None => None,
         };
 
@@ -393,6 +448,7 @@ impl OpenApiServer {
             return Caller {
                 roles: None,
                 traced_claims: Map::new(),
+                identity: None,
             };
         };
         let token = context
@@ -404,12 +460,19 @@ impl OpenApiServer {
                 Ok(claims) => Caller {
                     roles: Some(claims.roles),
                     traced_claims: claims.traced,
+                    identity: claims.subject.map(|subject| Identity {
+                        subject,
+                        issuer: claims.issuer,
+                        expiry: claims.expiry.and_then(unix_to_instant),
+                        token: token.to_string(),
+                    }),
                 },
                 Err(err) => {
                     tracing::warn!(error = %format!("{err:#}"), "rejecting request: JWT verification failed");
                     Caller {
                         roles: Some(HashSet::new()),
                         traced_claims: Map::new(),
+                        identity: None,
                     }
                 }
             },
@@ -418,6 +481,7 @@ impl OpenApiServer {
                 Caller {
                     roles: Some(HashSet::new()),
                     traced_claims: Map::new(),
+                    identity: None,
                 }
             }
         }
@@ -446,6 +510,18 @@ impl OpenApiServer {
             None => HeaderMap::new(),
         }
     }
+}
+
+/// Convert a JWT `exp` (seconds since the Unix epoch) into an [`Instant`].
+///
+/// `Instant` has no epoch, so the conversion goes through the wall clock: how far
+/// away `exp` is from now, added to now. Returns `None` for an expiry already in
+/// the past — the verifier rejects those, so it means the clocks disagree, and a
+/// zero-length trust window is the safe reading.
+fn unix_to_instant(exp: u64) -> Option<Instant> {
+    let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    exp.checked_sub(now_unix)
+        .map(|remaining| Instant::now() + std::time::Duration::from_secs(remaining))
 }
 
 /// Extract the bearer token from an `Authorization` header, if present and
