@@ -1,13 +1,6 @@
-//! OAuth 2.0 `client_credentials` token provider used to authenticate the
-//! OpenAPI document fetch. A long-running server that reloads the document
-//! periodically cannot rely on a static bearer token — it expires. This
-//! provider obtains a token from the configured endpoint, caches it, and
-//! refreshes it automatically shortly before it expires.
-//!
-//! The provider is configured through a [`TokenConfig`] rather than reading the
-//! [`Cli`] directly: the grant is a self-contained piece of configuration, and
-//! keeping it that way is what makes the token request testable against a local
-//! endpoint without fabricating a whole command line.
+//! The token provider itself: issues, caches and refreshes the access token,
+//! whichever way the client authenticates. See the module docs of the parent
+//! for the shape of the configuration.
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -15,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
 use serde::Deserialize;
-use url::Url;
 
+use super::{ClientAuth, TokenConfig, assertion};
 use crate::cli::Cli;
 
 /// Refresh a token this long before its advertised expiry, to avoid racing a
@@ -26,43 +19,8 @@ const REFRESH_MARGIN: Duration = Duration::from_secs(60);
 /// Default token lifetime assumed when the token endpoint omits `expires_in`.
 const DEFAULT_TTL: Duration = Duration::from_secs(3600);
 
-/// Everything needed to run one `client_credentials` grant against one token
-/// endpoint. Self-contained on purpose — see the module docs.
-pub struct TokenConfig {
-    pub token_url: Url,
-    pub client_id: String,
-    pub client_secret: String,
-    pub scopes: Vec<String>,
-    pub audience: Option<String>,
-}
-
-impl TokenConfig {
-    /// Read the document-fetch grant off the CLI, or `None` when no OAuth token
-    /// URL is configured.
-    fn from_cli(cli: &Cli) -> anyhow::Result<Option<Self>> {
-        let Some(token_url) = cli.openapi_oauth_token_url.clone() else {
-            return Ok(None);
-        };
-        // clap enforces these via `requires`, but fail loudly rather than panic
-        // if that ever changes.
-        let client_id = cli
-            .openapi_oauth_client_id
-            .clone()
-            .context("--openapi-oauth-client-id is required with --openapi-oauth-token-url")?;
-        let client_secret = cli
-            .openapi_oauth_client_secret
-            .clone()
-            .context("--openapi-oauth-client-secret is required with --openapi-oauth-token-url")?;
-
-        Ok(Some(Self {
-            token_url,
-            client_id,
-            client_secret,
-            scopes: cli.openapi_oauth_scopes.clone(),
-            audience: cli.openapi_oauth_audience.clone(),
-        }))
-    }
-}
+/// `client_assertion_type` naming a JWT bearer assertion, per RFC 7523 §2.2.
+const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
 /// A cached access token and the instant past which it should be re-fetched.
 struct CachedToken {
@@ -109,7 +67,7 @@ impl TokenProvider {
     /// Build the provider from the CLI, or `None` when no OAuth token URL is
     /// configured.
     pub fn from_cli(cli: &Cli, client: reqwest::Client) -> anyhow::Result<Option<Self>> {
-        Ok(TokenConfig::from_cli(cli)?.map(|config| Self::new(config, client)))
+        Ok(super::TokenConfig::from_cli(cli)?.map(|config| Self::new(config, client)))
     }
 
     /// Return a valid access token, fetching a fresh one when the cache is
@@ -152,12 +110,25 @@ impl TokenProvider {
             form.push(("audience", audience.clone()));
         }
 
-        let response = self
-            .inner
-            .client
-            .post(config.token_url.clone())
-            // Client authentication via HTTP Basic, as recommended by RFC 6749.
-            .basic_auth(&config.client_id, Some(&config.client_secret))
+        let mut request = self.inner.client.post(config.token_url.clone());
+        match &config.client_auth {
+            // HTTP Basic, as recommended by RFC 6749 §2.3.1.
+            ClientAuth::Secret(secret) => {
+                request = request.basic_auth(&config.client_id, Some(secret));
+            }
+            // RFC 7523 §2.2. `client_id` duplicates the assertion's `iss` and is
+            // not required by the RFC, but several providers reject the request
+            // without it — and sending it costs nothing.
+            ClientAuth::PrivateKeyJwt { assertion, key } => {
+                let signed = assertion::sign(assertion, key)
+                    .context("signing the client assertion for the token request")?;
+                form.push(("client_id", config.client_id.clone()));
+                form.push(("client_assertion_type", CLIENT_ASSERTION_TYPE.to_string()));
+                form.push(("client_assertion", signed));
+            }
+        }
+
+        let response = request
             .form(&form)
             .send()
             .await
@@ -204,8 +175,10 @@ mod tests {
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::{IntoResponse, Response};
     use axum::routing::post;
+    use url::Url;
 
     use super::*;
+    use crate::oauth::AssertionConfig;
 
     #[test]
     fn trust_window_subtracts_the_refresh_margin() {
@@ -356,16 +329,37 @@ mod tests {
     }
 
     fn provider_for(fake: &FakeAs, scopes: &[&str], audience: Option<&str>) -> TokenProvider {
+        provider_with(
+            fake,
+            ClientAuth::Secret("test-secret".into()),
+            scopes,
+            audience,
+        )
+    }
+
+    fn provider_with(
+        fake: &FakeAs,
+        client_auth: ClientAuth,
+        scopes: &[&str],
+        audience: Option<&str>,
+    ) -> TokenProvider {
         TokenProvider::new(
             TokenConfig {
                 token_url: fake.token_url.clone(),
                 client_id: "test-client".into(),
-                client_secret: "test-secret".into(),
+                client_auth,
                 scopes: scopes.iter().map(|s| (*s).to_string()).collect(),
                 audience: audience.map(str::to_string),
             },
             reqwest::Client::new(),
         )
+    }
+
+    /// Pull one form field out of a captured request body.
+    fn form_field(body: &str, name: &str) -> Option<String> {
+        url::form_urlencoded::parse(body.as_bytes())
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
     }
 
     #[tokio::test]
@@ -382,9 +376,10 @@ mod tests {
         assert_eq!(fake.calls(), 1);
 
         let seen = fake.last_seen();
-        // Client authentication is HTTP Basic today; pinning it here means the
-        // RFC 7523 `private_key_jwt` work has to state its intent explicitly.
+        // A shared secret authenticates over HTTP Basic, and nothing about the
+        // client leaks into the form body.
         assert_eq!(seen.auth_scheme.as_deref(), Some("Basic"));
+        assert!(form_field(&seen.body, "client_assertion").is_none());
         assert!(
             seen.body.contains("grant_type=client_credentials"),
             "body: {}",
@@ -518,41 +513,127 @@ mod tests {
         assert!(provider.cached().is_none());
     }
 
-    #[test]
-    fn from_cli_is_none_without_a_token_url() {
-        use clap::Parser as _;
-
-        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
-        let provider = TokenProvider::from_cli(&cli, reqwest::Client::new())
-            .expect("no OAuth config is not an error");
-        assert!(provider.is_none());
+    /// A `private_key_jwt` client auth backed by the RSA fixture.
+    fn private_key_jwt(audience: &str) -> ClientAuth {
+        ClientAuth::PrivateKeyJwt {
+            assertion: AssertionConfig {
+                issuer: "test-client".into(),
+                subject: "test-client".into(),
+                audience: audience.to_string(),
+                lifetime: Duration::from_secs(60),
+            },
+            key: super::super::key::load(
+                std::path::Path::new("tests/fixtures/test_rsa_key.pem"),
+                crate::cli::SigningAlg::Rs256,
+                Some("kid-1".to_string()),
+            )
+            .expect("the RSA fixture loads"),
+        }
     }
 
-    #[test]
-    fn from_cli_reads_the_whole_grant() {
-        use clap::Parser as _;
+    #[tokio::test]
+    async fn private_key_jwt_sends_a_signed_assertion_instead_of_basic_auth() {
+        let fake = spawn_as(Reply::Token {
+            access_token: "token-1",
+            expires_in: Some(3600),
+        })
+        .await;
+        let audience = fake.token_url.to_string();
+        let provider = provider_with(
+            &fake,
+            private_key_jwt(&audience),
+            &["read:openapi"],
+            Some("api://target"),
+        );
 
-        let cli = Cli::try_parse_from([
-            "oas2mcp",
-            "--openapi-oauth-token-url",
-            "https://idp.example.com/token",
-            "--openapi-oauth-client-id",
-            "id",
-            "--openapi-oauth-client-secret",
-            "secret",
-            "--openapi-oauth-scope",
-            "read:openapi",
-            "--openapi-oauth-audience",
-            "api://target",
-        ])
-        .expect("complete OAuth config parses");
+        let token = provider.access_token().await.expect("the token is issued");
+        assert_eq!(token, "token-1");
 
-        let config = TokenConfig::from_cli(&cli)
-            .expect("the grant is well-formed")
-            .expect("a token URL was given");
-        assert_eq!(config.token_url.as_str(), "https://idp.example.com/token");
-        assert_eq!(config.client_id, "id");
-        assert_eq!(config.scopes, vec!["read:openapi".to_string()]);
-        assert_eq!(config.audience.as_deref(), Some("api://target"));
+        let seen = fake.last_seen();
+        // The whole point: no shared secret travels, so no Basic credential.
+        assert!(
+            seen.auth_scheme.is_none(),
+            "auth scheme: {:?}",
+            seen.auth_scheme
+        );
+        assert_eq!(
+            form_field(&seen.body, "grant_type").as_deref(),
+            Some("client_credentials"),
+        );
+        assert_eq!(
+            form_field(&seen.body, "client_assertion_type").as_deref(),
+            Some("urn:ietf:params:oauth:client-assertion-type:jwt-bearer"),
+        );
+        // Redundant with the assertion's `iss`, but several providers insist.
+        assert_eq!(
+            form_field(&seen.body, "client_id").as_deref(),
+            Some("test-client"),
+        );
+        // Scope and audience still ride along — client authentication and the
+        // grant are separate concerns, and swapping one must not disturb the
+        // other. `audience` in particular is the provider-specific parameter
+        // (Auth0 and friends) that decides *which API* the token is for.
+        assert_eq!(
+            form_field(&seen.body, "scope").as_deref(),
+            Some("read:openapi"),
+        );
+        assert_eq!(
+            form_field(&seen.body, "audience").as_deref(),
+            Some("api://target"),
+        );
+
+        // The assertion the AS received must verify against the client's public
+        // key and be addressed to the AS. Claim-level coverage lives in
+        // `assertion`; this checks the wire actually carried a usable one.
+        let sent = form_field(&seen.body, "client_assertion").expect("an assertion was sent");
+        let key = jsonwebtoken::DecodingKey::from_rsa_components(RSA_N, "AQAB")
+            .expect("public key builds");
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
+        validation.set_audience(&[audience.as_str()]);
+        let claims = jsonwebtoken::decode::<serde_json::Value>(&sent, &key, &validation)
+            .expect("the assertion verifies against the client's public key")
+            .claims;
+        assert_eq!(claims["iss"], "test-client");
+        assert_eq!(
+            jsonwebtoken::decode_header(&sent)
+                .expect("header decodes")
+                .kid
+                .as_deref(),
+            Some("kid-1")
+        );
     }
+
+    #[tokio::test]
+    async fn a_fresh_assertion_is_minted_for_every_token_request() {
+        let fake = spawn_as(Reply::Token {
+            access_token: "token-1",
+            expires_in: Some(3600),
+        })
+        .await;
+        let audience = fake.token_url.to_string();
+        let provider = provider_with(&fake, private_key_jwt(&audience), &[], None);
+
+        provider.access_token().await.expect("first token");
+        // Age the cache so the next call really goes back to the endpoint.
+        provider
+            .inner
+            .cache
+            .lock()
+            .expect("token cache mutex poisoned")
+            .as_mut()
+            .expect("a token was cached")
+            .refresh_at = Instant::now() - Duration::from_secs(1);
+        provider.access_token().await.expect("refreshed token");
+
+        let seen = fake.seen.lock().expect("seen mutex poisoned").clone();
+        assert_eq!(seen.len(), 2);
+        let first = form_field(&seen[0].body, "client_assertion").expect("first assertion");
+        let second = form_field(&seen[1].body, "client_assertion").expect("second assertion");
+        // Reusing an assertion is what an AS replay cache rejects, so the
+        // provider must never cache one alongside the token.
+        assert_ne!(first, second);
+    }
+
+    /// Modulus of the throwaway RSA fixture, to verify what the AS received.
+    const RSA_N: &str = "pIrAmCcbgl0Z6Fmomx9TVpVhMiOjJOrtjzKHoKnV5pYyFz86Zpor4tHmK8inQB6ES7j2V-0cgnT-62g_wCCwJHS-jJY0GawNgkxPq_5zFSFBuhJjyGpQzofexEPP7Qof6ZQKRViNw5A64C-dkcgoixhOBS1TWk6mkDOgoYOv9q2IUM5saRYZIwQw7OU4hsKetZcq8gbmVSjbzPylFryaIu5Udlo4JxFt-7t0RG_N858nu6eBYR68KMlOZIqN4YsaaQBm6teCdOUUXxAww8Yuij0gbz_YXMSnu5A5Ooff8w83kQLJqPLJyyEb357CvCqZsDZmlp3LFVRRmNuDPUtTKQ";
 }

@@ -5,9 +5,43 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::{Parser, ValueEnum};
+use clap::{ArgGroup, Parser, ValueEnum};
 use regex::Regex;
 use url::Url;
+
+/// Signature algorithm for the JWT client assertions of RFC 7523. Only
+/// asymmetric algorithms are offered: RFC 7523 §2.2 permits a MAC, but an HMAC
+/// keyed on the client secret adds nothing over sending the secret itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum SigningAlg {
+    Rs256,
+    Rs384,
+    Rs512,
+    Ps256,
+    Ps384,
+    Ps512,
+    Es256,
+    Es384,
+    EdDsa,
+}
+
+impl std::fmt::Display for SigningAlg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Mirror the `ValueEnum` names so `default_value_t` round-trips.
+        f.write_str(match self {
+            Self::Rs256 => "rs256",
+            Self::Rs384 => "rs384",
+            Self::Rs512 => "rs512",
+            Self::Ps256 => "ps256",
+            Self::Ps384 => "ps384",
+            Self::Ps512 => "ps512",
+            Self::Es256 => "es256",
+            Self::Es384 => "es384",
+            Self::EdDsa => "eddsa",
+        })
+    }
+}
 
 /// MCP transport to expose the server over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -39,6 +73,14 @@ fn default_bind_addr() -> SocketAddr {
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "oas2mcp", version, about, long_about = None)]
+// The document-fetch grant authenticates with *either* a shared secret or a
+// signed assertion, never both. Naming the pair as a group is what lets
+// `--openapi-oauth-token-url` require "one of these" rather than a single flag.
+#[command(group(
+    ArgGroup::new("openapi_oauth_client_auth")
+        .args(["openapi_oauth_client_secret", "openapi_oauth_private_key"])
+        .multiple(false)
+))]
 pub struct Cli {
     /// Path to an OpenAPI document (JSON or YAML) on disk.
     #[arg(long, env = "OPENAPI_FILE", conflicts_with = "openapi_url")]
@@ -72,31 +114,87 @@ pub struct Cli {
     /// the OpenAPI document fetch (initial and every reload) authenticates with
     /// a bearer token obtained here, refreshed automatically before it expires —
     /// use it instead of a static `--openapi-header` token that would go stale
-    /// on a long-running server. Requires `--openapi-oauth-client-id` and
-    /// `--openapi-oauth-client-secret`.
+    /// on a long-running server. Requires `--openapi-oauth-client-id` plus one
+    /// of `--openapi-oauth-client-secret` / `--openapi-oauth-private-key`.
     #[arg(
         long = "openapi-oauth-token-url",
         env = "OPENAPI_OAUTH_TOKEN_URL",
-        requires = "openapi_oauth_client_id"
+        requires_all = ["openapi_oauth_client_id", "openapi_oauth_client_auth"]
     )]
     pub openapi_oauth_token_url: Option<Url>,
 
     /// OAuth 2.0 client ID for the document-fetch `client_credentials` grant.
-    #[arg(
-        long = "openapi-oauth-client-id",
-        env = "OPENAPI_OAUTH_CLIENT_ID",
-        requires = "openapi_oauth_client_secret"
-    )]
+    #[arg(long = "openapi-oauth-client-id", env = "OPENAPI_OAUTH_CLIENT_ID")]
     pub openapi_oauth_client_id: Option<String>,
 
     /// OAuth 2.0 client secret for the document-fetch `client_credentials`
-    /// grant. Prefer the environment variable over the command line so the
-    /// secret does not leak into the process list.
+    /// grant, sent over HTTP Basic. Prefer the environment variable over the
+    /// command line so the secret does not leak into the process list. Mutually
+    /// exclusive with `--openapi-oauth-private-key`.
     #[arg(
         long = "openapi-oauth-client-secret",
         env = "OPENAPI_OAUTH_CLIENT_SECRET"
     )]
     pub openapi_oauth_client_secret: Option<String>,
+
+    /// Path to a PEM file holding the client's private key, to authenticate the
+    /// document-fetch grant with a signed JWT assertion instead of a shared
+    /// secret (`private_key_jwt`, RFC 7523 §2.2). Use it with providers that
+    /// will not issue a client secret, or to keep the credential
+    /// non-exportable. PKCS#8 PEM is expected; the algorithm is
+    /// `--openapi-oauth-signing-alg`. Mutually exclusive with
+    /// `--openapi-oauth-client-secret`.
+    #[arg(
+        long = "openapi-oauth-private-key",
+        env = "OPENAPI_OAUTH_PRIVATE_KEY_FILE"
+    )]
+    pub openapi_oauth_private_key: Option<PathBuf>,
+
+    /// `kid` header to put on the client assertion, so the provider can pick the
+    /// right key from the ones it has registered for this client. Omit when the
+    /// provider holds a single key. Only used with
+    /// `--openapi-oauth-private-key`.
+    #[arg(
+        long = "openapi-oauth-key-id",
+        env = "OPENAPI_OAUTH_KEY_ID",
+        requires = "openapi_oauth_private_key"
+    )]
+    pub openapi_oauth_key_id: Option<String>,
+
+    /// Algorithm used to sign the client assertion. Must match the key type of
+    /// `--openapi-oauth-private-key` (an RSA key for `rs*`/`ps*`, an EC key for
+    /// `es*`, an Ed25519 key for `eddsa`) and be one the provider accepts. Only
+    /// used with `--openapi-oauth-private-key`.
+    #[arg(
+        long = "openapi-oauth-signing-alg",
+        env = "OPENAPI_OAUTH_SIGNING_ALG",
+        default_value_t = SigningAlg::Rs256
+    )]
+    pub openapi_oauth_signing_alg: SigningAlg,
+
+    /// `aud` claim of the client assertion, identifying the authorization
+    /// server. Defaults to the token endpoint URL, which is what RFC 7523
+    /// suggests and what most providers expect; override it when the provider
+    /// wants its issuer identifier instead. Only used with
+    /// `--openapi-oauth-private-key`.
+    #[arg(
+        long = "openapi-oauth-assertion-audience",
+        env = "OPENAPI_OAUTH_ASSERTION_AUDIENCE",
+        requires = "openapi_oauth_private_key"
+    )]
+    pub openapi_oauth_assertion_audience: Option<String>,
+
+    /// How long a client assertion stays valid (e.g. `30s`, `2m`). Defaults to
+    /// `60s`. Keep it short — the assertion is minted per token request, so a
+    /// long window only widens the replay opportunity. Only used with
+    /// `--openapi-oauth-private-key`.
+    #[arg(
+        long = "openapi-oauth-assertion-lifetime",
+        env = "OPENAPI_OAUTH_ASSERTION_LIFETIME",
+        value_parser = humantime::parse_duration,
+        requires = "openapi_oauth_private_key"
+    )]
+    pub openapi_oauth_assertion_lifetime: Option<Duration>,
 
     /// OAuth 2.0 scope requested for the document-fetch token. Repeatable; sent
     /// space-joined as the `scope` parameter. When set via the environment
@@ -332,28 +430,132 @@ mod tests {
         assert!(cli.stream_responses);
     }
 
+    /// The document-fetch OAuth flags, plus whatever the test adds.
+    fn oauth_args(extra: &[&str]) -> Vec<String> {
+        let mut args = vec![
+            "oas2mcp".to_string(),
+            "--openapi-oauth-token-url".to_string(),
+            "https://idp.example.com/token".to_string(),
+        ];
+        args.extend(extra.iter().map(|arg| (*arg).to_string()));
+        args
+    }
+
     #[test]
-    fn oauth_token_url_requires_client_id_and_secret() {
-        // token-url alone is incomplete: it requires a client id, which in turn
-        // requires a client secret.
-        let err = Cli::try_parse_from([
-            "oas2mcp",
-            "--openapi-oauth-token-url",
-            "https://idp.example.com/token",
-        ])
-        .expect_err("token-url without credentials must fail");
+    fn oauth_token_url_requires_a_client_id_and_one_credential() {
+        // token-url alone is incomplete: it needs a client id *and* a credential.
+        let err = Cli::try_parse_from(oauth_args(&[]))
+            .expect_err("token-url without credentials must fail");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
 
-        // The full triple parses.
-        Cli::try_parse_from([
-            "oas2mcp",
-            "--openapi-oauth-token-url",
-            "https://idp.example.com/token",
+        // A client id with no credential is still incomplete — this is the case
+        // the old `client-id requires client-secret` chain used to catch.
+        let err = Cli::try_parse_from(oauth_args(&["--openapi-oauth-client-id", "id"]))
+            .expect_err("a client id alone must fail");
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
+    fn either_client_credential_completes_the_oauth_config() {
+        Cli::try_parse_from(oauth_args(&[
             "--openapi-oauth-client-id",
             "id",
             "--openapi-oauth-client-secret",
             "secret",
-        ])
-        .expect("complete OAuth config parses");
+        ]))
+        .expect("a client secret completes the config");
+
+        Cli::try_parse_from(oauth_args(&[
+            "--openapi-oauth-client-id",
+            "id",
+            "--openapi-oauth-private-key",
+            "/keys/client.pem",
+        ]))
+        .expect("a private key completes the config");
+    }
+
+    #[test]
+    fn the_two_client_credentials_are_mutually_exclusive() {
+        let err = Cli::try_parse_from(oauth_args(&[
+            "--openapi-oauth-client-id",
+            "id",
+            "--openapi-oauth-client-secret",
+            "secret",
+            "--openapi-oauth-private-key",
+            "/keys/client.pem",
+        ]))
+        .expect_err("a secret and a key together must be rejected");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn the_assertion_flags_need_a_private_key() {
+        // On their own, clap rejects them: they only mean something for
+        // `private_key_jwt`.
+        for (flag, value) in [
+            ("--openapi-oauth-key-id", "kid-1"),
+            ("--openapi-oauth-assertion-audience", "https://idp/"),
+            ("--openapi-oauth-assertion-lifetime", "30s"),
+        ] {
+            let err = Cli::try_parse_from(["oas2mcp", flag, value])
+                .expect_err("{flag} without a private key must be rejected");
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "{flag}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_assertion_flag_beside_a_client_secret_parses() {
+        // clap suppresses a `requires` whose target conflicts with an argument
+        // that *is* present: `--openapi-oauth-private-key` is mutually exclusive
+        // with the secret, so the requirement is excused rather than reported.
+        // The flag would therefore be silently ineffective — `oauth` warns about
+        // it instead (see `oauth::ineffective_assertion_flags`).
+        Cli::try_parse_from(oauth_args(&[
+            "--openapi-oauth-client-id",
+            "id",
+            "--openapi-oauth-client-secret",
+            "secret",
+            "--openapi-oauth-key-id",
+            "kid-1",
+        ]))
+        .expect("clap accepts this combination; the config layer warns");
+    }
+
+    #[test]
+    fn the_signing_algorithm_defaults_to_rs256_and_parses_the_offered_names() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
+        assert_eq!(cli.openapi_oauth_signing_alg, SigningAlg::Rs256);
+
+        // `default_value_t` renders through `Display`, so the name it prints has
+        // to be a name it can also parse back.
+        for alg in [
+            SigningAlg::Rs256,
+            SigningAlg::Rs384,
+            SigningAlg::Rs512,
+            SigningAlg::Ps256,
+            SigningAlg::Ps384,
+            SigningAlg::Ps512,
+            SigningAlg::Es256,
+            SigningAlg::Es384,
+            SigningAlg::EdDsa,
+        ] {
+            let rendered = alg.to_string();
+            let cli = Cli::try_parse_from(["oas2mcp", "--openapi-oauth-signing-alg", &rendered])
+                .unwrap_or_else(|err| panic!("`{rendered}` must parse back: {err}"));
+            assert_eq!(cli.openapi_oauth_signing_alg, alg, "{rendered}");
+        }
+    }
+
+    #[test]
+    fn symmetric_signing_algorithms_are_not_offered() {
+        // RFC 7523 §2.2 permits a MAC, but an HMAC keyed on the client secret is
+        // no better than sending the secret. Not offering it is deliberate.
+        let err = Cli::try_parse_from(["oas2mcp", "--openapi-oauth-signing-alg", "hs256"])
+            .expect_err("hs256 must not be accepted");
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
     }
 }

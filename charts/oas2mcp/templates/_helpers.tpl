@@ -96,6 +96,43 @@ OPENAPI_OAUTH_CLIENT_SECRET
 {{- end -}}
 {{- end -}}
 
+{{/* Whether the client authenticates with a signed assertion (inline key or an existing Secret). */}}
+{{- define "oas2mcp.oauthPrivateKeyEnabled" -}}
+{{- if or .Values.oas2mcp.openapi.oauth.privateKey.inline .Values.oas2mcp.openapi.oauth.privateKey.existingSecret.name -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Refuse two client credentials at once: the binary rejects the pair, so catch it at render time rather than at pod start. */}}
+{{- define "oas2mcp.oauthClientAuthValidate" -}}
+{{- if include "oas2mcp.oauthPrivateKeyEnabled" . -}}
+{{- if or .Values.oas2mcp.openapi.oauth.clientSecret .Values.oas2mcp.openapi.oauth.existingSecret.name -}}
+{{- fail "oas2mcp.openapi.oauth.privateKey and oas2mcp.openapi.oauth.clientSecret/existingSecret are mutually exclusive; pick one way to authenticate the client" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Whether a Secret must be generated to hold the inline signing key (no existing Secret chosen). */}}
+{{- define "oas2mcp.oauthPrivateKeyGenerateSecret" -}}
+{{- if and .Values.oas2mcp.openapi.oauth.privateKey.inline (not .Values.oas2mcp.openapi.oauth.privateKey.existingSecret.name) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Name of the Secret holding the OAuth client signing key (existing or generated). */}}
+{{- define "oas2mcp.oauthPrivateKeySecretName" -}}
+{{- if .Values.oas2mcp.openapi.oauth.privateKey.existingSecret.name -}}
+{{- .Values.oas2mcp.openapi.oauth.privateKey.existingSecret.name -}}
+{{- else -}}
+{{- printf "%s-openapi-oauth-key" (include "oas2mcp.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Key in the signing-key Secret (also the mounted file name): the existing Secret's key, else the default. */}}
+{{- define "oas2mcp.oauthPrivateKeyKey" -}}
+{{- .Values.oas2mcp.openapi.oauth.privateKey.existingSecret.key -}}
+{{- end -}}
+
 {{/* Fail fast on an existing CA source with an invalid kind. */}}
 {{- define "oas2mcp.caCertsValidate" -}}
 {{- with .Values.oas2mcp.caCerts.existing.name -}}
