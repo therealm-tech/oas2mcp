@@ -11,10 +11,10 @@ repos:
       - id: check-added-large-files
       - id: check-merge-conflict
       - id: detect-private-key
-        # A throwaway RSA key used only by the auth unit tests, never a real
-        # credential. Scoped to this one fixture so the hook stays armed
+        # Throwaway RSA and EC keys used only by the unit tests, never real
+        # credentials. Scoped to these two fixtures so the hook stays armed
         # everywhere else.
-        exclude: ^tests/fixtures/test_rsa_key\.pem$
+        exclude: ^tests/fixtures/test_(rsa|ec)_key\.pem$
 
   - repo: local
     hooks:

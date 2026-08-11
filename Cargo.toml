@@ -40,7 +40,9 @@ indexmap = { version = "2", features = ["serde"] }
 # every verification call panics at runtime. `rust_crypto` is pure Rust — no C
 # toolchain, no build-script surprises — and covers every algorithm reachable
 # from `auth::algorithms_for` (RS*, PS*, ES256/384, EdDSA).
-# `use_pem` is kept for `EncodingKey::from_rsa_pem` in the auth unit tests.
+# `use_pem` reads the RFC 7523 client signing key from its PEM file
+# (`EncodingKey::from_{rsa,ec,ed}_pem`), and is also what the auth unit tests
+# sign with.
 jsonwebtoken = { version = "11.0", default-features = false, features = [
     "rust_crypto",
     "use_pem",
@@ -73,5 +75,6 @@ opentelemetry-otlp = { version = "0.32.0", default-features = false, features = 
 ] }
 opentelemetry-prometheus = "0.32.0"
 prometheus = { version = "0.14.0", default-features = false }
+uuid = { version = "1.24.0", features = ["v4"] }
 
 [dev-dependencies]

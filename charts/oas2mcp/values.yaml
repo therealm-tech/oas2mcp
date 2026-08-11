@@ -36,7 +36,7 @@ oas2mcp:
       tokenUrl: ~
       # -- (string) OAuth2 client ID.
       clientId: ~
-      # -- (string) OAuth2 client secret. Stored in a Secret. Ignored when `existingSecret.name` is set.
+      # -- (string) OAuth2 client secret, sent over HTTP Basic. Stored in a Secret. Ignored when `existingSecret.name` is set. Mutually exclusive with `privateKey`.
       clientSecret: ~
       existingSecret:
         # -- (string) Name of a pre-existing Secret holding the client secret. Set → takes precedence over `clientSecret`.
@@ -47,6 +47,23 @@ oas2mcp:
       scopes: []
       # -- (string) OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0).
       audience: ~
+      # -- Authenticate the client with a JWT assertion it signs per request (`private_key_jwt`, RFC 7523 §2.2) instead of a shared secret — for providers that will not issue one. Register the **public** half of the key with the provider. Mutually exclusive with `clientSecret`/`existingSecret`; setting both fails the render.
+      privateKey:
+        # -- (string) Inline PKCS#8 PEM private key. Stored in a Secret and mounted read-only at mode `0440` (root-owned, readable via `fsGroup` — `0400` would be unreadable by the non-root container). Ignored when `existingSecret.name` is set.
+        inline: ~
+        existingSecret:
+          # -- (string) Name of a pre-existing Secret holding the PEM private key. Set → takes precedence over `inline`.
+          name: ~
+          # -- Key in that Secret holding the PEM private key. Doubles as the mounted file name.
+          key: client-key.pem
+        # -- (string) `kid` header put on the client assertion, when the provider has several keys registered for this client. Maps to `OPENAPI_OAUTH_KEY_ID`.
+        keyId: ~
+        # -- (string) Assertion signature algorithm — `rs256`/`rs384`/`rs512`, `ps256`/`ps384`/`ps512`, `es256`/`es384`, `eddsa`. Must match the key type. Unset → the binary default (`rs256`). Maps to `OPENAPI_OAUTH_SIGNING_ALG`.
+        signingAlg: ~
+        # -- (string) `aud` claim of the client assertion. Unset → the token endpoint URL, which is what most providers expect; set it when yours wants its issuer identifier instead. Maps to `OPENAPI_OAUTH_ASSERTION_AUDIENCE`.
+        assertionAudience: ~
+        # -- (string) How long a client assertion stays valid (e.g. `30s`, `2m`). Unset → the binary default (`60s`). Maps to `OPENAPI_OAUTH_ASSERTION_LIFETIME`.
+        assertionLifetime: ~
 
   # -- Filter which OpenAPI operations are exposed as tools. An operation is kept if it matches any `include`/`includeRegex`/`includeTags` allowlist (or all allowlists are empty), then dropped if it matches any `exclude`/`excludeRegex`/`excludeTags`. Use it to cut a large API down to a usable tool set.
   operations:

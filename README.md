@@ -26,7 +26,10 @@ writing a line of glue code.
   re-fetched on an interval and the exposed tool set is rebuilt in place,
   without restarting the server. The fetch can authenticate via OAuth2
   `client_credentials` (auto-refreshed token), so reloads keep working on a
-  long-running server where a static token would expire.
+  long-running server where a static token would expire. The client
+  authenticates with either a shared secret or a signed JWT assertion
+  (`private_key_jwt`, RFC 7523 §2.2), for providers that will not issue a
+  secret.
 - **One tool per operation** — `operationId` becomes the tool name (falling
   back to `<method>_<path>`); path, query and header parameters become
   top-level tool arguments, and a JSON request body is passed as a `body`
@@ -90,9 +93,14 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--openapi-url`   | `OPENAPI_URL`    | —                | URL of an OpenAPI document fetched at startup (and on each reload).|
 | `--openapi-header`| `OPENAPI_HEADERS`| —                | `Name: Value` header sent when fetching `--openapi-url` (e.g. for a private document). Repeatable. |
 | `--reload-every`  | `RELOAD_EVERY`   | —                | Re-fetch `--openapi-url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Off by default; ignored for a file source. |
-| `--openapi-oauth-token-url` | `OPENAPI_OAUTH_TOKEN_URL` | — | OAuth2 `client_credentials` token endpoint. Set → the document fetch uses an auto-refreshed bearer token. Requires the client id/secret below. |
+| `--openapi-oauth-token-url` | `OPENAPI_OAUTH_TOKEN_URL` | — | OAuth2 `client_credentials` token endpoint. Set → the document fetch uses an auto-refreshed bearer token. Requires `--openapi-oauth-client-id` plus one of the two credentials below. |
 | `--openapi-oauth-client-id` | `OPENAPI_OAUTH_CLIENT_ID` | — | OAuth2 client ID for the document-fetch token.                     |
-| `--openapi-oauth-client-secret` | `OPENAPI_OAUTH_CLIENT_SECRET` | — | OAuth2 client secret. Prefer the env var so it stays out of the process list. |
+| `--openapi-oauth-client-secret` | `OPENAPI_OAUTH_CLIENT_SECRET` | — | OAuth2 client secret, sent over HTTP Basic. Prefer the env var so it stays out of the process list. Mutually exclusive with `--openapi-oauth-private-key`. |
+| `--openapi-oauth-private-key` | `OPENAPI_OAUTH_PRIVATE_KEY_FILE` | — | Path to a PKCS#8 PEM private key. Set → the client authenticates with a signed JWT assertion (`private_key_jwt`, RFC 7523 §2.2) instead of a secret. Mutually exclusive with `--openapi-oauth-client-secret`. |
+| `--openapi-oauth-key-id` | `OPENAPI_OAUTH_KEY_ID` | —              | `kid` header on the client assertion, when the provider has several keys registered for the client. Needs `--openapi-oauth-private-key`. |
+| `--openapi-oauth-signing-alg` | `OPENAPI_OAUTH_SIGNING_ALG` | `rs256` | Assertion signature algorithm: `rs256`/`rs384`/`rs512`, `ps256`/`ps384`/`ps512`, `es256`/`es384`, `eddsa`. Must match the key type. |
+| `--openapi-oauth-assertion-audience` | `OPENAPI_OAUTH_ASSERTION_AUDIENCE` | token endpoint | `aud` claim of the client assertion. Override when the provider expects its issuer identifier rather than the token endpoint URL. |
+| `--openapi-oauth-assertion-lifetime` | `OPENAPI_OAUTH_ASSERTION_LIFETIME` | `60s` | How long a client assertion stays valid (e.g. `30s`, `2m`). |
 | `--openapi-oauth-scope` | `OPENAPI_OAUTH_SCOPES` | —          | OAuth2 scope requested (sent space-joined). Repeatable; newline-separated via the env var. |
 | `--openapi-oauth-audience` | `OPENAPI_OAUTH_AUDIENCE` | —    | OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0). |
 | `--base-url`      | `BASE_URL`       | spec `servers`   | Upstream API base URL that tool calls are proxied to.              |
@@ -224,6 +232,47 @@ Client authentication uses HTTP Basic against the token endpoint (RFC 6749).
 The OAuth bearer takes precedence over any static `Authorization` set via
 `--openapi-header`. This auth covers the **document fetch only**; upstream API
 calls still use `--header` / `--forward-header`.
+
+##### Authenticating with a signed assertion instead of a secret
+
+Some providers will not issue a client secret at all, and some setups would
+rather not have a long-lived shared secret sitting in the environment. Point
+`--openapi-oauth-private-key` at a PKCS#8 PEM private key and the client
+authenticates with a JWT assertion it signs per request — `private_key_jwt`,
+RFC 7523 §2.2 — instead of Basic:
+
+```bash
+oas2mcp \
+  --openapi-url https://api.example.com/openapi.json \
+  --reload-every 1h \
+  --openapi-oauth-token-url https://idp.example.com/oauth/token \
+  --openapi-oauth-client-id "$CLIENT_ID" \
+  --openapi-oauth-private-key /etc/oas2mcp/client-key.pem \
+  --openapi-oauth-key-id client-key-2026 \
+  --openapi-oauth-signing-alg es256 \
+  --openapi-oauth-scope read:openapi
+```
+
+The assertion carries `iss` and `sub` set to the client id, `aud` set to the
+token endpoint (override with `--openapi-oauth-assertion-audience` if your
+provider expects its issuer identifier), `iat`/`exp` bounding a 60-second
+window, and a fresh `jti` per request so the provider's replay cache has
+something to work with. A new assertion is signed for every token request —
+they are never cached alongside the token.
+
+Register the **public** half of the key with the provider (as a JWKS entry or
+an uploaded certificate, depending on the provider) and keep the private half
+to yourself:
+
+- The key is only ever read from a file. There is deliberately no environment
+  variable for the key material itself.
+- Keep the file owner-only (`chmod 400`). `oas2mcp` warns at startup when it is
+  world-readable. Group access is tolerated silently, because that is how a
+  non-root container reads a Kubernetes `Secret` volume (`defaultMode: 0440`
+  with an `fsGroup`) — the Helm chart wires that up for you.
+- Only asymmetric algorithms are offered. RFC 7523 §2.2 also permits a MAC, but
+  an HMAC keyed on the client secret is no better than sending the secret, so
+  `hs256` and friends are not accepted.
 
 ### Role-based tool access from the caller's JWT
 
