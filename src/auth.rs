@@ -9,6 +9,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet};
@@ -17,6 +18,10 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use crate::cli::Cli;
+
+/// Clock skew tolerated on `exp`/`nbf` when none is configured. Matches
+/// `jsonwebtoken`'s own default, so the flag changes nothing until it is set.
+const DEFAULT_CLOCK_SKEW: Duration = Duration::from_secs(60);
 
 /// One `role:tool_name_regex` mapping: a caller holding `role` may use any tool
 /// whose name matches `pattern`.
@@ -53,6 +58,14 @@ pub struct VerifiedClaims {
 pub struct Authorizer {
     jwks: JwkSet,
     role_claim: String,
+    /// Audiences the token's `aud` may match. Empty disables the check, which is
+    /// the pre-existing behaviour and accepts a token addressed to any service
+    /// the JWKS happens to cover.
+    expected_audiences: Vec<String>,
+    /// Issuers the token's `iss` may match. Empty disables the check.
+    expected_issuers: Vec<String>,
+    /// Skew tolerated on `exp`/`nbf`.
+    clock_skew: Duration,
     /// Claim carrying the identity to delegate as. Lives here because this is
     /// where the token is decoded, even though the flag that sets it belongs to
     /// the upstream OAuth group.
@@ -82,9 +95,22 @@ impl Authorizer {
 
         let rules = parse_rules(&cli.oauth_role_mapper)?;
         let jwks = load_jwks(cli).await?;
+        if cli.oauth_expected_audiences.is_empty() {
+            // Not an error: rejecting these tokens outright would break every
+            // deployment that predates the flag. But it *is* worth saying, since
+            // it means a token minted for another service passes here.
+            tracing::warn!(
+                "--oauth-expected-audience is not set; any JWT this JWKS can verify is accepted, \
+                 including one issued for a different service. Set it to scope tokens to this \
+                 server."
+            );
+        }
         Ok(Some(Arc::new(Self {
             jwks,
             role_claim: cli.oauth_role_claim.clone(),
+            expected_audiences: cli.oauth_expected_audiences.clone(),
+            expected_issuers: cli.oauth_expected_issuers.clone(),
+            clock_skew: cli.oauth_clock_skew.unwrap_or(DEFAULT_CLOCK_SKEW),
             subject_claim: cli.upstream_oauth_subject_claim.clone(),
             rules,
             trace_claims: cli.trace_claims.clone(),
@@ -109,9 +135,24 @@ impl Authorizer {
         // forged token cannot downgrade to e.g. HS256 against a public key.
         let mut validation = Validation::new(algorithm_for(jwk)?);
         validation.algorithms = algorithms_for(jwk)?;
-        // Audience/issuer are out of scope here; we only authenticate the
-        // signature and expiry and then map the roles claim.
-        validation.validate_aud = false;
+        validation.leeway = self.clock_skew.as_secs();
+
+        // `aud` and `iss` are only checked when an expectation is configured —
+        // and whenever one is, the claim also becomes **mandatory**. Neither
+        // `set_audience` nor `set_issuer` does that on its own, and without it a
+        // token that simply omits the claim satisfies the constraint by default:
+        // the check would be bypassable by leaving the claim out.
+        let mut required = vec!["exp"];
+        validation.validate_aud = !self.expected_audiences.is_empty();
+        if !self.expected_audiences.is_empty() {
+            validation.set_audience(&self.expected_audiences);
+            required.push("aud");
+        }
+        if !self.expected_issuers.is_empty() {
+            validation.set_issuer(&self.expected_issuers);
+            required.push("iss");
+        }
+        validation.set_required_spec_claims(&required);
 
         let data = decode::<Value>(token, &key, &validation).context("verifying the JWT")?;
         Ok(VerifiedClaims {
@@ -289,6 +330,9 @@ mod tests {
             jwks: JwkSet { keys: vec![] },
             role_claim: "roles".into(),
             subject_claim: "sub".into(),
+            expected_audiences: Vec::new(),
+            expected_issuers: Vec::new(),
+            clock_skew: DEFAULT_CLOCK_SKEW,
             rules: parse_rules(&["admin:.*".into(), "reader:^get".into()]).expect("valid mappings"),
             trace_claims: vec![],
         };
@@ -370,6 +414,9 @@ mod tests {
             jwks,
             role_claim: "roles".into(),
             subject_claim: "sub".into(),
+            expected_audiences: Vec::new(),
+            expected_issuers: Vec::new(),
+            clock_skew: DEFAULT_CLOCK_SKEW,
             rules: parse_rules(&["admin:.*".into()]).expect("valid mapping"),
             trace_claims: vec!["sub".into(), "email".into()],
         }
@@ -518,5 +565,140 @@ mod tests {
                 "a claim of {shape} must not yield a subject"
             );
         }
+    }
+
+    #[test]
+    fn without_an_expected_audience_any_verifiable_token_is_accepted() {
+        // The pre-existing behaviour, pinned: a token addressed to another
+        // service still verifies. This is why the flag exists, and why startup
+        // warns when it is unset.
+        let authz = test_authorizer();
+        let token = sign_claims(
+            json!({ "roles": ["admin"], "sub": "u", "aud": "some-other-service", "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        assert!(authz.verify(&token).is_ok());
+    }
+
+    #[test]
+    fn an_expected_audience_rejects_a_token_addressed_elsewhere() {
+        let mut authz = test_authorizer();
+        authz.expected_audiences = vec!["oas2mcp".into()];
+
+        let ours = sign_claims(
+            json!({ "roles": ["admin"], "sub": "u", "aud": "oas2mcp", "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        assert!(authz.verify(&ours).is_ok(), "our own audience must pass");
+
+        let theirs = sign_claims(
+            json!({ "roles": ["admin"], "sub": "u", "aud": "some-other-service", "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        assert!(
+            authz.verify(&theirs).is_err(),
+            "a token minted for another service must be refused"
+        );
+    }
+
+    #[test]
+    fn an_expected_audience_makes_the_claim_mandatory() {
+        // Otherwise the check is bypassable by simply omitting `aud`.
+        let mut authz = test_authorizer();
+        authz.expected_audiences = vec!["oas2mcp".into()];
+        let token = sign_claims(
+            json!({ "roles": ["admin"], "sub": "u", "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        assert!(
+            authz.verify(&token).is_err(),
+            "a token with no `aud` is not addressed to us either"
+        );
+    }
+
+    #[test]
+    fn any_one_of_several_expected_audiences_is_enough() {
+        let mut authz = test_authorizer();
+        authz.expected_audiences = vec!["oas2mcp".into(), "oas2mcp-staging".into()];
+        for aud in ["oas2mcp", "oas2mcp-staging"] {
+            let token = sign_claims(
+                json!({ "roles": ["admin"], "sub": "u", "aud": aud, "exp": in_one_hour() }),
+                Some(TEST_KID),
+            );
+            assert!(authz.verify(&token).is_ok(), "{aud} must pass");
+        }
+    }
+
+    #[test]
+    fn an_audience_array_matches_when_any_entry_does() {
+        // `aud` is allowed to be an array (RFC 7519 §4.1.3), which is what a
+        // token minted for several services looks like.
+        let mut authz = test_authorizer();
+        authz.expected_audiences = vec!["oas2mcp".into()];
+        let token = sign_claims(
+            json!({ "roles": ["admin"], "sub": "u", "aud": ["other", "oas2mcp"], "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        assert!(authz.verify(&token).is_ok());
+    }
+
+    #[test]
+    fn an_expected_issuer_rejects_another_issuer() {
+        let mut authz = test_authorizer();
+        authz.expected_issuers = vec!["https://idp.example.com/".into()];
+
+        let ours = sign_claims(
+            json!({ "roles": ["admin"], "sub": "u", "iss": "https://idp.example.com/", "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        assert!(authz.verify(&ours).is_ok());
+
+        // A key shared between a staging and a production realm is the case this
+        // catches: the JWKS verifies both, only `iss` tells them apart.
+        let staging = sign_claims(
+            json!({ "roles": ["admin"], "sub": "u", "iss": "https://staging-idp.example.com/", "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        assert!(authz.verify(&staging).is_err());
+
+        // And a token with no `iss` cannot satisfy the constraint either.
+        let anonymous = sign_claims(
+            json!({ "roles": ["admin"], "sub": "u", "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        assert!(authz.verify(&anonymous).is_err());
+    }
+
+    #[test]
+    fn a_token_with_no_expiry_is_refused() {
+        // A bearer token that never expires is not something to accept quietly.
+        // `jsonwebtoken` requires `exp` by default; pinned so a future change to
+        // the validation setup cannot silently drop it.
+        let authz = test_authorizer();
+        let token = sign_claims(json!({ "roles": ["admin"], "sub": "u" }), Some(TEST_KID));
+        assert!(authz.verify(&token).is_err());
+    }
+
+    #[test]
+    fn clock_skew_widens_the_expiry_window() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
+
+        // Expired 90 seconds ago: outside the default 60s tolerance...
+        let token = sign_claims(
+            json!({ "roles": ["admin"], "sub": "u", "exp": now - 90 }),
+            Some(TEST_KID),
+        );
+        let authz = test_authorizer();
+        assert!(authz.verify(&token).is_err());
+
+        // ...but inside a deliberately generous one. This is the knob for a
+        // provider whose clock disagrees with ours.
+        let mut authz = test_authorizer();
+        authz.clock_skew = Duration::from_secs(300);
+        assert!(authz.verify(&token).is_ok());
     }
 }

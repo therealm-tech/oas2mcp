@@ -134,6 +134,9 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:tool_name_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Requires a JWKS source below. `streamable-http` only. |
 | `--oauth-jwks-url` | `OAUTH_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Required with `--oauth-role-mapper` (or use `--oauth-jwks-file`). |
 | `--oauth-jwks-file` | `OAUTH_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--oauth-jwks-url`. |
+| `--oauth-expected-audience` | `OAUTH_EXPECTED_AUDIENCES` | — | Audience the incoming JWT's `aud` must match. Repeatable. **Set this**: unset, a token your provider minted for another service is accepted here. |
+| `--oauth-expected-issuer` | `OAUTH_EXPECTED_ISSUERS` | —      | Issuer the incoming JWT's `iss` must match. Repeatable. Defence in depth next to the JWKS. |
+| `--oauth-clock-skew` | `OAUTH_CLOCK_SKEW` | `60s`            | Skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). |
 | `--oauth-role-claim` | `OAUTH_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
 | `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs `--oauth-role-mapper`. |
 | `--include`       | `INCLUDE_OPERATIONS` | —            | Only expose operations whose name matches this glob (`*`/`?`). Repeatable. |
@@ -482,6 +485,44 @@ configured. Claims go to the logs only — never to metric labels — so a
 high-cardinality claim such as `sub` can't blow up your metrics backend.
 With multiple names set through the environment variable, separate them with
 newlines (e.g. `TRACE_CLAIMS=$'sub\nemail'`).
+
+#### Scoping the tokens you accept
+
+Verifying a signature answers "did my identity provider sign this?", not "was
+this meant for me". Those are different questions, and only the second one keeps
+a token minted for another service out:
+
+```bash
+oas2mcp \
+  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+  --oauth-jwks-url https://idp.example.com/.well-known/jwks.json \
+  --oauth-role-mapper 'admin:.*' \
+  --oauth-expected-audience oas2mcp \
+  --oauth-expected-issuer https://idp.example.com/
+```
+
+- **`--oauth-expected-audience` is the one that matters.** Without it, every token
+  your JWKS can verify is accepted — including one your provider issued for a
+  different service entirely, with whatever roles it happens to carry. `aud` is
+  what scopes a token to one audience; checking it is what stops it being replayed
+  here. oas2mcp warns at startup while it is unset.
+- **`--oauth-expected-issuer` is defence in depth.** The JWKS already pins who
+  signed the token, so this mainly catches a key deliberately shared across
+  logical issuers — a staging and a production realm behind one key set, say. It
+  also firms up delegation, where the issuer is half of the identity a delegated
+  upstream token is cached under.
+- **Setting either makes the claim mandatory.** A token that simply omits `aud`
+  is not addressed to us any more than one addressed elsewhere, so it is refused
+  too — otherwise the check would be bypassable by leaving the claim out.
+- **A token with no `exp` is always refused**, configured or not. A bearer
+  credential that never expires is not something to accept quietly.
+
+Both are opt-in rather than on by default, because switching them on
+unconditionally would reject the tokens of every deployment that predates them.
+That is a migration concern, not a recommendation: set them.
+
+If tokens are rejected intermittently — right after being issued, or just before
+expiring — suspect the clocks before the config, and widen `--oauth-clock-skew`.
 
 ### Metrics
 

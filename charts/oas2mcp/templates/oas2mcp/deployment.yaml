@@ -251,6 +251,18 @@ spec:
             - name: OAUTH_ROLE_CLAIM
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.oas2mcp.auth.expectedAudiences }}
+            - name: OAUTH_EXPECTED_AUDIENCES
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.auth.expectedIssuers }}
+            - name: OAUTH_EXPECTED_ISSUERS
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.auth.clockSkew }}
+            - name: OAUTH_CLOCK_SKEW
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.oas2mcp.auth.traceClaims }}
             - name: TRACE_CLAIMS
               value: {{ join "\n" . | quote }}
