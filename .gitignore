@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 *.pdb
+
+# Python bytecode from the end-to-end harness.
+__pycache__/

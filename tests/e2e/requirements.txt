@@ -1,0 +1,7 @@
+# Dependencies of the end-to-end harness: the sandbox API and the suite itself.
+# Pinned so a CI run and a laptop exercise the same versions.
+cryptography==46.0.3
+fastapi==0.121.3
+httpx==0.28.1
+pyjwt==2.12.1
+uvicorn==0.41.0

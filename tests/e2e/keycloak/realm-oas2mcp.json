@@ -1,0 +1,239 @@
+{
+  "realm": "oas2mcp",
+  "enabled": true,
+  "sslRequired": "none",
+  "accessTokenLifespan": 300,
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "Every tool"
+      },
+      {
+        "name": "reader",
+        "description": "Read-only tools"
+      }
+    ]
+  },
+  "identityProviders": [
+    {
+      "alias": "oneaccess",
+      "displayName": "OneAccess (fixture)",
+      "providerId": "jwt-authorization-grant",
+      "enabled": true,
+      "trustEmail": true,
+      "storeToken": false,
+      "addReadTokenRoleOnCreate": false,
+      "linkOnly": false,
+      "config": {
+        "jwtAuthorizationGrantEnabled": "true",
+        "issuer": "https://oneaccess.example/",
+        "useJwksUrl": "false",
+        "validateSignature": "true",
+        "jwtAuthorizationGrantAssertionSignatureAlg": "RS256",
+        "jwtAuthorizationGrantAssertionReuseAllowed": "false",
+        "jwtAuthorizationGrantMaxAllowedAssertionExpiration": "600",
+        "jwtAuthorizationGrantAllowedClockSkew": "30",
+        "publicKeySignatureVerifier": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApIrAmCcbgl0Z6Fmomx9TVpVhMiOjJOrtjzKHoKnV5pYyFz86Zpor4tHmK8inQB6ES7j2V+0cgnT+62g/wCCwJHS+jJY0GawNgkxPq/5zFSFBuhJjyGpQzofexEPP7Qof6ZQKRViNw5A64C+dkcgoixhOBS1TWk6mkDOgoYOv9q2IUM5saRYZIwQw7OU4hsKetZcq8gbmVSjbzPylFryaIu5Udlo4JxFt+7t0RG/N858nu6eBYR68KMlOZIqN4YsaaQBm6teCdOUUXxAww8Yuij0gbz/YXMSnu5A5Ooff8w83kQLJqPLJyyEb357CvCqZsDZmlp3LFVRRmNuDPUtTKQIDAQAB",
+        "publicKeySignatureVerifierKeyId": "oneaccess-key"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "alice@example.com",
+      "firstName": "Alice",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "admin"
+      ],
+      "federatedIdentities": [
+        {
+          "identityProvider": "oneaccess",
+          "userId": "oneaccess-alice",
+          "userName": "alice"
+        }
+      ]
+    },
+    {
+      "username": "bob",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "bob@example.com",
+      "firstName": "Bob",
+      "lastName": "Reader",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "bob-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "reader"
+      ],
+      "federatedIdentities": [
+        {
+          "identityProvider": "oneaccess",
+          "userId": "oneaccess-bob",
+          "userName": "bob"
+        }
+      ]
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "carol@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "carol-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "reader"
+      ]
+    },
+    {
+      "username": "dave",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "dave@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dave-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "reader"
+      ],
+      "federatedIdentities": [
+        {
+          "identityProvider": "oneaccess",
+          "userId": "oneaccess-dave",
+          "userName": "dave"
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "oas2mcp-upstream",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "upstream-secret",
+      "clientAuthenticatorType": "client-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "oauth2.jwt.authorization.grant.enabled": "true",
+        "oauth2.jwt.authorization.grant.idp": "oneaccess"
+      },
+      "protocolMappers": [
+        {
+          "name": "flat-realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "aud-sandbox-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "sandbox-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "oas2mcp-doc",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-jwt",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "jwt.credential.certificate": "MIIDDTCCAfWgAwIBAgIUBqtS7T0WsyNSJKrrYktcB8GcGbAwDQYJKoZIhvcNAQELBQAwFjEUMBIGA1UEAwwLb2FzMm1jcC1lMmUwHhcNMjYwODExMTQxMDIxWhcNMzYwODA4MTQxMDIxWjAWMRQwEgYDVQQDDAtvYXMybWNwLWUyZTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAKSKwJgnG4JdGehZqJsfU1aVYTIjoyTq7Y8yh6Cp1eaWMhc/OmaaK+LR5ivIp0AehEu49lftHIJ0/utoP8AgsCR0voyWNBmsDYJMT6v+cxUhQboSY8hqUM6H3sRDz+0KH+mUCkVYjcOQOuAvnZHIKIsYTgUtU1pOppAzoKGDr/atiFDObGkWGSMEMOzlOIbCnrWXKvIG5lUo28z8pRa8miLuVHZaOCcRbfu7dERvzfOfJ7ungWEevCjJTmSKjeGLGmkAZurXgnTlFF8QMMPGLoo9IG8/2FzEp7uQOTqH3/MPN5ECyajyycshG9+ewrwqmbA2ZpadyxVUUZjbgz1LUykCAwEAAaNTMFEwHQYDVR0OBBYEFJcqTq+SZD08kCgwKhGXaxOfK/I5MB8GA1UdIwQYMBaAFJcqTq+SZD08kCgwKhGXaxOfK/I5MA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBADJReTSujyyFhMxXcDxPJRoeAOeBhtqNv/1pQcgMd5wNYQ1Hr5owpof0A16Fh6qdpjxBsaQqbnAdTbnkeLAbNBnbl5POSu8VMwEBwU6vvUQuxdKAvdCKS0ZQWVfWurfWKTiNoSEOun/yNL41babrcWLVwGMNpBNG98bMOuoG5O6Dk1+MuH6gING8I6syPtwG9KYZlPuJ7+ik+KvrYlJTYwG3SEofegNhxq2hviXIJxYCOhtIoJi+bTVzu7moFpSB7sONqwzFLAxDseipWrS5by+unlzzSeqqDNtJiGowMJoExVGx/IFIf2AG0LIvbMUw1vsuoivhiQxuIAwHFQH72sk=",
+        "token.endpoint.auth.signing.alg": "RS256"
+      },
+      "protocolMappers": [
+        {
+          "name": "aud-sandbox-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "sandbox-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "mcp-client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "attributes": {},
+      "protocolMappers": [
+        {
+          "name": "flat-realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "aud-oas2mcp-server",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "oas2mcp-server",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ]
+}
