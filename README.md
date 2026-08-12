@@ -650,6 +650,35 @@ An entry without a port matches any port; `--allowed-host '*'` accepts anything
 and turns the check off. Setting the flag replaces the default rather than
 adding to it, so include the loopback names yourself if you still want them.
 
+### Access logs
+
+Both HTTP transports log every response. A rejection is logged at `warn` with
+the reason the server sent back, plus the headers that decide whether a request
+is accepted:
+
+```text
+WARN oas2mcp::transport::access_log: rejected HTTP request method=POST path="/mcp"
+  status=400 elapsed_ms=0 reason="Bad Request: Unsupported MCP-Protocol-Version: 1999-01-01"
+  host=Some("localhost:8000") protocol_version=Some("1999-01-01")
+  accept=Some("application/json, text/event-stream") content_type=Some("application/json")
+  session=false
+```
+
+This matters because the MCP layer answers most malformed requests itself, and
+states the reason only in the response body — a missing `Mcp-Session-Id`, an
+unsupported `MCP-Protocol-Version`, an `Accept` header without both
+`application/json` and `text/event-stream`. If a client is stuck on a `400`, that
+log line is where the answer is. `5xx` responses are logged at `error` the same
+way.
+
+Successful responses are logged at `debug`, so a full access log needs
+`--log-filter oas2mcp=debug` (which also turns on the rest of the debug output).
+
+Two fields are deliberately withheld: the `Authorization` header is never
+logged, and `Mcp-Session-Id` is reported as `session=true`/`false` rather than by
+value — the session id is a capability, and whoever holds it can speak into that
+session.
+
 ## Deploy on Kubernetes (Helm)
 
 A Helm chart is provided under [charts/oas2mcp](charts/oas2mcp). It deploys the

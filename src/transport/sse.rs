@@ -53,6 +53,9 @@ pub async fn serve(bind: SocketAddr, server: OpenApiServer) -> anyhow::Result<()
     let app = axum::Router::new()
         .route("/sse", get(open_stream))
         .route("/messages", post(post_message))
+        .layer(axum::middleware::from_fn(
+            crate::transport::access_log::log_requests,
+        ))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(bind)
