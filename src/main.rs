@@ -106,9 +106,22 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    transport::serve(cli.transport, cli.bind_addr, !cli.stream_responses, server)
-        .await
-        .context("MCP transport terminated with an error")?;
+    if !cli.allowed_hosts.is_empty() && cli.transport != cli::Transport::StreamableHttp {
+        tracing::warn!(
+            transport = %cli.transport,
+            "--allowed-host only takes effect on the streamable-http transport; ignored here"
+        );
+    }
+
+    transport::serve(
+        cli.transport,
+        cli.bind_addr,
+        !cli.stream_responses,
+        &cli.allowed_hosts,
+        server,
+    )
+    .await
+    .context("MCP transport terminated with an error")?;
 
     // Flush any metrics buffered by the OTLP exporter before exiting.
     telemetry.shutdown();

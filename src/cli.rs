@@ -627,6 +627,27 @@ pub struct Cli {
     #[arg(long, env = "BIND_ADDR", default_value_t = default_bind_addr())]
     pub bind_addr: SocketAddr,
 
+    /// Hostname, or `host:port`, accepted in the `Host` header of an incoming
+    /// `streamable-http` request. Repeatable; an entry without a port matches
+    /// any port. `*` accepts any `Host` at all.
+    ///
+    /// The check exists to stop DNS rebinding: a web page the victim visits
+    /// resolves its own domain to a loopback address and then talks to the MCP
+    /// server listening there, with the browser happily attaching the caller's
+    /// cookies. Validating `Host` breaks that, since the rebound request still
+    /// carries the attacker's hostname.
+    ///
+    /// Unset, the default follows `--bind-addr`, because that is what decides
+    /// whether the attack applies: bound to loopback, only `localhost`,
+    /// `127.0.0.1` and `::1` are accepted; bound to anything routable, the
+    /// server is deliberately reachable under a name it cannot guess (a
+    /// Kubernetes Service, an Ingress host), so any `Host` is accepted. Set
+    /// this to name those hosts explicitly. Only used by `streamable-http`;
+    /// ignored for `stdio` and `sse`. When set via the environment variable,
+    /// separate hosts with newlines.
+    #[arg(long = "allowed-host", env = "ALLOWED_HOSTS", value_delimiter = '\n')]
+    pub allowed_hosts: Vec<String>,
+
     /// Stream `streamable-http` replies as a `text/event-stream` (SSE) flow with
     /// stateful MCP sessions, instead of the default single `application/json`
     /// reply.
@@ -677,6 +698,24 @@ mod tests {
         // The flag opts into SSE streaming.
         let cli = Cli::try_parse_from(["oas2mcp", "--stream-responses"]).expect("bare flag parses");
         assert!(cli.stream_responses);
+    }
+
+    #[test]
+    fn allowed_hosts_are_repeatable_and_unset_by_default() {
+        // Unset is meaningful: the transport then derives the list from the bind
+        // address (see `transport::resolve_allowed_hosts`).
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
+        assert!(cli.allowed_hosts.is_empty());
+
+        let cli = Cli::try_parse_from([
+            "oas2mcp",
+            "--allowed-host",
+            "mcp.example.com",
+            "--allowed-host",
+            "10.0.0.7:8000",
+        ])
+        .expect("repeated hosts parse");
+        assert_eq!(cli.allowed_hosts, ["mcp.example.com", "10.0.0.7:8000"]);
     }
 
     /// The document-fetch OAuth flags, plus whatever the test adds.
