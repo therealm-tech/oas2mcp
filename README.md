@@ -150,6 +150,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--otel-service-name` | `OTEL_SERVICE_NAME` | `oas2mcp`   | `service.name` reported on exported metrics.                       |
 | `--transport`     | `TRANSPORT`      | `stdio`          | One of `stdio`, `sse`, `streamable-http`.                          |
 | `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address for the `sse` and `streamable-http` transports.       |
+| `--allowed-host`  | `ALLOWED_HOSTS`  | follows `--bind-addr` | Hostname, or `host:port`, accepted in the inbound `Host` header; `*` accepts any. Repeatable; newline-separated via the env var. `streamable-http` only — see [Host header validation](#host-header-validation). |
 | `--stream-responses` | `STREAM_RESPONSES` | `false`      | Reply on `streamable-http` with an SSE flow and stateful sessions instead of the default single `application/json` body. `streamable-http` only. |
 | `--log-filter`    | `RUST_LOG`       | `info`           | `tracing` filter directive (e.g. `oas2mcp=debug,rmcp=warn`).       |
 
@@ -614,6 +615,40 @@ For a stdio client (e.g. Claude Desktop / Claude Code), point it at the binary:
 
 For a remote client, start the `streamable-http` transport and connect it to
 `http://<host>:<port>/mcp`.
+
+### Host header validation
+
+The `streamable-http` transport checks the `Host` header of every request and
+answers `403 Forbidden: Host header is not allowed` when it is not on the
+allowlist. This stops DNS rebinding: a page the victim visits re-resolves its
+own domain to a loopback address and then talks to the MCP server listening
+there, from inside the browser. The rebound request still carries the
+attacker's hostname, so checking `Host` breaks the attack.
+
+The default follows `--bind-addr`, because that is what decides whether the
+attack applies at all:
+
+| Bind address | Default allowlist |
+| --- | --- |
+| loopback (`127.0.0.1`, `::1` — the default) | `localhost`, `127.0.0.1`, `::1` |
+| anything routable (`0.0.0.0`, a pod IP, …) | any `Host` |
+
+A server bound to a routable address is deliberately reachable under a name it
+cannot guess — a Kubernetes `Service`, an Ingress host, a load balancer — so
+rejecting those by default would only mean rejecting every real request.
+
+Name the hosts explicitly to check them there too:
+
+```bash
+oas2mcp --openapi-file petstore.yaml \
+  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+  --allowed-host mcp.example.com \
+  --allowed-host petstore-oas2mcp.default.svc.cluster.local
+```
+
+An entry without a port matches any port; `--allowed-host '*'` accepts anything
+and turns the check off. Setting the flag replaces the default rather than
+adding to it, so include the loopback names yourself if you still want them.
 
 ## Deploy on Kubernetes (Helm)
 

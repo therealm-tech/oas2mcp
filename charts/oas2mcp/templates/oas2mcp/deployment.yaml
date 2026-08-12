@@ -76,6 +76,10 @@ spec:
               value: "0.0.0.0:{{ .Values.oas2mcp.service.port }}"
             - name: RUST_LOG
               value: {{ .Values.oas2mcp.logFilter | quote }}
+            {{- with .Values.oas2mcp.allowedHosts }}
+            - name: ALLOWED_HOSTS
+              value: {{ join "\n" . | quote }}
+            {{- end }}
             {{- if .Values.oas2mcp.streamResponses }}
             - name: STREAM_RESPONSES
               value: "true"

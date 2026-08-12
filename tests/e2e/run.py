@@ -85,6 +85,21 @@ def mcp(method: str, params: dict | None = None, token: str | None = None) -> di
         return {"error": {"message": f"HTTP {err.code}: {err.read().decode()[:200]}"}}
 
 
+def mcp_status(host: str) -> int:
+    """POST one MCP message under a forged `Host`, returning the HTTP status."""
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}).encode()
+    request = urllib.request.Request(MCP, data=body, method="POST")
+    request.add_header("content-type", "application/json")
+    request.add_header("accept", "application/json, text/event-stream")
+    # urllib only synthesises a `Host` when the request carries none.
+    request.add_header("host", host)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status
+    except urllib.error.HTTPError as err:
+        return err.code
+
+
 def call_tool(name: str, token: str, arguments: dict | None = None) -> dict:
     """Call a tool and return the parsed result plus its text payload."""
     reply = mcp("tools/call", {"name": name, "arguments": arguments or {}}, token)
@@ -181,6 +196,15 @@ def main() -> int:
         result.get("isError") or "rpc_error" in result,
         str(result)[:200],
     )
+
+    print("\n=== the inbound Host header is validated ===")
+    # The harness binds loopback and sets no `--allowed-host`, so the DNS
+    # rebinding protection is on: a request arriving under someone else's
+    # hostname is refused before it reaches any tool.
+    forged = mcp_status("evil.example")
+    check("a forged Host is rejected", forged == 403, f"HTTP {forged}")
+    allowed = mcp_status(MCP.split("//", 1)[1].split("/", 1)[0])
+    check("the real Host is accepted", allowed == 200, f"HTTP {allowed}")
 
     print("\n=== no caller identity at all ===")
     result = call_tool("getPets", "")

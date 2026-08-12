@@ -120,6 +120,9 @@ oas2mcp:
   # -- MCP transport to expose. One of `streamable-http`, `sse`. (`stdio` makes no sense for a long-running Deployment.)
   transport: streamable-http
 
+  # -- (list) Hostnames (or `host:port`) accepted in the inbound `Host` header, checked to stop DNS rebinding. An entry without a port matches any port; `*` accepts any host. Empty → any host is accepted, because the pod binds `0.0.0.0` and cannot guess the Service/Ingress name clients use. Set it to those names to check them (e.g. `[oas2mcp.example.com]`). Only affects `transport: streamable-http`. Maps to `ALLOWED_HOSTS`.
+  allowedHosts: []
+
   # -- Reply on `streamable-http` with an SSE flow and stateful sessions. Set to `false` when the MCP server sits behind a proxy (e.g. Envoy AI Gateway) that can't parse the SSE priming event — that switches it to single `application/json` replies (stateless). Only affects `transport: streamable-http`.
   streamResponses: true
 

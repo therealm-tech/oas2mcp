@@ -4,6 +4,8 @@ oas2mcp:
   openapi:
     url: https://petstore3.swagger.io/api/v3/openapi.json
   baseUrl: https://petstore3.swagger.io/api/v3
+  allowedHosts:
+    - oas2mcp.example.com
   upstream:
     headers:
       - "Authorization: Bearer lint-placeholder"
