@@ -1,5 +1,6 @@
 //! Serving the MCP server over the selected transport.
 
+mod access_log;
 mod sse;
 
 use std::net::SocketAddr;
@@ -107,7 +108,11 @@ async fn serve_streamable_http(
             .with_stateful_mode(!json_response)
             .with_allowed_hosts(resolve_allowed_hosts(bind, allowed_hosts)),
     );
-    let app = axum::Router::new().nest_service("/mcp", service);
+    // The access log wraps `rmcp`'s service: most of its rejections happen in
+    // there, and this is the only place they become visible.
+    let app = axum::Router::new()
+        .nest_service("/mcp", service)
+        .layer(axum::middleware::from_fn(access_log::log_requests));
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await

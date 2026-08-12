@@ -51,6 +51,9 @@ arc-swap = "1"
 humantime = "2"
 regex = "1"
 http = "1"
+# `Body::size_hint`, so the access log only ever buffers a response whose length
+# is known and small (a rejection reason) and never touches a streamed one.
+http-body = "1"
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }
 # `preserve_order` keeps object keys in document order. OpenAPI schemas are
