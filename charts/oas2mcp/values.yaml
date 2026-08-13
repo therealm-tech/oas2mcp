@@ -1,5 +1,8 @@
 # -- oas2mcp server: deploys the OpenAPI→MCP proxy as an HTTP MCP endpoint.
 oas2mcp:
+  # -- (string) Name given to every object the chart creates. Unset → `<release>-oas2mcp`, so a release already called `oas2mcp` yields `oas2mcp-oas2mcp`. Changing it on a live release renames — and therefore recreates — every object.
+  fullnameOverride: ~
+
   # -- Number of server replicas.
   replicaCount: 1
 
