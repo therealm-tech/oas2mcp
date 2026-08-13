@@ -79,6 +79,10 @@ oas2mcp:
     includeTags: []
     # -- (list) Drop operations carrying one of these OpenAPI tags (case-insensitive); takes precedence over the allowlist. Maps to `EXCLUDE_TAGS`.
     excludeTags: []
+    # -- (list) Rewrite the exposed tool names, as `<regex>=<replacement>` split on the first `=` (write a literal `=` in the pattern as `\x3D`). Rules chain in order, and the replacement expands capture groups (`${1}`). Applied **after** filtering, which keeps matching the raw `operationId`. Maps to `RENAME_OPERATIONS`.
+    rename: []
+    # -- (int) Maximum length of a tool name; a longer one is truncated and given a short hash of the full name. Unset → the binary default (`64`, the limit Anthropic and OpenAI enforce). Lower it when a gateway prefixes the tools it aggregates. Maps to `MAX_NAME_LEN`.
+    maxNameLen: ~
 
   # -- Restrict the tool set per caller by matching the roles in their verified JWT against tool-name regexes. Requires `transport: streamable-http` (the only transport exposing the client's JWT). A caller with no valid token, or whose roles match nothing, sees and can call no tools.
   auth:

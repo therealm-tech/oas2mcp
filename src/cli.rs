@@ -9,6 +9,8 @@ use clap::{ArgGroup, Parser, ValueEnum};
 use regex::Regex;
 use url::Url;
 
+use crate::rename::{DEFAULT_MAX_NAME_LEN, RenameRule};
+
 /// Signature algorithm for the JWT client assertions of RFC 7523. Only
 /// asymmetric algorithms are offered: RFC 7523 §2.2 permits a MAC, but an HMAC
 /// keyed on the client secret adds nothing over sending the secret itself.
@@ -609,6 +611,42 @@ pub struct Cli {
     #[arg(long = "exclude-tag", env = "EXCLUDE_TAGS", value_delimiter = '\n')]
     pub exclude_tags: Vec<String>,
 
+    /// Rewrite tool names, as `<regex>=<replacement>`, split on the **first**
+    /// `=` (a pattern matching a literal `=` writes it `\x3D`). Repeatable, and
+    /// the rules chain: each one rewrites the output of the previous, in
+    /// declaration order, so a list of abbreviations composes. The replacement
+    /// expands capture groups — write `${1}` rather than `$1` when the next
+    /// character is a letter, digit or `_`, since the longest possible group
+    /// name is taken.
+    ///
+    /// Renaming happens **after** filtering, which keeps matching the raw
+    /// `operationId`: an existing `--include`/`--exclude` allowlist is unaffected
+    /// by the rules added here. Invalid patterns are rejected at startup. When
+    /// set via the environment variable, separate rules with newlines.
+    ///
+    /// Example, for GitLab:
+    /// `--rename '^(get|post|put|delete|patch)ApiV4=${1}_' --rename 'Projects?Id=proj'`
+    #[arg(
+        long = "rename",
+        env = "RENAME_OPERATIONS",
+        value_delimiter = '\n',
+        value_parser = RenameRule::parse
+    )]
+    pub rename_operations: Vec<RenameRule>,
+
+    /// Maximum length of a tool name. A longer name is truncated and given a
+    /// short hash of the full name, so two long names cannot collapse onto one
+    /// tool; the rewrite is logged. The default matches the limit Anthropic and
+    /// OpenAI enforce (`^[a-zA-Z0-9_-]{1,64}$`) — lower it when a gateway
+    /// namespaces the tools it aggregates (Envoy AI Gateway prefixes every tool
+    /// with `<backend>__`, which spends part of the same budget).
+    #[arg(
+        long = "max-name-len",
+        env = "MAX_NAME_LEN",
+        default_value_t = DEFAULT_MAX_NAME_LEN
+    )]
+    pub max_name_len: usize,
+
     /// Path to a PEM file holding one or more extra CA certificates to trust
     /// when verifying TLS for every outbound connection (upstream API, OpenAPI
     /// document fetch, OAuth token endpoint, JWKS). Repeatable; a single file
@@ -687,6 +725,47 @@ mod tests {
         let err = Cli::try_parse_from(["oas2mcp", "--include-regex", "("])
             .expect_err("invalid regex must fail at parse time");
         assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn rename_rules_are_compiled_at_parse_time() {
+        let cli = Cli::try_parse_from([
+            "oas2mcp",
+            "--rename",
+            "^(get|post)ApiV4=${1}_",
+            "--rename",
+            "Projects?Id=proj",
+        ])
+        .expect("valid rules parse");
+        assert_eq!(cli.rename_operations.len(), 2);
+        assert_eq!(
+            cli.rename_operations[1].apply("getApiV4ProjectsIdIssues"),
+            "getApiV4projIssues"
+        );
+    }
+
+    #[test]
+    fn a_malformed_rename_rule_is_rejected_by_clap() {
+        for rule in ["noSeparator", "(unclosed=x", "=emptyPattern"] {
+            let err = Cli::try_parse_from(["oas2mcp", "--rename", rule])
+                .expect_err("a malformed rule must fail at parse time");
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::ValueValidation,
+                "{rule}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_name_length_cap_defaults_to_the_provider_limit() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
+        assert_eq!(cli.max_name_len, 64);
+        assert!(cli.rename_operations.is_empty());
+
+        let cli =
+            Cli::try_parse_from(["oas2mcp", "--max-name-len", "56"]).expect("the flag parses");
+        assert_eq!(cli.max_name_len, 56);
     }
 
     #[test]
