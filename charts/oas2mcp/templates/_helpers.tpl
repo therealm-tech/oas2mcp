@@ -3,9 +3,18 @@
 {{- default .Chart.Name .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{/* Fully qualified app name. */}}
+{{/*
+  Fully qualified app name: `<release>-<chart>`, or `fullnameOverride` verbatim.
+  Only the object names move — the selector labels stay keyed on the release, so
+  setting the override on a live install does not touch the immutable Deployment
+  selector (it does rename every object, which recreates them).
+*/}}
 {{- define "oas2mcp.fullname" -}}
+{{- if .Values.oas2mcp.fullnameOverride -}}
+{{- .Values.oas2mcp.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
 {{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Chart label (name-version). */}}
