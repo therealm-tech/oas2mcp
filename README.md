@@ -36,6 +36,13 @@ writing a line of glue code.
   argument. Local `$ref`s are inlined into each tool's input schema, whatever
   they point at (`#/components/schemas/…`, `#/$defs/…`, …); a recursive schema
   collapses to a bare object rather than expanding forever.
+- **Readable tool names** — rewrite the names an OpenAPI document produces with
+  chained `--rename` regex rules, and cap their length with `--max-name-len`
+  (64 by default, the limit Anthropic and OpenAI enforce). GitLab's
+  `postApiV4ProjectsIdMergeRequestsNoteableIdDiscussionsDiscussionIdNotes`
+  becomes `post_projmrdiscNotes`, which fits under a gateway prefix and is far
+  easier for a model to pick. Filters keep matching the original
+  `operationId`.
 - **Three transports** — the MCP server can be exposed over:
   - `stdio` — for a local subprocess MCP client.
   - `streamable-http` — the current remote transport, single `POST /mcp`
@@ -145,6 +152,8 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--exclude-regex` | `EXCLUDE_OPERATIONS_REGEX` | —      | Drop operations whose name matches this regex. Repeatable. Wins over the allowlist. |
 | `--tag`           | `INCLUDE_TAGS`   | —                | Only expose operations carrying this OpenAPI tag (case-insensitive). Repeatable. |
 | `--exclude-tag`   | `EXCLUDE_TAGS`   | —                | Drop operations carrying this OpenAPI tag (case-insensitive). Repeatable. Wins over the allowlist. |
+| `--rename`        | `RENAME_OPERATIONS` | —             | Rewrite tool names, as `<regex>=<replacement>` (split on the first `=`). Repeatable; rules chain in order. Applied **after** filtering. |
+| `--max-name-len`  | `MAX_NAME_LEN`   | `64`             | Maximum tool name length. A longer name is truncated and given a short hash of the full name, and the rewrite is logged. |
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Base OTLP endpoint to push tool-call metrics to over HTTP (e.g. `http://localhost:4318`); `/v1/metrics` is appended. Set → OTLP export on. |
 | `--metrics-addr`  | `METRICS_ADDR`   | —                | Address to serve a Prometheus `/metrics` endpoint on (e.g. `0.0.0.0:9090`). Set → scrape endpoint on. Independent of `--otlp-endpoint`. |
 | `--otel-service-name` | `OTEL_SERVICE_NAME` | `oas2mcp`   | `service.name` reported on exported metrics.                       |
@@ -598,6 +607,65 @@ oas2mcp --openapi-file api.yaml --include-regex '^getApiV4(Projects|Groups)'
 
 The startup log reports how many operations were kept versus filtered.
 
+#### Renaming the exposed tools
+
+The names a real document produces are often unusable as they are. GitLab's
+`postApiV4ProjectsIdMergeRequestsNoteableIdDiscussionsDiscussionIdNotes` is 70
+characters, while Anthropic and OpenAI both cap tool names at 64
+(`^[a-zA-Z0-9_-]{1,64}$`) — and a gateway aggregating several MCP servers
+usually prefixes every tool with its backend name (Envoy AI Gateway emits
+`<backend>__<tool>`), spending part of that budget before the name is even seen.
+Short names are also simply easier for a model to pick from.
+
+`--rename` takes `<regex>=<replacement>` rules, **split on the first `=`**, and
+applies them in declaration order — each rule rewrites the output of the
+previous one, so a list of abbreviations composes. Every match is replaced
+(`replace_all` semantics) and the replacement expands capture groups:
+
+```bash
+oas2mcp --openapi-file gitlab.yaml \
+  --rename '^(get|post|put|delete|patch)ApiV4=${1}_' \
+  --rename 'Projects?Id=proj' \
+  --rename 'MergeRequests?(Iid)?=mr' \
+  --rename 'NoteableId=' \
+  --rename 'Discussions?(DiscussionId)?=disc'
+
+# postApiV4ProjectsIdMergeRequestsNoteableIdDiscussionsDiscussionIdNotes (70)
+#   → post_projmrdiscNotes (20)
+# getApiV4ProjectsIdMergeRequestsMergeRequestIidDiscussions (57)
+#   → get_projmrmrdisc (16)
+```
+
+Two things to know about the syntax:
+
+- Write `${1}` rather than `$1` whenever the next character is a letter, digit
+  or `_`: the [`regex`](https://docs.rs/regex) crate takes the longest possible
+  group name, so `$1_` looks up a group called `1_` and expands to nothing.
+- A pattern that must match a literal `=` writes it as the hex escape `\x3D`.
+  `[=]` and `\=` mean the same thing to the regex engine, but they spell the
+  character out, so the split-on-first-`=` rule would cut the rule in half.
+
+**Filters keep matching the name *before* renaming** — the `operationId`, or the
+`<method>_<path>` fallback. That is deliberate: an existing curated
+`--include`/`--exclude` allowlist goes on working untouched when you add or edit
+rename rules. `--oauth-role-mapper` is the other way round: it matches the tool
+name as advertised, i.e. after renaming.
+
+Whatever the rules leave behind is sanitised to `[A-Za-z0-9_-]` and then capped
+at `--max-name-len` (64 by default; set it to 56 if a `gitlab__` gateway prefix
+has to fit too). A name over the cap is truncated and given a short hash of the
+full name — so two long names cannot collapse onto one tool — and both the cap
+and every rewritten name are logged, at `warn` and `debug` respectively:
+
+```text
+DEBUG rewrote the tool name old=postApiV4ProjectsIdMergeRequests… new=post_projmrdiscNotes
+```
+
+A renamed tool also carries its origin in its description (`OpenAPI operationId:
+postApiV4Projects…`), so a trace can be mapped back to the document. If two
+operations still end up with the same name, both are kept and the later one gets
+a `_2` suffix, with a warning naming both.
+
 ### Using it from an MCP client
 
 For a stdio client (e.g. Claude Desktop / Claude Code), point it at the binary:
@@ -733,6 +801,12 @@ paths:
 property. Calling it with `{ "petId": 1 }` issues `GET <base-url>/pet/1` and
 returns the upstream response (status line followed by the body). A non-2xx
 upstream status is surfaced as an MCP tool error.
+
+The name goes through, in this order: the raw name (`operationId`, or a
+`<method>_<path>` fallback) → the operation filters, which match that raw name →
+the `--rename` rules → sanitisation to `[A-Za-z0-9_-]` → the `--max-name-len`
+cap → deduplication against the tools already registered. See
+[Renaming the exposed tools](#renaming-the-exposed-tools).
 
 ## Run the tests
 

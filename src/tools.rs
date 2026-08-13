@@ -1,7 +1,7 @@
 //! Mapping of OpenAPI operations to MCP tools, and execution of a tool call as
 //! a proxied HTTP request to the upstream API.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -13,6 +13,7 @@ use crate::filter::FilterConfig;
 use crate::filter::OperationFilter;
 use crate::openapi::Spec;
 use crate::openapi::spec::{MediaType, Operation, Parameter, PathItem};
+use crate::rename::{ToolRenamer, sanitize_name};
 
 /// Where an OpenAPI parameter is carried in the HTTP request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,28 +47,46 @@ pub struct ToolSpec {
 }
 
 /// Build one [`ToolSpec`] per operation defined in the document, keeping only
-/// the operations the [`OperationFilter`] selects.
-pub fn build_tools(spec: &Spec, filter: &OperationFilter) -> Vec<ToolSpec> {
+/// the operations the [`OperationFilter`] selects and naming each one through
+/// the [`ToolRenamer`].
+///
+/// Order of operations, which the tests pin down: the raw name is derived from
+/// the `operationId` (or the `<method>_<path>` fallback), **the filter matches
+/// that raw name**, and only then is the name rewritten. Filtering before
+/// renaming is deliberate — a deployment's curated allowlist of `operationId`s
+/// keeps working unchanged when rename rules are added or edited.
+pub fn build_tools(spec: &Spec, filter: &OperationFilter, renamer: &ToolRenamer) -> Vec<ToolSpec> {
     let mut tools = Vec::new();
-    let mut seen_names = HashSet::new();
+    // Final name → the raw operation name that claimed it, so a collision can
+    // name both sides rather than being resolved silently.
+    let mut seen_names: HashMap<String, String> = HashMap::new();
     let mut filtered = 0usize;
 
     for (path, item) in spec.path_items() {
         for (method, operation) in operations(&item) {
-            if !filter.keeps(&operation_name(path, &method, operation), &operation.tags) {
+            let raw = operation_name(path, &method, operation);
+            if !filter.keeps(&raw, &operation.tags) {
                 filtered += 1;
                 continue;
             }
 
-            let mut tool = build_tool(spec, &item, path, method.clone(), operation);
+            let mut tool = build_tool(spec, &item, path, method.clone(), operation, raw.clone());
+            rename(&mut tool, &raw, operation, renamer);
 
             // MCP tool names must be unique; disambiguate collisions.
             let mut name = tool.name.clone();
             let mut suffix = 2;
-            while !seen_names.insert(name.clone()) {
+            while let Some(owner) = seen_names.get(&name) {
+                tracing::warn!(
+                    name = %name,
+                    held_by = %owner,
+                    operation = %raw,
+                    "two operations claim the same tool name; disambiguating with a suffix"
+                );
                 name = format!("{}_{suffix}", tool.name);
                 suffix += 1;
             }
+            seen_names.insert(name.clone(), raw);
             tool.name = name;
 
             tracing::debug!(tool = %tool.name, %method, %path, "registered tool");
@@ -103,8 +122,9 @@ fn operations(item: &PathItem) -> Vec<(Method, &Operation)> {
     .collect()
 }
 
-/// The MCP tool name for an operation: its `operationId`, or a synthesised
-/// `<method>_<path>` fallback, sanitised to the allowed character set.
+/// The raw MCP tool name for an operation: its `operationId`, or a synthesised
+/// `<method>_<path>` fallback, sanitised to the allowed character set. This is
+/// the name the [`OperationFilter`] matches, before any renaming.
 fn operation_name(path: &str, method: &Method, operation: &Operation) -> String {
     operation
         .operation_id
@@ -113,15 +133,34 @@ fn operation_name(path: &str, method: &Method, operation: &Operation) -> String 
         .unwrap_or_else(|| sanitize_name(&format!("{}_{path}", method.as_str().to_lowercase())))
 }
 
+/// Apply the rename rules to a built tool. A rewritten name keeps its origin in
+/// the description: the model gets the short name, whoever reads a trace keeps
+/// the mapping back to the `operationId`.
+fn rename(tool: &mut ToolSpec, raw: &str, operation: &Operation, renamer: &ToolRenamer) {
+    let renamed = renamer.rename(raw);
+    if renamed == raw {
+        return;
+    }
+    tracing::debug!(old = %raw, new = %renamed, "rewrote the tool name");
+
+    if let Some(id) = &operation.operation_id {
+        let origin = format!("OpenAPI operationId: {id}");
+        tool.description = Some(match tool.description.take() {
+            Some(description) => format!("{description}\n\n{origin}"),
+            None => origin,
+        });
+    }
+    tool.name = renamed;
+}
+
 fn build_tool(
     spec: &Spec,
     item: &PathItem,
     path: &str,
     method: Method,
     operation: &Operation,
+    name: String,
 ) -> ToolSpec {
-    let name = operation_name(path, &method, operation);
-
     // Use the summary as a headline and the description as detail. Many specs
     // (e.g. GitLab) put the one-line "what it does" in `summary` and reserve
     // `description` for version/deprecation notes, so favouring one over the
@@ -358,29 +397,10 @@ fn resolve_schema_ref(spec: &Spec, reference: &str, seen: &mut HashSet<String>) 
     resolved
 }
 
-/// Turn an arbitrary string into a valid MCP tool name (`[A-Za-z0-9_-]+`).
-fn sanitize_name(raw: &str) -> String {
-    let mut name: String = raw
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    name = name.trim_matches('_').to_string();
-    if name.is_empty() {
-        name = "operation".to_string();
-    }
-    name.truncate(64);
-    name
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rename::{RenameConfig, RenameRule};
 
     fn spec_from(yaml: &str) -> Spec {
         let raw: Value = serde_yaml_ng::from_str(yaml).expect("valid YAML");
@@ -388,7 +408,22 @@ mod tests {
     }
 
     fn tools_from(yaml: &str) -> Vec<ToolSpec> {
-        build_tools(&spec_from(yaml), &OperationFilter::default())
+        build_tools(
+            &spec_from(yaml),
+            &OperationFilter::default(),
+            &ToolRenamer::default(),
+        )
+    }
+
+    /// A renamer over the given `<regex>=<replacement>` rules.
+    fn renamer(rules: &[&str]) -> ToolRenamer {
+        ToolRenamer::new(RenameConfig {
+            rules: rules
+                .iter()
+                .map(|raw| RenameRule::parse(raw).expect("valid rule"))
+                .collect(),
+            ..Default::default()
+        })
     }
 
     const PETSTORE: &str = r##"
@@ -571,7 +606,7 @@ paths:
             include_globs: vec!["getPet".into()],
             ..Default::default()
         });
-        let tools = build_tools(&spec_from(PETSTORE), &only_get);
+        let tools = build_tools(&spec_from(PETSTORE), &only_get, &ToolRenamer::default());
         let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["getPet"]);
     }
@@ -579,10 +614,77 @@ paths:
     #[test]
     fn sanitizes_operation_names() {
         assert_eq!(
-            sanitize_name("get /pets/{petId}"),
-            "get__pets__petId_".trim_matches('_')
+            operation_name("/pets/{petId}", &Method::GET, &Operation::default()),
+            "get__pets__petId"
         );
-        assert_eq!(sanitize_name("//"), "operation");
+    }
+
+    #[test]
+    fn filters_match_the_name_before_renaming() {
+        // The guarantee a curated allowlist of `operationId`s depends on: rename
+        // rules never move the target the filter is aiming at.
+        let only_get = OperationFilter::new(FilterConfig {
+            include_globs: vec!["getPet".into()],
+            ..Default::default()
+        });
+        let tools = build_tools(
+            &spec_from(PETSTORE),
+            &only_get,
+            &renamer(&["^get=fetch_", "Pet=animal"]),
+        );
+        let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["fetch_animal"]);
+
+        // And the reverse: a filter written against the *renamed* name matches
+        // nothing, because renaming happens afterwards.
+        let renamed_only = OperationFilter::new(FilterConfig {
+            include_globs: vec!["fetch_animal".into()],
+            ..Default::default()
+        });
+        let tools = build_tools(
+            &spec_from(PETSTORE),
+            &renamed_only,
+            &renamer(&["^get=fetch_", "Pet=animal"]),
+        );
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn a_renamed_tool_keeps_its_operation_id_in_the_description() {
+        let tools = build_tools(
+            &spec_from(PETSTORE),
+            &OperationFilter::default(),
+            &renamer(&["^create=new_"]),
+        );
+        let create = tools.iter().find(|t| t.name == "new_Pet").unwrap();
+        assert_eq!(
+            create.description.as_deref(),
+            Some("Create a pet\n\nIntroduced in 1.0.\n\nOpenAPI operationId: createPet")
+        );
+
+        // A tool whose name survived the rules keeps its description untouched.
+        let get_pet = tools.iter().find(|t| t.name == "getPet").unwrap();
+        assert_eq!(get_pet.description, None);
+    }
+
+    #[test]
+    fn colliding_renamed_names_are_disambiguated() {
+        // Two distinct operations abbreviated onto the same name: both are still
+        // exposed, and the second one carries a numeric suffix.
+        const SPEC: &str = r##"
+openapi: 3.1.0
+info: { title: T, version: "1" }
+paths:
+  /a: { get: { operationId: getApiV4ProjectsIdIssues } }
+  /b: { get: { operationId: getApiV4GroupsIdIssues } }
+"##;
+        let tools = build_tools(
+            &spec_from(SPEC),
+            &OperationFilter::default(),
+            &renamer(&["^getApiV4(Projects|Groups)Id=get_"]),
+        );
+        let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["get_Issues", "get_Issues_2"]);
     }
 
     #[test]

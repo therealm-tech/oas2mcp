@@ -247,6 +247,14 @@ spec:
             - name: EXCLUDE_TAGS
               value: {{ join "\n" . | quote }}
             {{- end }}
+            {{- with .Values.oas2mcp.operations.rename }}
+            - name: RENAME_OPERATIONS
+              value: {{ join "\n" . | quote }}
+            {{- end }}
+            {{- with .Values.oas2mcp.operations.maxNameLen }}
+            - name: MAX_NAME_LEN
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.oas2mcp.auth.roleMapper }}
             - name: OAUTH_ROLE_MAPPER
               value: {{ join "\n" . | quote }}

@@ -24,6 +24,7 @@ use crate::cli::Cli;
 use crate::filter::{FilterConfig, OperationFilter};
 use crate::oauth::{Delegation, TokenProvider};
 use crate::openapi::Spec;
+use crate::rename::{RenameConfig, ToolRenamer};
 use crate::telemetry::{Metrics, Outcome};
 use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
 
@@ -548,8 +549,8 @@ fn filter_forwarded(allow: &[HeaderName], src: &HeaderMap) -> HeaderMap {
 }
 
 /// Build the document-derived [`Snapshot`]: resolve the base URL, apply the
-/// operation filter, build the tools and their name index, and render the
-/// instructions. Shared by the initial build and every reload.
+/// operation filter, build the tools and their (renamed) name index, and render
+/// the instructions. Shared by the initial build and every reload.
 fn build_snapshot(spec: &Spec, cli: &Cli) -> anyhow::Result<Snapshot> {
     let base_url = resolve_base_url(spec, cli)?;
 
@@ -561,7 +562,13 @@ fn build_snapshot(spec: &Spec, cli: &Cli) -> anyhow::Result<Snapshot> {
         include_tags: cli.include_tags.clone(),
         exclude_tags: cli.exclude_tags.clone(),
     });
-    let tools = build_tools(spec, &filter);
+    // The filter matches the raw operation name; the renamer only shapes the
+    // name that is finally advertised. See `build_tools`.
+    let renamer = ToolRenamer::new(RenameConfig {
+        rules: cli.rename_operations.clone(),
+        max_len: cli.max_name_len,
+    });
+    let tools = build_tools(spec, &filter, &renamer);
     if tools.is_empty() {
         tracing::warn!("the OpenAPI document defines no usable operations");
     }
