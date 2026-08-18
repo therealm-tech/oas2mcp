@@ -101,20 +101,32 @@ def mcp_status(host: str) -> int:
 
 
 def call_tool(name: str, token: str, arguments: dict | None = None) -> dict:
-    """Call a tool and return the parsed result plus its text payload."""
+    """Call a tool and return the parsed result plus its upstream body.
+
+    The body comes from `structuredContent`, which is where a program is meant
+    to read it. `structured` reports whether the field was actually there, so a
+    check can assert on it; splitting the text block stays as a fallback for
+    bodies the server could not parse as JSON.
+    """
     reply = mcp("tools/call", {"name": name, "arguments": arguments or {}}, token)
     result = reply.get("result")
     if result is None:
         return {"rpc_error": reply.get("error", {}).get("message", "no result")}
     text = "".join(block.get("text", "") for block in result.get("content", []))
-    payload = None
-    # The tool result is "HTTP <status>\n\n<body>"; pull the body out when JSON.
-    if "\n\n" in text:
+    payload = result.get("structuredContent", result.get("structured_content"))
+    structured = payload is not None
+    if not structured and "\n\n" in text:
+        # Fallback only: the tool result's text block is "HTTP <status>\n\n<body>".
         try:
             payload = json.loads(text.split("\n\n", 1)[1])
         except json.JSONDecodeError:
             payload = None
-    return {"isError": bool(result.get("is_error") or result.get("isError")), "text": text, "payload": payload}
+    return {
+        "isError": bool(result.get("is_error") or result.get("isError")),
+        "text": text,
+        "payload": payload,
+        "structured": structured,
+    }
 
 
 def tool_names(token: str) -> list[str]:
@@ -135,6 +147,11 @@ def main() -> int:
     print("\n=== delegation: the API sees the end user, not the service account ===")
     result = call_tool("getPets", alice)
     check("alice's call succeeds", not result.get("isError") and result.get("payload"), result.get("text", result.get("rpc_error", ""))[:200])
+    check(
+        "the result carries the upstream body as structuredContent",
+        result.get("structured"),
+        f"structuredContent missing; text={result.get('text', '')[:120]}",
+    )
     if result.get("payload"):
         check(
             "the API attributed the call to alice",

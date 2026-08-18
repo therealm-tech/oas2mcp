@@ -799,14 +799,38 @@ paths:
 
 `oas2mcp` advertises a `getPetById` tool whose input schema requires a `petId`
 property. Calling it with `{ "petId": 1 }` issues `GET <base-url>/pet/1` and
-returns the upstream response (status line followed by the body). A non-2xx
-upstream status is surfaced as an MCP tool error.
+returns the upstream response. A non-2xx upstream status is surfaced as an MCP
+tool error.
 
 The name goes through, in this order: the raw name (`operationId`, or a
 `<method>_<path>` fallback) → the operation filters, which match that raw name →
 the `--rename` rules → sanitisation to `[A-Za-z0-9_-]` → the `--max-name-len`
 cap → deduplication against the tools already registered. See
 [Renaming the exposed tools](#renaming-the-exposed-tools).
+
+### The shape of a tool result
+
+A result carries the upstream response twice, in two fields with two audiences:
+
+| Field               | Content                                       | Read it if you are |
+| ------------------- | --------------------------------------------- | ------------------ |
+| `content`           | One text block, `HTTP <status>\n\n<body>`      | a human or a model |
+| `structuredContent` | The response body parsed as JSON, verbatim    | a program          |
+| `isError`           | `true` when the upstream status is 4xx or 5xx | either             |
+
+**A machine should read `structuredContent`.** It is the parsed body and nothing
+else — no status line to strip, no string to split. It is absent when the body
+is not JSON (an empty `204`, a `text/plain` payload, a gateway's HTML error
+page), so treat it as optional and fall back to the text block.
+
+The text block always exists and always keeps its status prefix: that is what
+lets a model tell a `404` from a `200`, where `isError` only says yes or no. A
+failing call still gets a `structuredContent` when the upstream error body is
+itself JSON.
+
+`structuredContent` is not yet described by a per-tool `outputSchema`, so it is
+informative rather than contractual — clients should not validate against a
+declared schema that isn't there.
 
 ## Run the tests
 

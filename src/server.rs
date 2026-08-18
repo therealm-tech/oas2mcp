@@ -155,13 +155,7 @@ impl OpenApiServer {
             Ok(response) => {
                 let status = response.status();
                 let body = response.text().await.unwrap_or_default();
-                let text = format!("HTTP {status}\n\n{body}");
-                let content = vec![ContentBlock::text(text)];
-                if status.is_client_error() || status.is_server_error() {
-                    CallToolResult::error(content)
-                } else {
-                    CallToolResult::success(content)
-                }
+                shape_response(status, &body)
             }
             Err(err) => CallToolResult::error(vec![ContentBlock::text(format!(
                 "upstream request failed: {err}"
@@ -644,6 +638,26 @@ fn value_to_string(value: &Value) -> String {
     }
 }
 
+/// Shape an upstream response into an MCP tool result.
+///
+/// The text block keeps its `HTTP {status}\n\n{body}` form: it is what lets a
+/// model tell a 404 from a 200, where `isError` only ever says yes or no. When
+/// the body parses as JSON it is *also* attached verbatim as
+/// `structuredContent`, so a client reads the data without splitting the
+/// string. A body that is not JSON — an empty 204, `text/plain`, a gateway's
+/// error page — leaves `structuredContent` unset.
+fn shape_response(status: reqwest::StatusCode, body: &str) -> CallToolResult {
+    let content = vec![ContentBlock::text(format!("HTTP {status}\n\n{body}"))];
+    let mut result = if status.is_client_error() || status.is_server_error() {
+        CallToolResult::error(content)
+    } else {
+        CallToolResult::success(content)
+    };
+    // `CallToolResult` is `#[non_exhaustive]`, hence the build-then-assign.
+    result.structured_content = serde_json::from_str::<Value>(body).ok();
+    result
+}
+
 /// Append a query parameter, expanding arrays into repeated entries.
 fn collect_query(param: &Param, value: Option<&Value>, out: &mut Vec<(String, String)>) {
     match value {
@@ -925,5 +939,68 @@ paths:
         assert!(out.get("cookie").is_none());
         let tenant: Vec<_> = out.get_all("x-tenant").iter().collect();
         assert_eq!(tenant, vec!["a", "b"]);
+    }
+
+    /// The single text block of a shaped result.
+    fn text_of(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|block| block.as_text().map(|t| t.text.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_json_body_becomes_structured_content_without_losing_the_text_block() {
+        let body = r#"{"id":7,"name":"rex","tags":["good","boy"]}"#;
+        let result = shape_response(reqwest::StatusCode::OK, body);
+
+        // The machine-readable half: the body verbatim, no re-shaping.
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::from_str::<Value>(body).expect("the fixture is JSON"))
+        );
+        // The human-readable half is untouched, status prefix included.
+        assert_eq!(text_of(&result), format!("HTTP 200 OK\n\n{body}"));
+        assert_eq!(result.is_error, Some(false));
+    }
+
+    #[test]
+    fn a_non_json_body_carries_no_structured_content() {
+        // An empty 204, a `text/plain` payload, a gateway's HTML error page:
+        // nothing to attach, and the text block stays exactly as it was.
+        for (status, body) in [
+            (reqwest::StatusCode::NO_CONTENT, ""),
+            (reqwest::StatusCode::OK, "pong"),
+            (reqwest::StatusCode::OK, "<html>not json</html>"),
+        ] {
+            let result = shape_response(status, body);
+            assert_eq!(result.structured_content, None, "body: {body:?}");
+            assert_eq!(text_of(&result), format!("HTTP {status}\n\n{body}"));
+        }
+    }
+
+    #[test]
+    fn an_upstream_error_keeps_is_error_alongside_its_structured_body() {
+        let body = r#"{"error":"not found","code":404}"#;
+        let result = shape_response(reqwest::StatusCode::NOT_FOUND, body);
+
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::from_str::<Value>(body).expect("the fixture is JSON"))
+        );
+        assert_eq!(text_of(&result), format!("HTTP 404 Not Found\n\n{body}"));
+    }
+
+    #[test]
+    fn a_json_scalar_body_is_still_structured_content() {
+        // `structuredContent` is any JSON value, not only an object — a bare
+        // array or number from an upstream is worth attaching too.
+        let result = shape_response(reqwest::StatusCode::OK, "[1,2,3]");
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::json!([1, 2, 3]))
+        );
     }
 }
