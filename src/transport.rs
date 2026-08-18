@@ -98,14 +98,14 @@ async fn serve_streamable_http(
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),
-        // rmcp only honours `json_response` in stateless mode: the stateful
+        // rmcp only honours `json_response` in stateless mode: the session
         // path always replies over SSE (with a priming event) regardless. So
-        // enabling JSON replies means turning stateful sessions off too. That
+        // enabling JSON replies means turning legacy sessions off too. That
         // is fine behind a proxy — oas2mcp is a stateless request/response
         // proxy, and a gateway like Envoy manages MCP sessions itself.
         StreamableHttpServerConfig::default()
             .with_json_response(json_response)
-            .with_stateful_mode(!json_response)
+            .with_legacy_session_mode(!json_response)
             .with_allowed_hosts(resolve_allowed_hosts(bind, allowed_hosts)),
     );
     // The access log wraps `rmcp`'s service: most of its rejections happen in
