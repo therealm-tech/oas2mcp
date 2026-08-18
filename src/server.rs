@@ -11,8 +11,8 @@ use arc_swap::ArcSwap;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData, ServerHandler};
@@ -317,7 +317,7 @@ impl ServerHandler for OpenApiServer {
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         // Pin the current snapshot for the whole call so a concurrent reload
         // cannot swap the tool out from under us mid-request.
         let state = self.state.load_full();
@@ -389,7 +389,8 @@ impl ServerHandler for OpenApiServer {
                             );
                             return Ok(CallToolResult::error(vec![ContentBlock::text(
                                 "no verified caller identity to obtain an upstream token for",
-                            )]));
+                            )])
+                            .into());
                         }
                     }
                 } else {
@@ -412,7 +413,8 @@ impl ServerHandler for OpenApiServer {
                             .record_call(&spec.name, Outcome::AuthError, started.elapsed());
                         return Ok(CallToolResult::error(vec![ContentBlock::text(
                             "could not obtain an upstream OAuth token; see the server logs",
-                        )]));
+                        )])
+                        .into());
                     }
                 }
             }
@@ -430,7 +432,7 @@ impl ServerHandler for OpenApiServer {
         self.metrics
             .record_call(&spec.name, outcome, started.elapsed());
 
-        Ok(result)
+        Ok(result.into())
     }
 }
 
