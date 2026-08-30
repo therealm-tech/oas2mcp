@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1079 845" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">oas2mcp</title>
+  <g fill="#346187">
+    <rect x="32" y="217" width="172" height="197" rx="27.5"/>
+    <rect x="240" y="217" width="172" height="197" rx="27.5"/>
+    <rect x="32" y="455" width="172" height="197" rx="27.5"/>
+    <rect x="240" y="455" width="172" height="197" rx="27.5"/>
+  </g>
+  <g fill="#ff741a">
+    <rect x="469" y="33" width="120" height="779" rx="20.5"/>
+    <circle cx="886.8" cy="163.5" r="66.65"/>
+    <circle cx="979" cy="422" r="66.65"/>
+    <circle cx="886.8" cy="680.5" r="66.65"/>
+  </g>
+  <g stroke="#ff741a" stroke-width="33" stroke-linecap="round" fill="none">
+    <path d="M665.4 329.25 889.5 167.15"/>
+    <path d="M665.4 422 979 422"/>
+    <path d="M665.4 514.75 889.5 676.85"/>
+  </g>
+</svg>

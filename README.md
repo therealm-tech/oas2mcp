@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/therealm-tech/oas2mcp/main/logo.svg"
+       alt="oas2mcp logo" width="180">
+</p>
+
 # oas2mcp
 
 Load an [OpenAPI](https://www.openapis.org/) document at startup and expose
