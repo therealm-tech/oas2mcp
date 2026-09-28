@@ -143,12 +143,12 @@ true
   readable `helm` error.
 */}}
 {{- define "oas2mcp.upstreamDelegationValidate" -}}
-{{- if and .Values.oas2mcp.upstream.oauth.tokenUrl (eq (.Values.oas2mcp.upstream.oauth.grant | toString) "jwt-bearer") (not .Values.oas2mcp.upstream.oauth.subject) -}}
+{{- if and .Values.oas2mcp.upstream.oauth.tokenUrl (has (.Values.oas2mcp.upstream.oauth.grant | toString) (list "jwt-bearer" "jwt-bearer-relay")) (not .Values.oas2mcp.upstream.oauth.subject) -}}
 {{- if not (or .Values.oas2mcp.auth.jwks.url .Values.oas2mcp.auth.jwks.file) -}}
-{{- fail "oas2mcp.upstream.oauth.grant=jwt-bearer acts on behalf of the caller, which needs a verified identity: set oas2mcp.auth.jwks.url or oas2mcp.auth.jwks.file, or pin oas2mcp.upstream.oauth.subject" -}}
+{{- fail (printf "oas2mcp.upstream.oauth.grant=%s acts on behalf of the caller, which needs a verified identity: set oas2mcp.auth.jwks.url or oas2mcp.auth.jwks.file, or pin oas2mcp.upstream.oauth.subject" (.Values.oas2mcp.upstream.oauth.grant | toString)) -}}
 {{- end -}}
 {{- if ne .Values.oas2mcp.transport "streamable-http" -}}
-{{- fail "oas2mcp.upstream.oauth.grant=jwt-bearer acts on behalf of the caller, which needs transport=streamable-http (no other transport carries a client JWT), or pin oas2mcp.upstream.oauth.subject" -}}
+{{- fail (printf "oas2mcp.upstream.oauth.grant=%s acts on behalf of the caller, which needs transport=streamable-http (no other transport carries a client JWT), or pin oas2mcp.upstream.oauth.subject" (.Values.oas2mcp.upstream.oauth.grant | toString)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

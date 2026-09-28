@@ -116,8 +116,7 @@ echo "== starting oas2mcp"
   --upstream-oauth-token-url "$KEYCLOAK_URL/realms/$KEYCLOAK_REALM/protocol/openid-connect/token" \
   --upstream-oauth-client-id oas2mcp-upstream \
   --upstream-oauth-client-secret upstream-secret \
-  --upstream-oauth-grant jwt-bearer \
-  --upstream-oauth-assertion caller \
+  --upstream-oauth-grant jwt-bearer-relay \
   --log-filter info \
   >"$logs/oas2mcp.log" 2>&1 &
 pids+=("$!")
