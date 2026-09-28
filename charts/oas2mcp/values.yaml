@@ -99,6 +99,8 @@ oas2mcp:
     expectedIssuers: []
     # -- (string) Clock skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). Unset → the binary default (`60s`). Raise it when tokens are rejected intermittently because the provider's clock and this server's disagree. Maps to `OAUTH_CLOCK_SKEW`.
     clockSkew: ~
+    # -- (string) Canonical URL MCP clients reach the endpoint under (e.g. `https://oas2mcp.example.com/mcp`). Set → a request without a valid bearer token gets a `401` whose `WWW-Authenticate` challenge points at the Protected Resource Metadata (RFC 9728), served under `/.well-known/oauth-protected-resource` and naming `expectedIssuers` as the authorization servers, so an MCP client can discover where to log in on its own. Requires `roleMapper` and at least one `expectedIssuers` entry. Maps to `OAUTH_RESOURCE`.
+    resource: ~
     # -- (list) JWT claim names copied into the per-call tracing log as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`), for observability. Logged only, never a metric label. Needs `roleMapper` (claims come from the verified JWT). Defaults to `[sub]`; set `[]` to disable. Maps to `TRACE_CLAIMS`.
     traceClaims:
       - sub

@@ -19,7 +19,7 @@ use rmcp::{ErrorData, ServerHandler};
 use serde_json::{Map, Value};
 use url::Url;
 
-use crate::auth::Authorizer;
+use crate::auth::{Authorizer, bearer_token};
 use crate::cli::Cli;
 use crate::filter::{FilterConfig, OperationFilter};
 use crate::oauth::{Delegation, TokenProvider};
@@ -521,17 +521,6 @@ fn unix_to_instant(exp: u64) -> Option<Instant> {
         .map(|remaining| Instant::now() + std::time::Duration::from_secs(remaining))
 }
 
-/// Extract the bearer token from an `Authorization` header, if present and
-/// well-formed (`Bearer <token>`, scheme case-insensitive).
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(http::header::AUTHORIZATION)?.to_str().ok()?;
-    let (scheme, token) = value.split_once(' ')?;
-    scheme
-        .eq_ignore_ascii_case("bearer")
-        .then(|| token.trim())
-        .filter(|t| !t.is_empty())
-}
-
 /// Pick the headers named in `allow` out of `src`, preserving multiple values
 /// for the same name.
 fn filter_forwarded(allow: &[HeaderName], src: &HeaderMap) -> HeaderMap {
@@ -900,26 +889,6 @@ paths:
             ]
         );
         assert!(parse_header_names(&["not a header".into()]).is_err());
-    }
-
-    #[test]
-    fn bearer_token_parses_scheme_case_insensitively() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            HeaderValue::from_static("Bearer abc.def.ghi"),
-        );
-        assert_eq!(bearer_token(&headers), Some("abc.def.ghi"));
-
-        headers.insert("authorization", HeaderValue::from_static("bearer  spaced "));
-        assert_eq!(bearer_token(&headers), Some("spaced"));
-
-        // Non-bearer schemes and empty tokens yield nothing.
-        headers.insert("authorization", HeaderValue::from_static("Basic Zm9v"));
-        assert_eq!(bearer_token(&headers), None);
-        headers.insert("authorization", HeaderValue::from_static("Bearer "));
-        assert_eq!(bearer_token(&headers), None);
-        assert_eq!(bearer_token(&HeaderMap::new()), None);
     }
 
     #[test]

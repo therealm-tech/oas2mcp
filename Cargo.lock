@@ -1415,6 +1415,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "url",

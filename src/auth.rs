@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, bail};
+use http::HeaderMap;
 use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use regex::Regex;
@@ -172,6 +173,17 @@ impl Authorizer {
     }
 }
 
+/// Extract the bearer token from an `Authorization` header, if present and
+/// well-formed (`Bearer <token>`, scheme case-insensitive).
+pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let value = headers.get(http::header::AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    scheme
+        .eq_ignore_ascii_case("bearer")
+        .then(|| token.trim())
+        .filter(|t| !t.is_empty())
+}
+
 /// Parse `role:tool_name_regex` entries, validating each regex at startup.
 fn parse_rules(raw: &[String]) -> anyhow::Result<Vec<RoleRule>> {
     raw.iter()
@@ -299,8 +311,9 @@ fn extract_traced_claims(claims: &Value, names: &[String]) -> Map<String, Value>
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use http::HeaderValue;
     use serde_json::json;
 
     fn roles(values: &[&str]) -> HashSet<String> {
@@ -394,11 +407,11 @@ mod tests {
     // test. The PEM lives in a fixture file (and is excluded from the
     // detect-private-key hook) rather than inline so it cannot be mistaken for a
     // leaked production key.
-    const TEST_KID: &str = "test-key";
+    pub(crate) const TEST_KID: &str = "test-key";
     const TEST_N: &str = "pIrAmCcbgl0Z6Fmomx9TVpVhMiOjJOrtjzKHoKnV5pYyFz86Zpor4tHmK8inQB6ES7j2V-0cgnT-62g_wCCwJHS-jJY0GawNgkxPq_5zFSFBuhJjyGpQzofexEPP7Qof6ZQKRViNw5A64C-dkcgoixhOBS1TWk6mkDOgoYOv9q2IUM5saRYZIwQw7OU4hsKetZcq8gbmVSjbzPylFryaIu5Udlo4JxFt-7t0RG_N858nu6eBYR68KMlOZIqN4YsaaQBm6teCdOUUXxAww8Yuij0gbz_YXMSnu5A5Ooff8w83kQLJqPLJyyEb357CvCqZsDZmlp3LFVRRmNuDPUtTKQ";
     const TEST_PRIV_PEM: &str = include_str!("../tests/fixtures/test_rsa_key.pem");
 
-    fn test_authorizer() -> Authorizer {
+    pub(crate) fn test_authorizer() -> Authorizer {
         let jwks: JwkSet = serde_json::from_value(json!({
             "keys": [{
                 "kty": "RSA",
@@ -424,7 +437,7 @@ mod tests {
 
     /// Sign a token with the test key, `kid` header, a fixed `sub`, and the
     /// given expiry.
-    fn sign(roles_claim: Value, exp_unix: u64, kid: Option<&str>) -> String {
+    pub(crate) fn sign(roles_claim: Value, exp_unix: u64, kid: Option<&str>) -> String {
         sign_claims(
             json!({ "roles": roles_claim, "sub": "user-123", "exp": exp_unix }),
             kid,
@@ -440,7 +453,7 @@ mod tests {
         jsonwebtoken::encode(&header, &claims, &key).expect("signing succeeds")
     }
 
-    fn in_one_hour() -> u64 {
+    pub(crate) fn in_one_hour() -> u64 {
         use std::time::{SystemTime, UNIX_EPOCH};
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -700,5 +713,25 @@ mod tests {
         let mut authz = test_authorizer();
         authz.clock_skew = Duration::from_secs(300);
         assert!(authz.verify(&token).is_ok());
+    }
+
+    #[test]
+    fn bearer_token_parses_scheme_case_insensitively() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer abc.def.ghi"),
+        );
+        assert_eq!(bearer_token(&headers), Some("abc.def.ghi"));
+
+        headers.insert("authorization", HeaderValue::from_static("bearer  spaced "));
+        assert_eq!(bearer_token(&headers), Some("spaced"));
+
+        // Non-bearer schemes and empty tokens yield nothing.
+        headers.insert("authorization", HeaderValue::from_static("Basic Zm9v"));
+        assert_eq!(bearer_token(&headers), None);
+        headers.insert("authorization", HeaderValue::from_static("Bearer "));
+        assert_eq!(bearer_token(&headers), None);
+        assert_eq!(bearer_token(&HeaderMap::new()), None);
     }
 }

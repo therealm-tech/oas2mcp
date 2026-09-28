@@ -73,6 +73,11 @@ writing a line of glue code.
 - **Role-based tool access** — verify the caller's JWT against a JWKS and gate
   which tools they can see and call, mapping each `role` to a tool-name regex
   (`streamable-http` only).
+- **MCP authorization discovery** — with `--oauth-resource`, `/mcp` behaves as
+  the OAuth protected resource the MCP authorization spec describes: a request
+  without a valid token is answered `401` with a `WWW-Authenticate` challenge,
+  and the Protected Resource Metadata (RFC 9728) tells the client which
+  authorization server to log in with.
 - **JWT claim tracing** — with `--trace-claim`, echo selected claims from the
   verified token (e.g. `sub`, `email`, `tenant_id`) onto each tool-call log line
   to see who made each call, without inflating metric cardinality.
@@ -150,6 +155,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--oauth-expected-audience` | `OAUTH_EXPECTED_AUDIENCES` | — | Audience the incoming JWT's `aud` must match. Repeatable. **Set this**: unset, a token your provider minted for another service is accepted here. |
 | `--oauth-expected-issuer` | `OAUTH_EXPECTED_ISSUERS` | —      | Issuer the incoming JWT's `iss` must match. Repeatable. Defence in depth next to the JWKS. |
 | `--oauth-clock-skew` | `OAUTH_CLOCK_SKEW` | `60s`            | Skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). |
+| `--oauth-resource` | `OAUTH_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--oauth-role-mapper` and `--oauth-expected-issuer`. `streamable-http` only. |
 | `--oauth-role-claim` | `OAUTH_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
 | `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs `--oauth-role-mapper`. |
 | `--include`       | `INCLUDE_OPERATIONS` | —            | Only expose operations whose name matches this glob (`*`/`?`). Repeatable. |
@@ -452,7 +458,9 @@ verified against a JWKS (`--oauth-jwks-url`, fetched once at startup, or
 `--oauth-jwks-file`) and the roles are read from the `--oauth-role-claim` claim
 (default `roles`; an array of strings or a whitespace-separated string). A
 caller with no token, an invalid/expired token, or roles that match no mapping
-sees and can call **no** tools.
+sees and can call **no** tools — or, with `--oauth-resource`, a caller without a
+valid token is refused outright with a `401` that tells it where to log in (see
+[below](#letting-mcp-clients-find-the-authorization-server)).
 
 ```bash
 oas2mcp \
@@ -539,6 +547,62 @@ That is a migration concern, not a recommendation: set them.
 
 If tokens are rejected intermittently — right after being issued, or just before
 expiring — suspect the clocks before the config, and widen `--oauth-clock-skew`.
+
+#### Letting MCP clients find the authorization server
+
+By default a caller without a token is not turned away: it gets an empty tool
+list, and nothing tells it where a token would come from. An MCP client that
+implements the [MCP authorization spec](https://modelcontextprotocol.io/specification/latest/basic/authorization)
+can do the login itself, provided the server points it at the authorization
+server. Set `--oauth-resource` to the URL clients reach the endpoint under:
+
+```bash
+oas2mcp \
+  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+  --oauth-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
+  --oauth-role-mapper 'user:.*' \
+  --oauth-expected-issuer https://idp.example.com/realms/main \
+  --oauth-expected-audience oas2mcp \
+  --oauth-resource https://mcp.example.com/mcp
+```
+
+Every request to `/mcp` then needs a valid bearer token. Without one the answer
+is:
+
+```http
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"
+```
+
+and the metadata it points at, served without authentication, names the
+`--oauth-expected-issuer` values as the authorization servers:
+
+```json
+{
+  "resource": "https://mcp.example.com/mcp",
+  "authorization_servers": ["https://idp.example.com/realms/main"],
+  "bearer_methods_supported": ["header"]
+}
+```
+
+The client reads the authorization server's own metadata from there, runs the
+OAuth flow, and retries with the token. An invalid or expired token gets the same
+`401`, with `error="invalid_token"` added to the challenge.
+
+- **The issuers are the authorization servers.** Advertising any other server
+  would send clients to fetch tokens this one then refuses, so at least one
+  `--oauth-expected-issuer` is required.
+- **The metadata is served at two paths**: the one derived from the resource URL
+  (`/.well-known/oauth-protected-resource/mcp`, per RFC 9728 §3) and the bare
+  `/.well-known/oauth-protected-resource` clients fall back to. Behind a reverse
+  proxy that rewrites paths, route both to oas2mcp.
+- **A valid token with no matching role is let through**, and sees an empty tool
+  list: authentication decides whether the request is accepted, the roles decide
+  what it can use.
+- **The client must be able to register with the authorization server.** How it
+  gets a client ID (dynamic registration, a pre-registered public client, …) is
+  settled between the client and the authorization server; oas2mcp takes no
+  part in it.
 
 ### Metrics
 
@@ -838,124 +902,10 @@ itself JSON.
 informative rather than contractual — clients should not validate against a
 declared schema that isn't there.
 
-## Run the tests
+## Contributing
 
-```bash
-cargo test
-```
-
-## Development
-
-Install the git hooks and run all checks:
-
-```bash
-pre-commit install
-pre-commit run --all-files
-```
-
-This runs `cargo fmt --check`, `cargo clippy -D warnings`, `hadolint`,
-`actionlint`, `shellcheck`, `helm lint`, `helm-docs`, and the standard
-whitespace/merge hooks. The hooks call the real binaries, so they need to be on
-`PATH`: `hadolint`, `actionlint`, `shellcheck`, `helm` and `helm-docs`
-(`brew install hadolint actionlint shellcheck helm norwoodj/tap/helm-docs`).
-
-### CI / Release
-
-GitHub Actions workflows:
-
-- **quality** — runs `pre-commit`, the test suite, and a Trivy scan of the
-  repository on every push to `main` and every pull request.
-- **build** — builds the container image (multi-arch on native runners) and
-  scans it with Trivy; pushes to `ghcr.io/therealm-tech/oas2mcp` only on manual
-  dispatch or from a release.
-- **chart** — publishes the Helm chart as an OCI artifact to
-  `ghcr.io/therealm-tech/charts`, triggered by a `chart-X.Y.Z` tag (or manual
-  dispatch). The chart is versioned and released independently of the app.
-- **release** — triggered by pushing a `vX.Y.Z` tag: checks that the
-  `Cargo.toml` version matches the tag, builds and pushes the image (versioned
-  from the tag) and creates a GitHub Release with auto-generated notes. A
-  mismatch fails the job before anything is published — the tag names the image
-  but `Cargo.toml` is what `oas2mcp --version` reports, so the two must agree.
-
-### Security scanning
-
-[Trivy](https://trivy.dev) runs in two places, and both fail the build on a
-**HIGH** or **CRITICAL** finding that has a fix available:
-
-- **quality / trivy** — a filesystem scan of the repository: crate advisories
-  from `Cargo.lock`, leaked secrets, and `Dockerfile` and Helm chart
-  misconfiguration.
-- **build / scan the image** — scans the container image the commit actually
-  produces, which is what catches CVEs in the base layer. This runs on releases
-  too: a HIGH/CRITICAL finding fails the build, which blocks the `manifest`
-  job, so no usable tag is ever published. Note it covers the base layer only —
-  the runtime image holds a compiled binary, so Trivy sees no Rust dependencies
-  there; those are covered by the `Cargo.lock` scan above.
-
-The runtime image is `gcr.io/distroless/cc-debian12:nonroot`: no shell, no
-package manager, no OS package layer to speak of, so a scanner finds next to
-nothing to flag. That is a deliberate move away from `debian:bookworm-slim`,
-which carried around twenty unfixed HIGH/CRITICAL advisories at any time.
-
-Each runs twice, deliberately: once reporting **every** severity to the
-repository's **Security** tab, then once more gating the build on HIGH and
-CRITICAL. Advisories with no released fix are excluded from both.
-
-Trivy renders the chart itself, but only when handed the values its templates
-require (`TRIVY_HELM_VALUES`). Without them it logs a render error, scans no
-chart at all, and still reports success — so keep that variable set.
-
-Reproduce either scan locally:
-
-```bash
-# What the quality workflow gates on:
-TRIVY_HELM_VALUES=charts/oas2mcp/values-lint.yaml \
-  trivy fs . --scanners vuln,secret,misconfig \
-    --severity HIGH,CRITICAL --ignore-unfixed \
-    --skip-files tests/fixtures/test_rsa_key.pem
-
-# What the build workflow gates on, against a locally built image:
-docker build -t oas2mcp:dev .
-trivy image oas2mcp:dev --severity HIGH,CRITICAL --ignore-unfixed
-```
-
-### Cutting a release
-
-The app and the chart have separate release lifecycles.
-
-The helper script bumps the version files, runs the checks, commits, tags and
-pushes — which is what triggers the workflows. Release either side, or both at
-once:
-
-```bash
-# The application: bumps Cargo.toml + Cargo.lock, tags v0.4.0.
-scripts/release.sh 0.4.0
-
-# The chart: bumps Chart.yaml + the generated chart README, tags chart-0.5.0.
-scripts/release.sh --chart 0.5.0
-
-# Both: as above, and `appVersion` is pointed at the app version being
-# released, since the chart now targets that image.
-scripts/release.sh 0.4.0 --chart 0.5.0
-```
-
-A chart-only release points `appVersion` at the latest `vX.Y.Z` tag, so a chart
-published on its own still ships against the newest app image instead of
-quietly lagging behind it. The script refuses to run on a dirty tree, off
-`main`, out of sync with `origin/main`, or when a tag already exists. Useful
-flags: `--skip-tests`, `--no-push` (commit and tag locally only), `-y` (no
-confirmation prompt). Bumping the chart needs `helm` and `helm-docs` on `PATH`.
-
-Doing it by hand works too, as long as `Cargo.toml` already carries the same
-version — otherwise the `release` workflow fails the version check:
-
-```bash
-# Release the application (image + GitHub Release):
-git tag v0.1.0 && git push origin v0.1.0
-
-# Release the Helm chart (OCI push), independently:
-git tag chart-0.1.0 && git push origin chart-0.1.0
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, the tests and
+the CI, and [ARCHITECTURE.md](ARCHITECTURE.md) for how the code fits together.
 
 ## Limitations
 

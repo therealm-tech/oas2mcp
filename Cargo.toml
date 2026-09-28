@@ -82,3 +82,5 @@ uuid = { version = "1.24.0", features = ["v4"] }
 
 [dev-dependencies]
 base64 = "0.23.1"
+# `ServiceExt::oneshot`, to drive an axum router in a test without a socket.
+tower = { version = "0.5", features = ["util"] }

@@ -59,6 +59,24 @@ async fn main() -> anyhow::Result<()> {
 
     check_delegation_is_possible(&cli, authorizer.is_some())?;
 
+    let protected = match (&cli.oauth_resource, &authorizer) {
+        (Some(resource), Some(authorizer)) => Some(
+            transport::ProtectedResource::new(
+                resource,
+                &cli.oauth_expected_issuers,
+                authorizer.clone(),
+            )
+            .context("configuring the OAuth protected resource")?,
+        ),
+        _ => None,
+    };
+    if protected.is_some() && cli.transport != cli::Transport::StreamableHttp {
+        tracing::warn!(
+            transport = %cli.transport,
+            "--oauth-resource only takes effect on the streamable-http transport; ignored here"
+        );
+    }
+
     let telemetry =
         telemetry::Telemetry::from_cli(&cli).context("configuring metrics telemetry")?;
 
@@ -119,6 +137,7 @@ async fn main() -> anyhow::Result<()> {
         cli.bind_addr,
         !cli.stream_responses,
         &cli.allowed_hosts,
+        protected,
         server,
     )
     .await

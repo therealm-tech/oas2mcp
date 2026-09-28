@@ -529,6 +529,23 @@ pub struct Cli {
     )]
     pub oauth_role_claim: String,
 
+    /// Canonical URL MCP clients reach this server's endpoint under (e.g.
+    /// `https://mcp.example.com/mcp`). Set → oas2mcp acts as an OAuth protected
+    /// resource the way the MCP authorization spec describes: a request to
+    /// `/mcp` without a valid bearer token is answered `401` with a
+    /// `WWW-Authenticate` challenge, and the Protected Resource Metadata
+    /// (RFC 9728) is served under `/.well-known/oauth-protected-resource`,
+    /// naming the `--oauth-expected-issuer` values as the authorization servers.
+    /// That is what lets a client discover where to obtain a token on its own.
+    /// Requires `--oauth-role-mapper` and at least one `--oauth-expected-issuer`.
+    /// Only used by `streamable-http`.
+    #[arg(
+        long = "oauth-resource",
+        env = "OAUTH_RESOURCE",
+        requires = "oauth_role_mapper"
+    )]
+    pub oauth_resource: Option<Url>,
+
     /// Name of a JWT claim to surface in the per-call tracing log as a
     /// `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`), for observability.
     /// Repeatable; each named claim that is present in the verified token is
@@ -795,6 +812,20 @@ mod tests {
         ])
         .expect("repeated hosts parse");
         assert_eq!(cli.allowed_hosts, ["mcp.example.com", "10.0.0.7:8000"]);
+    }
+
+    #[test]
+    fn the_protected_resource_needs_a_role_mapper() {
+        // Without one there is no JWKS, so no token could ever satisfy the challenge.
+        let resource = ["oas2mcp", "--oauth-resource", "https://mcp.example.com/mcp"];
+        assert!(Cli::try_parse_from(resource).is_err());
+
+        let cli = Cli::try_parse_from(resource.iter().chain(&["--oauth-role-mapper", "a:.*"]))
+            .expect("with a role mapper it parses");
+        assert_eq!(
+            cli.oauth_resource.map(String::from).as_deref(),
+            Some("https://mcp.example.com/mcp")
+        );
     }
 
     /// The document-fetch OAuth flags, plus whatever the test adds.
