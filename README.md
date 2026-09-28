@@ -148,7 +148,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--upstream-oauth-scope` | `UPSTREAM_OAUTH_SCOPES` | —          | OAuth2 scope requested for the upstream token. Repeatable; newline-separated via the env var. |
 | `--upstream-oauth-token-audience` | `UPSTREAM_OAUTH_TOKEN_AUDIENCE` | —      | OAuth2 `audience` parameter for the upstream token (e.g. Auth0). |
 | `--upstream-oauth-grant` | `UPSTREAM_OAUTH_GRANT` | `client-credentials` | `client-credentials`; `jwt-bearer` (RFC 7523 §2.1) to obtain the token on behalf of a subject with an assertion oas2mcp signs; or `jwt-bearer-relay` to relay the caller's own JWT as that assertion. |
-| `--upstream-oauth-issuer` | `UPSTREAM_OAUTH_ISSUER` | client id | `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. |
+| `--upstream-oauth-assertion-issuer` | `UPSTREAM_OAUTH_ASSERTION_ISSUER` | client id | `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. |
 | `--upstream-oauth-subject` | `UPSTREAM_OAUTH_SUBJECT` | —      | Fixed `sub` for the assertion — a service account. Every caller shares one token. Mutually exclusive with the claim below. |
 | `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs a JWKS (`--oauth-jwks-url`/`--oauth-jwks-file`) and `streamable-http`. |
 | `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:operation_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Unset → any authenticated caller may use every tool. Requires a JWKS source below. |
