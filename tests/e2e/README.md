@@ -68,7 +68,7 @@ What it configures, and why each piece matters:
   deliberately left unlinked, so the suite can prove an unknown external identity
   is refused;
 - a `roles` protocol mapper, because Keycloak nests realm roles under
-  `realm_access.roles` while `--oauth-role-claim` reads a top-level claim;
+  `realm_access.roles` while `--inbound-role-claim` reads a top-level claim;
 - an audience mapper putting `sandbox-api` on the issued tokens, which the API
   then insists on.
 

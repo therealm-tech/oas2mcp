@@ -1,7 +1,7 @@
 //! Per-request JWT authentication and role-based tool authorization.
 //!
 //! When a JWKS is configured, the incoming MCP request's `Authorization: Bearer`
-//! JWT is verified against it and decoded. With `--oauth-role-mapper`, the
+//! JWT is verified against it and decoded. With `--inbound-role-mapper`, the
 //! caller's roles are read from a configurable claim, and each `role` is mapped
 //! to a regex over operation names (the `operationId` before `--rename`): a
 //! tool is visible and callable only if one of the caller's roles maps to a
@@ -22,7 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::cli::Cli;
 
-/// The role of a `--oauth-role-mapper` entry granting its tools to everyone,
+/// The role of a `--inbound-role-mapper` entry granting its tools to everyone,
 /// with or without a token.
 const PUBLIC_ROLE: &str = "*";
 
@@ -86,32 +86,32 @@ pub struct Authorizer {
 }
 
 impl Authorizer {
-    /// Build the authorizer from the CLI, or `None` when `--oauth-role-mapper`
+    /// Build the authorizer from the CLI, or `None` when `--inbound-role-mapper`
     /// is not set (no authorization, every tool exposed). Fetches the JWKS from
     /// the configured URL or reads it from disk — this is why it is async.
     pub async fn from_cli(cli: &Cli) -> anyhow::Result<Option<Arc<Self>>> {
         let Some(jwks) = load_jwks(cli).await? else {
             return Ok(None);
         };
-        let (public, rules): (Vec<_>, Vec<_>) = parse_rules(&cli.oauth_role_mapper)?
+        let (public, rules): (Vec<_>, Vec<_>) = parse_rules(&cli.inbound_role_mapper)?
             .into_iter()
             .partition(|rule| rule.role == PUBLIC_ROLE);
-        if cli.oauth_expected_audiences.is_empty() {
+        if cli.inbound_expected_audiences.is_empty() {
             // Not an error: rejecting these tokens outright would break every
             // deployment that predates the flag. But it *is* worth saying, since
             // it means a token minted for another service passes here.
             tracing::warn!(
-                "--oauth-expected-audience is not set; any JWT this JWKS can verify is accepted, \
+                "--inbound-expected-audience is not set; any JWT this JWKS can verify is accepted, \
                  including one issued for a different service. Set it to scope tokens to this \
                  server."
             );
         }
         Ok(Some(Arc::new(Self {
             jwks,
-            role_claim: cli.oauth_role_claim.clone(),
-            expected_audiences: cli.oauth_expected_audiences.clone(),
-            expected_issuers: cli.oauth_expected_issuers.clone(),
-            clock_skew: cli.oauth_clock_skew.unwrap_or(DEFAULT_CLOCK_SKEW),
+            role_claim: cli.inbound_role_claim.clone(),
+            expected_audiences: cli.inbound_expected_audiences.clone(),
+            expected_issuers: cli.inbound_expected_issuers.clone(),
+            clock_skew: cli.inbound_clock_skew.unwrap_or(DEFAULT_CLOCK_SKEW),
             subject_claim: cli.upstream_oauth_subject_claim.clone(),
             rules,
             public_tools: public.into_iter().map(|rule| rule.pattern).collect(),
@@ -225,7 +225,7 @@ fn parse_rules(raw: &[String]) -> anyhow::Result<Vec<RoleRule>> {
 /// Load the JWKS from the configured URL (fetched at startup) or file, or
 /// `None` when neither is set.
 async fn load_jwks(cli: &Cli) -> anyhow::Result<Option<JwkSet>> {
-    let bytes = match (&cli.oauth_jwks_url, &cli.oauth_jwks_file) {
+    let bytes = match (&cli.inbound_jwks_url, &cli.inbound_jwks_file) {
         (Some(url), _) => {
             tracing::debug!(%url, "fetching JWKS for JWT verification");
             let client = crate::http::client(cli).context("building the JWKS HTTP client")?;

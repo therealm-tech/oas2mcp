@@ -59,11 +59,11 @@ async fn main() -> anyhow::Result<()> {
 
     check_delegation_is_possible(&cli, authorizer.as_deref())?;
 
-    let protected = match (&cli.oauth_resource, &authorizer) {
+    let protected = match (&cli.inbound_resource, &authorizer) {
         (Some(resource), Some(authorizer)) => Some(
             transport::ProtectedResource::new(
                 resource,
-                &cli.oauth_expected_issuers,
+                &cli.inbound_expected_issuers,
                 authorizer.clone(),
             )
             .context("configuring the OAuth protected resource")?,
@@ -73,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
     if protected.is_some() && cli.transport != cli::Transport::StreamableHttp {
         tracing::warn!(
             transport = %cli.transport,
-            "--oauth-resource only takes effect on the streamable-http transport; ignored here"
+            "--inbound-resource only takes effect on the streamable-http transport; ignored here"
         );
     }
 
@@ -172,7 +172,7 @@ fn check_delegation_is_possible(
     let Some(authorizer) = authorizer else {
         anyhow::bail!(
             "--upstream-oauth-grant {} acts on behalf of the caller, which needs a \
-             verified caller identity: configure --oauth-jwks-url or --oauth-jwks-file, or pin a \
+             verified caller identity: configure --inbound-jwks-url or --inbound-jwks-file, or pin a \
              fixed identity with --upstream-oauth-subject",
             cli.upstream_oauth_grant
         );
