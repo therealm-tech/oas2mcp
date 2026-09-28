@@ -85,19 +85,30 @@ def mcp(method: str, params: dict | None = None, token: str | None = None) -> di
         return {"error": {"message": f"HTTP {err.code}: {err.read().decode()[:200]}"}}
 
 
-def mcp_status(host: str) -> int:
-    """POST one MCP message under a forged `Host`, returning the HTTP status."""
+def mcp_http(host: str | None = None, token: str | None = None) -> tuple[int, dict]:
+    """POST one `tools/list`, returning the HTTP status and response headers.
+
+    `host` forges the `Host` header; urllib only synthesises one when the request
+    carries none.
+    """
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}).encode()
     request = urllib.request.Request(MCP, data=body, method="POST")
     request.add_header("content-type", "application/json")
     request.add_header("accept", "application/json, text/event-stream")
-    # urllib only synthesises a `Host` when the request carries none.
-    request.add_header("host", host)
+    if host:
+        request.add_header("host", host)
+    if token:
+        request.add_header("authorization", f"Bearer {token}")
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            return response.status
+            return response.status, dict(response.headers)
     except urllib.error.HTTPError as err:
-        return err.code
+        return err.code, dict(err.headers)
+
+
+def get_json(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=30) as response:
+        return json.loads(response.read())
 
 
 def call_tool(name: str, token: str, arguments: dict | None = None) -> dict:
@@ -218,14 +229,30 @@ def main() -> int:
     # The harness binds loopback and sets no `--allowed-host`, so the DNS
     # rebinding protection is on: a request arriving under someone else's
     # hostname is refused before it reaches any tool.
-    forged = mcp_status("evil.example")
+    forged, _ = mcp_http(host="evil.example", token=alice)
     check("a forged Host is rejected", forged == 403, f"HTTP {forged}")
-    allowed = mcp_status(MCP.split("//", 1)[1].split("/", 1)[0])
+    allowed, _ = mcp_http(host=MCP.split("//", 1)[1].split("/", 1)[0], token=alice)
     check("the real Host is accepted", allowed == 200, f"HTTP {allowed}")
 
-    print("\n=== no caller identity at all ===")
-    result = call_tool("getPets", "")
-    check("an unauthenticated call is refused", "rpc_error" in result or result.get("isError"), str(result)[:160])
+    print("\n=== an unauthenticated client is sent to the authorization server ===")
+    # What an MCP client does on its own: hit the endpoint bare, follow the
+    # challenge to the resource metadata, and find where to get a token there.
+    status, headers = mcp_http()
+    challenge = headers.get("WWW-Authenticate", headers.get("www-authenticate", ""))
+    check("a request without a token gets a 401", status == 401, f"HTTP {status}")
+    metadata_url = challenge.split('resource_metadata="', 1)[-1].rstrip('"') if "resource_metadata=" in challenge else ""
+    check("the challenge points at the resource metadata", metadata_url != "", challenge)
+    if metadata_url:
+        metadata = get_json(metadata_url)
+        check("the metadata names this endpoint", metadata.get("resource") == MCP, str(metadata))
+        check(
+            "the metadata names the trusted issuer",
+            metadata.get("authorization_servers") == [ONEACCESS_ISSUER],
+            str(metadata),
+        )
+    status, headers = mcp_http(token="not.a.jwt")
+    challenge = headers.get("WWW-Authenticate", headers.get("www-authenticate", ""))
+    check("an invalid token is challenged as such", status == 401 and 'error="invalid_token"' in challenge, f"HTTP {status}: {challenge}")
 
     print(f"\n{'=' * 62}")
     if _failures:

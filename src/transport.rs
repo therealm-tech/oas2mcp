@@ -1,6 +1,7 @@
 //! Serving the MCP server over the selected transport.
 
 mod access_log;
+mod protected_resource;
 mod sse;
 
 use std::net::SocketAddr;
@@ -14,6 +15,8 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use crate::cli::Transport;
 use crate::server::OpenApiServer;
 
+pub use protected_resource::ProtectedResource;
+
 /// `Host` values `rmcp` accepts by default — the loopback names, which is where
 /// a DNS rebinding attack would aim.
 const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
@@ -25,19 +28,21 @@ const ANY_HOST: &str = "*";
 ///
 /// `json_response` and `allowed_hosts` only affect `streamable-http`: the former
 /// makes POST replies a single `application/json` body instead of an SSE stream,
-/// the latter gates the inbound `Host` header (see `Cli`).
+/// the latter gates the inbound `Host` header (see `Cli`). `protected`, when
+/// set, requires a bearer token on `/mcp` and serves the resource metadata.
 pub async fn serve(
     transport: Transport,
     bind: SocketAddr,
     json_response: bool,
     allowed_hosts: &[String],
+    protected: Option<ProtectedResource>,
     server: OpenApiServer,
 ) -> anyhow::Result<()> {
     match transport {
         Transport::Stdio => serve_stdio(server).await,
         Transport::Sse => sse::serve(bind, server).await,
         Transport::StreamableHttp => {
-            serve_streamable_http(bind, json_response, allowed_hosts, server).await
+            serve_streamable_http(bind, json_response, allowed_hosts, protected, server).await
         }
     }
 }
@@ -92,6 +97,7 @@ async fn serve_streamable_http(
     bind: SocketAddr,
     json_response: bool,
     allowed_hosts: &[String],
+    protected: Option<ProtectedResource>,
     server: OpenApiServer,
 ) -> anyhow::Result<()> {
     // One server instance is built per MCP session.
@@ -110,9 +116,11 @@ async fn serve_streamable_http(
     );
     // The access log wraps `rmcp`'s service: most of its rejections happen in
     // there, and this is the only place they become visible.
-    let app = axum::Router::new()
-        .nest_service("/mcp", service)
-        .layer(axum::middleware::from_fn(access_log::log_requests));
+    let mut app = axum::Router::new().nest_service("/mcp", service);
+    if let Some(protected) = protected {
+        app = protected.protect(app);
+    }
+    let app = app.layer(axum::middleware::from_fn(access_log::log_requests));
 
     let listener = tokio::net::TcpListener::bind(bind)
         .await

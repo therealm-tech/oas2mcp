@@ -110,6 +110,7 @@ echo "== starting oas2mcp"
   --oauth-role-mapper 'admin:.*' \
   --oauth-role-mapper 'reader:^(getPets|whoami)$' \
   --oauth-expected-issuer https://oneaccess.example/ \
+  --oauth-resource "http://127.0.0.1:$MCP_PORT/mcp" \
   --trace-claim sub \
   --upstream-oauth-token-url "$KEYCLOAK_URL/realms/$KEYCLOAK_REALM/protocol/openid-connect/token" \
   --upstream-oauth-client-id oas2mcp-upstream \
