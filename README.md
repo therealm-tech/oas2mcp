@@ -947,6 +947,11 @@ the `--rename` rules → sanitisation to `[A-Za-z0-9_-]` → the `--max-name-len
 cap → deduplication against the tools already registered. See
 [Renaming the exposed tools](#renaming-the-exposed-tools).
 
+The operation's `summary`, folded onto one line, is the tool's `title`, the
+display name MCP clients show to people. The tool's `description` is the
+`summary` followed by the operation's `description`, so a client that does not
+render the title, and the model, still read the summary.
+
 ### The shape of a tool result
 
 A result carries the upstream response twice, in two fields with two audiences:

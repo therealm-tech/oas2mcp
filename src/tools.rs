@@ -38,6 +38,9 @@ pub struct ToolSpec {
     /// The operation name before renaming: the `operationId`, or the
     /// `<method>_<path>` fallback. Filters and access rules match this one.
     pub operation: String,
+    /// The operation `summary` on one line, advertised as the tool's display
+    /// name.
+    pub title: Option<String>,
     pub description: Option<String>,
     pub method: Method,
     /// Path template relative to the base URL, e.g. `/pets/{petId}`.
@@ -156,6 +159,14 @@ fn rename(tool: &mut ToolSpec, raw: &str, operation: &Operation, renamer: &ToolR
     tool.name = renamed;
 }
 
+/// A title is rendered on one line, so the summary's line breaks and runs of
+/// whitespace are folded into single spaces. A long summary is kept whole:
+/// clients elide what they cannot display, and a cut here could not be undone.
+fn title_from_summary(summary: &str) -> Option<String> {
+    let title = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!title.is_empty()).then_some(title)
+}
+
 fn build_tool(
     spec: &Spec,
     item: &PathItem,
@@ -173,6 +184,7 @@ fn build_tool(
         (Some(summary), None) => Some(summary.clone()),
         (None, detail) => detail.clone(),
     };
+    let title = operation.summary.as_deref().and_then(title_from_summary);
 
     // Path-item parameters apply to every operation; operation parameters win.
     let mut properties = Map::new();
@@ -204,6 +216,7 @@ fn build_tool(
     ToolSpec {
         operation: name.clone(),
         name,
+        title,
         description,
         method,
         path_template: path.to_string(),
@@ -578,6 +591,46 @@ components:
         // Neither summary nor description: stays None.
         let get_pet = tools.iter().find(|t| t.name == "getPet").unwrap();
         assert_eq!(get_pet.description, None);
+    }
+
+    #[test]
+    fn title_is_the_summary() {
+        let tools = tools_from(PETSTORE);
+        let create = tools.iter().find(|t| t.name == "createPet").unwrap();
+        assert_eq!(create.title.as_deref(), Some("Create a pet"));
+        // The summary also stays in the description, for clients that do not
+        // render the title and for the model.
+        assert_eq!(
+            create.description.as_deref(),
+            Some("Create a pet\n\nIntroduced in 1.0.")
+        );
+        let get_pet = tools.iter().find(|t| t.name == "getPet").unwrap();
+        assert_eq!(get_pet.title, None);
+    }
+
+    #[test]
+    fn title_folds_the_summary_onto_one_line() {
+        const SPEC: &str = r##"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+paths:
+  /a:
+    get:
+      operationId: multiLine
+      summary: "  List the pets\n  of a   store\n"
+      responses: { "200": { description: ok } }
+  /b:
+    get:
+      operationId: blank
+      summary: "   "
+      description: Only whitespace in the summary.
+      responses: { "200": { description: ok } }
+"##;
+        let tools = tools_from(SPEC);
+        let multi = tools.iter().find(|t| t.name == "multiLine").unwrap();
+        assert_eq!(multi.title.as_deref(), Some("List the pets of a store"));
+        let blank = tools.iter().find(|t| t.name == "blank").unwrap();
+        assert_eq!(blank.title, None);
     }
 
     #[test]

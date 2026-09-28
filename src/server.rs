@@ -290,13 +290,7 @@ impl ServerHandler for OpenApiServer {
             .tools
             .iter()
             .filter(|spec| self.is_listed(&access, &spec.operation))
-            .map(|spec| {
-                Tool::new(
-                    spec.name.clone(),
-                    spec.description.clone().unwrap_or_default(),
-                    spec.input_schema.clone(),
-                )
-            })
+            .map(advertised)
             .collect();
         Ok(ListToolsResult {
             tools,
@@ -540,6 +534,19 @@ impl OpenApiServer {
 /// away `exp` is from now, added to now. Returns `None` for an expiry already in
 /// the past — the verifier rejects those, so it means the clocks disagree, and a
 /// zero-length trust window is the safe reading.
+/// The MCP tool a [`ToolSpec`] is listed as.
+fn advertised(spec: &ToolSpec) -> Tool {
+    let tool = Tool::new(
+        spec.name.clone(),
+        spec.description.clone().unwrap_or_default(),
+        spec.input_schema.clone(),
+    );
+    match &spec.title {
+        Some(title) => tool.with_title(title.clone()),
+        None => tool,
+    }
+}
+
 fn unix_to_instant(exp: u64) -> Option<Instant> {
     let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
     exp.checked_sub(now_unix)
@@ -764,6 +771,33 @@ servers: [{ url: "https://api.example.com" }]
 paths:
   /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
 "#;
+
+    #[test]
+    fn a_listed_tool_carries_the_summary_as_its_title() {
+        const SPEC: &str = r#"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a:
+    get:
+      operationId: getA
+      summary: Get an A
+      description: Returns the A.
+      responses: { "200": { description: ok } }
+  /b: { get: { operationId: getB, responses: { "200": { description: ok } } } }
+"#;
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        let server = OpenApiServer::from_spec(&spec_from(SPEC), &cli, None, Metrics::disabled())
+            .expect("server builds");
+        let state = server.state.load();
+        let tool = |name: &str| advertised(&state.tools[state.index[name]]);
+
+        let a = tool("getA");
+        assert_eq!(a.title.as_deref(), Some("Get an A"));
+        assert_eq!(a.description.as_deref(), Some("Get an A\n\nReturns the A."));
+        assert_eq!(tool("getB").title, None);
+    }
 
     #[test]
     fn access_rules_match_the_operation_name_not_the_renamed_one() {
