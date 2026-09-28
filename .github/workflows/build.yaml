@@ -126,7 +126,7 @@ jobs:
         # Only a fork or Dependabot pull request lacks the token to upload, and
         # both arrive as `pull_request`. Reporting happens from push events.
         if: ${{ github.event_name != 'pull_request' }}
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3  # v4.37.6
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image-${{ matrix.arch }}
