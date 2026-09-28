@@ -447,7 +447,8 @@ pub struct Cli {
     /// incoming request's `Authorization: Bearer` JWT is verified against a
     /// JWKS (`--oauth-jwks-url` or `--oauth-jwks-file`, one is required) and the
     /// roles are read from the `--oauth-role-claim` claim. A caller with no
-    /// valid token, or whose roles match nothing, sees and can call no tools.
+    /// valid token, or whose roles match nothing, sees and can call only the
+    /// `--oauth-public-tool` tools.
     /// Only the `streamable-http` transport exposes the client's JWT; ignored
     /// for `stdio` and `sse`. Invalid regexes are rejected at startup. When set
     /// via the environment variable, separate entries with newlines.
@@ -529,11 +530,28 @@ pub struct Cli {
     )]
     pub oauth_role_claim: String,
 
+    /// Regex over tool names naming the tools anyone may list and call, token or
+    /// not (e.g. `^get_public_`). Repeatable. An authenticated caller gets these
+    /// on top of what their roles grant. With `--oauth-resource`, a caller
+    /// without a token is let in and only challenged when it calls a tool that
+    /// is not public. Requires `--oauth-role-mapper`: without it every tool is
+    /// already public. Invalid regexes are rejected at startup. When set via the
+    /// environment variable, separate patterns with newlines.
+    #[arg(
+        long = "oauth-public-tool",
+        env = "OAUTH_PUBLIC_TOOLS",
+        value_delimiter = '\n',
+        value_parser = Regex::new,
+        requires = "oauth_role_mapper"
+    )]
+    pub oauth_public_tools: Vec<Regex>,
+
     /// Canonical URL MCP clients reach this server's endpoint under (e.g.
     /// `https://mcp.example.com/mcp`). Set → oas2mcp acts as an OAuth protected
     /// resource the way the MCP authorization spec describes: a request to
     /// `/mcp` without a valid bearer token is answered `401` with a
-    /// `WWW-Authenticate` challenge, and the Protected Resource Metadata
+    /// `WWW-Authenticate` challenge (unless `--oauth-public-tool` lets an
+    /// anonymous one through), and the Protected Resource Metadata
     /// (RFC 9728) is served under `/.well-known/oauth-protected-resource`,
     /// naming the `--oauth-expected-issuer` values as the authorization servers.
     /// That is what lets a client discover where to obtain a token on its own.
@@ -826,6 +844,26 @@ mod tests {
             cli.oauth_resource.map(String::from).as_deref(),
             Some("https://mcp.example.com/mcp")
         );
+    }
+
+    #[test]
+    fn public_tools_need_a_role_mapper_and_valid_regexes() {
+        let public = ["oas2mcp", "--oauth-public-tool", "^get_public"];
+        // Without a role mapper every tool is public already.
+        assert!(Cli::try_parse_from(public).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "oas2mcp",
+                "--oauth-role-mapper",
+                "a:.*",
+                "--oauth-public-tool",
+                "("
+            ])
+            .is_err()
+        );
+        let cli = Cli::try_parse_from(public.iter().chain(&["--oauth-role-mapper", "a:.*"]))
+            .expect("with a role mapper it parses");
+        assert_eq!(cli.oauth_public_tools[0].as_str(), "^get_public");
     }
 
     /// The document-fetch OAuth flags, plus whatever the test adds.

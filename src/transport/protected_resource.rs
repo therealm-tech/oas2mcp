@@ -1,11 +1,16 @@
 //! The `/mcp` endpoint as an OAuth 2.0 protected resource, per the MCP
 //! authorization spec: a bearer challenge on unauthenticated requests, and the
 //! Protected Resource Metadata (RFC 9728) the challenge points clients to.
+//!
+//! With public tools configured, a request without a token is let in and only
+//! challenged when it calls a tool that is not public. The handler enforces
+//! access either way; the challenge here is what prompts a client to log in.
 
 use std::sync::Arc;
 
 use anyhow::bail;
 use axum::Router;
+use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse as _, Response};
@@ -15,6 +20,7 @@ use http::{HeaderValue, StatusCode};
 use serde_json::json;
 use url::Url;
 
+use super::MAX_REQUEST_BODY_BYTES;
 use crate::auth::{Authorizer, bearer_token};
 
 /// RFC 9728 §3's well-known URI suffix.
@@ -96,7 +102,7 @@ impl ProtectedResource {
         router
     }
 
-    fn challenge(&self, invalid_token: bool, reason: &'static str) -> Response {
+    fn challenge(&self, invalid_token: bool, reason: String) -> Response {
         // RFC 6750 §3: no `error` when the request simply carried no credentials.
         let error = if invalid_token {
             "error=\"invalid_token\", "
@@ -118,25 +124,63 @@ async fn require_bearer(
     next: Next,
 ) -> Response {
     let Some(token) = bearer_token(request.headers()) else {
+        if resource.authorizer.has_public_tools() {
+            return admit_anonymous(&resource, request, next).await;
+        }
         tracing::debug!("challenging an MCP request that carries no bearer token");
-        return resource.challenge(false, "Unauthorized: missing bearer token");
+        return resource.challenge(false, "Unauthorized: missing bearer token".into());
     };
     if let Err(err) = resource.authorizer.verify(token) {
         tracing::warn!(error = %format!("{err:#}"), "challenging an MCP request: JWT verification failed");
-        return resource.challenge(true, "Unauthorized: invalid bearer token");
+        return resource.challenge(true, "Unauthorized: invalid bearer token".into());
     }
     next.run(request).await
 }
 
+/// Let an anonymous request through unless it calls a tool that is not public.
+/// The body has to be read for that, and is handed on intact.
+async fn admit_anonymous(resource: &ProtectedResource, request: Request, next: Next) -> Response {
+    let (parts, body) = request.into_parts();
+    let Ok(body) = axum::body::to_bytes(body, MAX_REQUEST_BODY_BYTES).await else {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("Payload Too Large: request body exceeds {MAX_REQUEST_BODY_BYTES} bytes"),
+        )
+            .into_response();
+    };
+    if let Some(tool) = called_tool(&body).filter(|tool| !resource.authorizer.is_public(tool)) {
+        tracing::debug!(
+            tool,
+            "challenging an anonymous call to a tool that is not public"
+        );
+        return resource.challenge(
+            false,
+            format!("Unauthorized: tool `{tool}` needs a bearer token"),
+        );
+    }
+    next.run(Request::from_parts(parts, Body::from(body))).await
+}
+
+/// The tool a JSON-RPC `tools/call` request names. `None` for any other message,
+/// and for a body that is not JSON-RPC at all, which `rmcp` rejects on its own.
+fn called_tool(body: &Bytes) -> Option<String> {
+    let message: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if message.get("method")?.as_str()? != "tools/call" {
+        return None;
+    }
+    message.pointer("/params/name")?.as_str().map(str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
-    use axum::body::Body;
     use http::header::AUTHORIZATION;
     use serde_json::Value;
     use tower::ServiceExt as _;
 
     use super::*;
-    use crate::auth::tests::{TEST_KID, in_one_hour, sign, test_authorizer};
+    use crate::auth::tests::{
+        TEST_KID, in_one_hour, sign, test_authorizer, test_authorizer_with_public_tools,
+    };
 
     const ISSUER: &str = "https://idp.example.com/realms/main";
 
@@ -153,15 +197,47 @@ mod tests {
         resource(url).expect("valid resource").protect(mcp)
     }
 
+    /// An app with public tools, whose endpoint echoes the body it received.
+    fn app_with_public_tools(patterns: &[&str]) -> Router {
+        let mcp = Router::new().route("/mcp", axum::routing::post(|body: Bytes| async { body }));
+        ProtectedResource::new(
+            &Url::parse("https://mcp.example.com/mcp").expect("valid URL"),
+            &[ISSUER.to_string()],
+            Arc::new(test_authorizer_with_public_tools(patterns)),
+        )
+        .expect("valid resource")
+        .protect(mcp)
+    }
+
     async fn send(app: &Router, method: &str, path: &str, token: Option<&str>) -> Response {
+        send_body(app, method, path, token, Body::empty()).await
+    }
+
+    async fn send_body(
+        app: &Router,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        body: Body,
+    ) -> Response {
         let mut request = Request::builder().method(method).uri(path);
         if let Some(token) = token {
             request = request.header(AUTHORIZATION, format!("Bearer {token}"));
         }
         app.clone()
-            .oneshot(request.body(Body::empty()).expect("valid request"))
+            .oneshot(request.body(body).expect("valid request"))
             .await
             .expect("infallible")
+    }
+
+    fn rpc(method: &str, params: Value) -> String {
+        json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string()
+    }
+
+    async fn body_of(response: Response) -> Bytes {
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("readable body")
     }
 
     fn challenge_of(response: &Response) -> &str {
@@ -216,9 +292,7 @@ mod tests {
         ] {
             let response = send(&app, "GET", path, None).await;
             assert_eq!(response.status(), StatusCode::OK, "{path}");
-            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("readable body");
+            let body = body_of(response).await;
             let metadata: Value = serde_json::from_slice(&body).expect("JSON metadata");
             assert_eq!(
                 metadata,
@@ -229,6 +303,53 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[tokio::test]
+    async fn with_public_tools_an_anonymous_client_gets_in_and_its_body_intact() {
+        let app = app_with_public_tools(&["^get_public"]);
+        for message in [
+            rpc("initialize", json!({})),
+            rpc("tools/list", json!({})),
+            rpc("tools/call", json!({ "name": "get_public_stats" })),
+            "not json".to_string(),
+        ] {
+            let response = send_body(&app, "POST", "/mcp", None, Body::from(message.clone())).await;
+            assert_eq!(response.status(), StatusCode::OK, "{message}");
+            assert_eq!(body_of(response).await, message.as_bytes(), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn with_public_tools_an_anonymous_call_to_another_tool_is_challenged() {
+        let app = app_with_public_tools(&["^get_public"]);
+        let call = rpc("tools/call", json!({ "name": "delete_pet" }));
+        let response = send_body(&app, "POST", "/mcp", None, Body::from(call)).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            challenge_of(&response).starts_with("Bearer resource_metadata="),
+            "{}",
+            challenge_of(&response)
+        );
+    }
+
+    #[tokio::test]
+    async fn with_public_tools_an_invalid_token_is_still_challenged() {
+        // A bad token is not downgraded to anonymous: the client would otherwise
+        // never learn that its token needs replacing.
+        let app = app_with_public_tools(&["^get_public"]);
+        let list = rpc("tools/list", json!({}));
+        let response = send_body(&app, "POST", "/mcp", Some("not.a.jwt"), Body::from(list)).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(challenge_of(&response).contains("error=\"invalid_token\""));
+    }
+
+    #[tokio::test]
+    async fn an_anonymous_body_over_the_limit_is_refused() {
+        let app = app_with_public_tools(&["^get_public"]);
+        let huge = Body::from(vec![b' '; MAX_REQUEST_BODY_BYTES + 1]);
+        let response = send_body(&app, "POST", "/mcp", None, huge).await;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[test]

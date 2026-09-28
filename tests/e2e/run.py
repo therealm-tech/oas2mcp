@@ -85,13 +85,18 @@ def mcp(method: str, params: dict | None = None, token: str | None = None) -> di
         return {"error": {"message": f"HTTP {err.code}: {err.read().decode()[:200]}"}}
 
 
-def mcp_http(host: str | None = None, token: str | None = None) -> tuple[int, dict]:
-    """POST one `tools/list`, returning the HTTP status and response headers.
+def mcp_http(
+    host: str | None = None,
+    token: str | None = None,
+    method: str = "tools/list",
+    params: dict | None = None,
+) -> tuple[int, dict]:
+    """POST one JSON-RPC message, returning the HTTP status and response headers.
 
     `host` forges the `Host` header; urllib only synthesises one when the request
     carries none.
     """
-    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}).encode()
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}).encode()
     request = urllib.request.Request(MCP, data=body, method="POST")
     request.add_header("content-type", "application/json")
     request.add_header("accept", "application/json, text/event-stream")
@@ -235,11 +240,13 @@ def main() -> int:
     check("the real Host is accepted", allowed == 200, f"HTTP {allowed}")
 
     print("\n=== an unauthenticated client is sent to the authorization server ===")
-    # What an MCP client does on its own: hit the endpoint bare, follow the
-    # challenge to the resource metadata, and find where to get a token there.
-    status, headers = mcp_http()
+    # `whoami` is public, so an anonymous client gets in and sees it alone. Calling
+    # anything else is what challenges it: it follows the challenge to the
+    # resource metadata and finds where to get a token there.
+    check("an anonymous client sees only the public tool", tool_names("") == ["whoami"], f"{tool_names('')}")
+    status, headers = mcp_http(method="tools/call", params={"name": "createPet", "arguments": {}})
     challenge = headers.get("WWW-Authenticate", headers.get("www-authenticate", ""))
-    check("a request without a token gets a 401", status == 401, f"HTTP {status}")
+    check("an anonymous call to a private tool gets a 401", status == 401, f"HTTP {status}")
     metadata_url = challenge.split('resource_metadata="', 1)[-1].rstrip('"') if "resource_metadata=" in challenge else ""
     check("the challenge points at the resource metadata", metadata_url != "", challenge)
     if metadata_url:

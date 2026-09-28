@@ -72,6 +72,8 @@ pub struct Authorizer {
     /// the upstream OAuth group.
     subject_claim: String,
     rules: Vec<RoleRule>,
+    /// Tools anyone may use, with or without a token (`--oauth-public-tool`).
+    public_tools: Vec<Regex>,
     /// Names of the claims to copy into the per-call tracing log, from
     /// `--trace-claim`. Empty disables claim tracing.
     trace_claims: Vec<String>,
@@ -114,6 +116,7 @@ impl Authorizer {
             clock_skew: cli.oauth_clock_skew.unwrap_or(DEFAULT_CLOCK_SKEW),
             subject_claim: cli.upstream_oauth_subject_claim.clone(),
             rules,
+            public_tools: cli.oauth_public_tools.clone(),
             trace_claims: cli.trace_claims.clone(),
         })))
     }
@@ -166,10 +169,24 @@ impl Authorizer {
     }
 
     /// Whether a caller holding `roles` is allowed to use the tool named `tool`.
+    /// A public tool is allowed whatever the roles, including none.
     pub fn allows(&self, roles: &HashSet<String>, tool: &str) -> bool {
-        self.rules
+        self.is_public(tool)
+            || self
+                .rules
+                .iter()
+                .any(|rule| roles.contains(&rule.role) && rule.pattern.is_match(tool))
+    }
+
+    /// Whether the tool named `tool` may be used without a token.
+    pub fn is_public(&self, tool: &str) -> bool {
+        self.public_tools
             .iter()
-            .any(|rule| roles.contains(&rule.role) && rule.pattern.is_match(tool))
+            .any(|pattern| pattern.is_match(tool))
+    }
+
+    pub fn has_public_tools(&self) -> bool {
+        !self.public_tools.is_empty()
     }
 }
 
@@ -347,6 +364,7 @@ pub(crate) mod tests {
             expected_issuers: Vec::new(),
             clock_skew: DEFAULT_CLOCK_SKEW,
             rules: parse_rules(&["admin:.*".into(), "reader:^get".into()]).expect("valid mappings"),
+            public_tools: vec![],
             trace_claims: vec![],
         };
 
@@ -431,8 +449,32 @@ pub(crate) mod tests {
             expected_issuers: Vec::new(),
             clock_skew: DEFAULT_CLOCK_SKEW,
             rules: parse_rules(&["admin:.*".into()]).expect("valid mapping"),
+            public_tools: vec![],
             trace_claims: vec!["sub".into(), "email".into()],
         }
+    }
+
+    /// [`test_authorizer`] with `patterns` as its public tools.
+    pub(crate) fn test_authorizer_with_public_tools(patterns: &[&str]) -> Authorizer {
+        Authorizer {
+            public_tools: patterns
+                .iter()
+                .map(|p| Regex::new(p).expect("valid regex"))
+                .collect(),
+            ..test_authorizer()
+        }
+    }
+
+    #[test]
+    fn a_public_tool_is_allowed_without_roles_and_added_to_theirs() {
+        let authz = test_authorizer_with_public_tools(&["^get_public"]);
+        assert!(authz.has_public_tools());
+        assert!(authz.allows(&roles(&[]), "get_public_stats"));
+        assert!(!authz.allows(&roles(&[]), "delete_pet"));
+        // Roles still grant what they granted; the public tools come on top.
+        assert!(authz.allows(&roles(&["admin"]), "delete_pet"));
+        assert!(authz.allows(&roles(&["guest"]), "get_public_stats"));
+        assert!(!test_authorizer().has_public_tools());
     }
 
     /// Sign a token with the test key, `kid` header, a fixed `sub`, and the

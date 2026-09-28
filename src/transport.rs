@@ -24,6 +24,10 @@ const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 /// `--allowed-host` value that turns `Host` validation off entirely.
 const ANY_HOST: &str = "*";
 
+/// Cap on an MCP request body, given to `rmcp` and to the layers in front of it
+/// that have to read the body themselves. `rmcp`'s own default.
+const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
+
 /// Serve the MCP server over `transport`, blocking until shutdown.
 ///
 /// `json_response` and `allowed_hosts` only affect `streamable-http`: the former
@@ -112,7 +116,8 @@ async fn serve_streamable_http(
         StreamableHttpServerConfig::default()
             .with_json_response(json_response)
             .with_legacy_session_mode(!json_response)
-            .with_allowed_hosts(resolve_allowed_hosts(bind, allowed_hosts)),
+            .with_allowed_hosts(resolve_allowed_hosts(bind, allowed_hosts))
+            .with_max_request_body_bytes(MAX_REQUEST_BODY_BYTES),
     );
     // The access log wraps `rmcp`'s service: most of its rejections happen in
     // there, and this is the only place they become visible.
