@@ -175,7 +175,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address for the `sse` and `streamable-http` transports.       |
 | `--allowed-host`  | `ALLOWED_HOSTS`  | follows `--bind-addr` | Hostname, or `host:port`, accepted in the inbound `Host` header; `*` accepts any. Repeatable; newline-separated via the env var. `streamable-http` only — see [Host header validation](#host-header-validation). |
 | `--stream-responses` | `STREAM_RESPONSES` | `false`      | Reply on `streamable-http` with an SSE flow and stateful sessions instead of the default single `application/json` body. `streamable-http` only. |
-| `--log-filter`    | `RUST_LOG`       | `info`           | `tracing` filter directive (e.g. `oas2mcp=debug,rmcp=warn`).       |
+| `--log-filter`    | `LOG_FILTER`     | `info`           | `tracing` filter directive (e.g. `oas2mcp=debug,rmcp=warn`).       |
 
 Configuration resolves CLI flags → environment variables → defaults, and every
 option is settable through its environment variable. When the base URL is not

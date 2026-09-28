@@ -192,7 +192,7 @@ oas2mcp:
         # -- (string) How long a client assertion stays valid (e.g. `30s`). Unset → the binary default (`60s`). Maps to `UPSTREAM_OAUTH_ASSERTION_LIFETIME`.
         assertionLifetime: ~
 
-  # -- `tracing` filter directive, mapped to `RUST_LOG`.
+  # -- `tracing` filter directive, mapped to `LOG_FILTER`.
   logFilter: info
 
   service:
