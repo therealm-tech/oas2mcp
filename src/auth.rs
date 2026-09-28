@@ -22,6 +22,10 @@ use serde_json::{Map, Value};
 
 use crate::cli::Cli;
 
+/// The role of a `--oauth-role-mapper` entry granting its tools to everyone,
+/// with or without a token.
+const PUBLIC_ROLE: &str = "*";
+
 /// Clock skew tolerated on `exp`/`nbf` when none is configured. Matches
 /// `jsonwebtoken`'s own default, so the flag changes nothing until it is set.
 const DEFAULT_CLOCK_SKEW: Duration = Duration::from_secs(60);
@@ -74,7 +78,7 @@ pub struct Authorizer {
     /// the upstream OAuth group.
     subject_claim: String,
     rules: Vec<RoleRule>,
-    /// Tools anyone may use, with or without a token (`--oauth-public-tool`).
+    /// Tools anyone may use, with or without a token: the `*:` role mappings.
     public_tools: Vec<Regex>,
     /// Names of the claims to copy into the per-call tracing log, from
     /// `--trace-claim`. Empty disables claim tracing.
@@ -89,7 +93,9 @@ impl Authorizer {
         let Some(jwks) = load_jwks(cli).await? else {
             return Ok(None);
         };
-        let rules = parse_rules(&cli.oauth_role_mapper)?;
+        let (public, rules): (Vec<_>, Vec<_>) = parse_rules(&cli.oauth_role_mapper)?
+            .into_iter()
+            .partition(|rule| rule.role == PUBLIC_ROLE);
         if cli.oauth_expected_audiences.is_empty() {
             // Not an error: rejecting these tokens outright would break every
             // deployment that predates the flag. But it *is* worth saying, since
@@ -108,7 +114,7 @@ impl Authorizer {
             clock_skew: cli.oauth_clock_skew.unwrap_or(DEFAULT_CLOCK_SKEW),
             subject_claim: cli.upstream_oauth_subject_claim.clone(),
             rules,
-            public_tools: cli.oauth_public_tools.clone(),
+            public_tools: public.into_iter().map(|rule| rule.pattern).collect(),
             trace_claims: cli.trace_claims.clone(),
         })))
     }
@@ -338,6 +344,19 @@ pub(crate) mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].role, "admin");
         assert!(rules[0].pattern.is_match("get:thing"));
+    }
+
+    #[test]
+    fn a_star_mapping_is_public_and_not_a_role_rule() {
+        let (public, rules): (Vec<_>, Vec<_>) =
+            parse_rules(&["*:^get_public".into(), "admin:.*".into()])
+                .expect("valid mappings")
+                .into_iter()
+                .partition(|rule| rule.role == PUBLIC_ROLE);
+        assert_eq!(public.len(), 1);
+        assert!(public[0].pattern.is_match("get_public_stats"));
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].role, "admin");
     }
 
     #[test]

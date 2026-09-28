@@ -263,10 +263,6 @@ spec:
             - name: OAUTH_CLOCK_SKEW
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.oas2mcp.auth.publicTools }}
-            - name: OAUTH_PUBLIC_TOOLS
-              value: {{ join "\n" . | quote }}
-            {{- end }}
             {{- with .Values.oas2mcp.auth.resource }}
             - name: OAUTH_RESOURCE
               value: {{ . | quote }}
