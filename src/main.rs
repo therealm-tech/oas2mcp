@@ -31,7 +31,7 @@ use crate::server::OpenApiServer;
 async fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
 
-    // The filter directive flows through clap (RUST_LOG), never read directly.
+    // The filter directive flows through clap (LOG_FILTER), never read directly.
     // SSE/stdio multiplex protocol traffic, so logs always go to stderr.
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(&cli.log_filter))

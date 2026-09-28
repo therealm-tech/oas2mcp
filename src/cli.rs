@@ -738,7 +738,8 @@ pub struct Cli {
     pub stream_responses: bool,
 
     /// `tracing` filter directive (e.g. `info`, `oas2mcp=debug,rmcp=warn`).
-    #[arg(long = "log-filter", env = "RUST_LOG", default_value = "info")]
+    /// Deliberately not `RUST_LOG`, which other crates read on their own.
+    #[arg(long = "log-filter", env = "LOG_FILTER", default_value = "info")]
     pub log_filter: String,
 }
 

@@ -54,7 +54,7 @@ Expose an OpenAPI document as a Model Context Protocol (MCP) server over the Str
 | oas2mcp.ingress.enabled | bool | `false` | Create an Ingress for the HTTP transport. |
 | oas2mcp.ingress.host | string | `"oas2mcp.example.com"` | Host the Ingress routes from. |
 | oas2mcp.ingress.tlsSecret | string | `nil` | Name of a TLS Secret for the host. Unset → no TLS block. |
-| oas2mcp.logFilter | string | `"info"` | `tracing` filter directive, mapped to `RUST_LOG`. |
+| oas2mcp.logFilter | string | `"info"` | `tracing` filter directive, mapped to `LOG_FILTER`. |
 | oas2mcp.metrics | object | `{"otlp":{"endpoint":null},"prometheus":{"enabled":false,"port":9090,"serviceMonitor":{"enabled":false,"interval":null,"labels":{},"metricRelabelings":[],"relabelings":[],"scrapeTimeout":null}},"serviceName":null}` | Tool-call metrics (OpenTelemetry). Export over OTLP and/or a Prometheus `/metrics` endpoint; both are independent. |
 | oas2mcp.metrics.otlp.endpoint | string | `nil` | Base OTLP endpoint to push metrics to over HTTP (e.g. `http://otel-collector:4318`); `/v1/metrics` is appended. Unset → no OTLP export. Maps to `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | oas2mcp.metrics.prometheus.enabled | bool | `false` | Serve a Prometheus `/metrics` endpoint on a dedicated port and Service port. Required by the ServiceMonitor below. |
