@@ -179,7 +179,7 @@ fn upstream_flags(cli: &Cli) -> Option<GrantFlags<'_>> {
         jwt_bearer: (cli.upstream_oauth_grant != UpstreamGrant::ClientCredentials).then(|| {
             JwtBearerFlags {
                 relay: cli.upstream_oauth_grant == UpstreamGrant::JwtBearerRelay,
-                issuer: cli.upstream_oauth_issuer.as_ref(),
+                issuer: cli.upstream_oauth_assertion_issuer.as_ref(),
                 subject: cli.upstream_oauth_subject.as_ref(),
             }
         }),
@@ -522,7 +522,7 @@ mod tests {
             "jwt-bearer",
             "--upstream-oauth-subject",
             "service-acct",
-            "--upstream-oauth-issuer",
+            "--upstream-oauth-assertion-issuer",
             "https://oas2mcp.example.com",
         ]);
         let config = TokenConfig::for_upstream(&cli)
