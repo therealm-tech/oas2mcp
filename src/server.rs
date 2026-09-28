@@ -349,8 +349,63 @@ impl ServerHandler for OpenApiServer {
         let args = request.arguments.unwrap_or_default();
         let forwarded = self.forwarded_headers(&context);
 
-        let started = std::time::Instant::now();
+        match self
+            .call_until_cancelled(
+                spec,
+                &state.base_url,
+                &args,
+                &forwarded,
+                &caller,
+                context.ct.cancelled(),
+            )
+            .await
+        {
+            Some(result) => Ok(result.into()),
+            // rmcp drops whatever a cancelled request returns, so this error
+            // never reaches the client, as the spec asks.
+            None => Err(ErrorData::internal_error("request cancelled", None)),
+        }
+    }
+}
 
+impl OpenApiServer {
+    /// Run a tool call unless `cancelled` completes first, and record its
+    /// metric. `None` means cancelled: dropping the call future aborts the
+    /// upstream request in flight, which rmcp does not do on its own — it only
+    /// cancels the request's token.
+    async fn call_until_cancelled(
+        &self,
+        spec: &ToolSpec,
+        base_url: &Url,
+        args: &Map<String, Value>,
+        forwarded: &HeaderMap,
+        caller: &Caller,
+        cancelled: impl Future<Output = ()>,
+    ) -> Option<CallToolResult> {
+        let started = Instant::now();
+        tokio::select! {
+            biased;
+            () = cancelled => {
+                tracing::info!(tool = %spec.name, "tool call cancelled, upstream request aborted");
+                self.metrics.record_call(&spec.name, Outcome::Cancelled, started.elapsed());
+                None
+            }
+            (result, outcome) = self.call(spec, base_url, args, forwarded, caller) => {
+                self.metrics.record_call(&spec.name, outcome, started.elapsed());
+                Some(result)
+            }
+        }
+    }
+
+    /// Obtain the upstream token when one is configured, then proxy the call.
+    async fn call(
+        &self,
+        spec: &ToolSpec,
+        base_url: &Url,
+        args: &Map<String, Value>,
+        forwarded: &HeaderMap,
+        caller: &Caller,
+    ) -> (CallToolResult, Outcome) {
         // Obtain the upstream OAuth bearer before building the request. A failure
         // here fails the call rather than proxying it unauthenticated, which
         // would surface as a puzzling 401 from the upstream instead of the real
@@ -375,15 +430,12 @@ impl ServerHandler for OpenApiServer {
                                 "denying tool call: the upstream grant delegates, but this call \
                                  carries no verified caller identity",
                             );
-                            self.metrics.record_call(
-                                &spec.name,
+                            return (
+                                CallToolResult::error(vec![ContentBlock::text(
+                                    "no verified caller identity to obtain an upstream token for",
+                                )]),
                                 Outcome::AuthError,
-                                started.elapsed(),
                             );
-                            return Ok(CallToolResult::error(vec![ContentBlock::text(
-                                "no verified caller identity to obtain an upstream token for",
-                            )])
-                            .into());
                         }
                     }
                 } else {
@@ -402,12 +454,12 @@ impl ServerHandler for OpenApiServer {
                             error = %format!("{err:#}"),
                             "failed to obtain the upstream OAuth token; not calling the API",
                         );
-                        self.metrics
-                            .record_call(&spec.name, Outcome::AuthError, started.elapsed());
-                        return Ok(CallToolResult::error(vec![ContentBlock::text(
-                            "could not obtain an upstream OAuth token; see the server logs",
-                        )])
-                        .into());
+                        return (
+                            CallToolResult::error(vec![ContentBlock::text(
+                                "could not obtain an upstream OAuth token; see the server logs",
+                            )]),
+                            Outcome::AuthError,
+                        );
                     }
                 }
             }
@@ -415,17 +467,14 @@ impl ServerHandler for OpenApiServer {
         };
 
         let result = self
-            .execute(spec, &state.base_url, &args, &forwarded, bearer.as_deref())
+            .execute(spec, base_url, args, forwarded, bearer.as_deref())
             .await;
         let outcome = if result.is_error.unwrap_or(false) {
             Outcome::Error
         } else {
             Outcome::Success
         };
-        self.metrics
-            .record_call(&spec.name, outcome, started.elapsed());
-
-        Ok(result.into())
+        (result, outcome)
     }
 }
 
@@ -1204,5 +1253,109 @@ paths:
             );
             assert_eq!(text_of(&result), format!("HTTP 200 OK\n\n{body}"));
         }
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_call_aborts_the_upstream_request_promptly() {
+        use tokio::io::AsyncReadExt as _;
+
+        // An upstream that accepts the request and never answers, and reports
+        // when the connection is closed.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let addr = listener.local_addr().expect("local address");
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept the upstream call");
+            let _ = accepted_tx.send(());
+            let mut buf = [0u8; 1024];
+            while socket.read(&mut buf).await.is_ok_and(|n| n > 0) {}
+            let _ = closed_tx.send(());
+        });
+
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        let spec = spec_from(&format!(
+            r#"
+openapi: 3.0.0
+info: {{ title: T, version: "1" }}
+servers: [{{ url: "http://{addr}" }}]
+paths:
+  /a: {{ get: {{ operationId: getA, responses: {{ "200": {{ description: ok }} }} }} }}
+"#
+        ));
+        let server = OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled())
+            .expect("server builds");
+        let state = server.state.load_full();
+        let caller = Caller {
+            access: Access::Unrestricted,
+            traced_claims: Map::new(),
+            identity: None,
+        };
+
+        let cancelled = async {
+            accepted_rx.await.expect("the upstream saw the request");
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            server.call_until_cancelled(
+                &state.tools[0],
+                &state.base_url,
+                &Map::new(),
+                &HeaderMap::new(),
+                &caller,
+                cancelled,
+            ),
+        )
+        .await
+        .expect("the call returns as soon as it is cancelled");
+        assert!(result.is_none());
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), closed_rx)
+            .await
+            .expect("the upstream connection is closed")
+            .expect("the upstream task reports the close");
+    }
+
+    #[tokio::test]
+    async fn a_call_that_is_not_cancelled_returns_its_result() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        // The request cannot be built: a missing path parameter fails before
+        // any network access.
+        let spec = spec_from(
+            r#"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a/{id}:
+    get:
+      operationId: getA
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: ok } }
+"#,
+        );
+        let server = OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled())
+            .expect("server builds");
+        let state = server.state.load_full();
+        let caller = Caller {
+            access: Access::Unrestricted,
+            traced_claims: Map::new(),
+            identity: None,
+        };
+
+        let result = server
+            .call_until_cancelled(
+                &state.tools[0],
+                &state.base_url,
+                &Map::new(),
+                &HeaderMap::new(),
+                &caller,
+                std::future::pending(),
+            )
+            .await
+            .expect("an uncancelled call completes");
+        assert_eq!(result.is_error, Some(true));
     }
 }

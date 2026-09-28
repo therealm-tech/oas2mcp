@@ -123,6 +123,13 @@ sequenceDiagram
   result too, and the API is not called: an unauthenticated request would only
   come back as a misleading `401`. Protocol errors are kept for calls the caller
   may not make, such as an unknown tool or one its roles do not allow.
+- **A cancelled call stops its upstream request.** `rmcp` signals a
+  `notifications/cancelled`, or a client disconnecting from a stateless
+  Streamable HTTP request, only by cancelling the request's token; it leaves
+  the handler running. The handler races the token acquisition and the upstream
+  request against that token and drops them when it fires, which aborts the
+  HTTP request. `rmcp` discards whatever a cancelled request returns, so the
+  client gets no response, as the MCP spec asks.
 
 ### Reload
 

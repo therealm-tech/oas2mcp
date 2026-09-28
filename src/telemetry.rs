@@ -47,6 +47,9 @@ pub enum Outcome {
     /// made. Kept distinct from `Error`: it points at the provider or the
     /// credential, not at the upstream API or the tool arguments.
     AuthError,
+    /// The client cancelled the call, or went away, before it completed; any
+    /// upstream request in flight was aborted.
+    Cancelled,
 }
 
 impl Outcome {
@@ -55,6 +58,7 @@ impl Outcome {
             Self::Success => "success",
             Self::Error => "error",
             Self::AuthError => "auth_error",
+            Self::Cancelled => "cancelled",
         }
     }
 }

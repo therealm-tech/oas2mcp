@@ -691,6 +691,7 @@ nothing else, so metric cardinality stays bounded. `outcome` is one of:
 | `success` | The upstream answered with a non-error status. |
 | `error` | The upstream answered with a 4xx/5xx, or the request could not be built or sent. |
 | `auth_error` | The upstream OAuth token could not be obtained, so **no** request was made. Points at the provider or the credential, not at the API. |
+| `cancelled` | The client cancelled the call or disconnected before it completed; the upstream request in flight was aborted and no result was sent. |
 
 To break activity down by caller, log the relevant JWT claims with
 `--trace-claim` (see above) and aggregate them in your logging backend, rather
