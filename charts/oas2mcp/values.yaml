@@ -147,7 +147,7 @@ oas2mcp:
       key: UPSTREAM_HEADERS
     # -- (list) Names of incoming MCP-client request headers forwarded verbatim to the upstream API (e.g. `Authorization`). Per-call, not static; requires `transport: streamable-http`.
     forwardHeaders: []
-    # -- Obtain the upstream `Authorization: Bearer` from an OAuth2 `client_credentials` grant, auto-refreshed before expiry, instead of a static token in `headers`. Configured independently of `openapi.oauth` — the document and the API may sit behind different providers. When a token is configured it outranks a forwarded `Authorization` but not a static one in `headers`.
+    # -- Obtain the upstream `Authorization: Bearer` from an OAuth2 `client_credentials` grant, auto-refreshed before expiry, instead of a static token in `headers`. Configured independently of `openapi.oauth` — the document and the API may sit behind different providers. A token cannot be combined with an `Authorization` in `headers` or in `forwardHeaders`: the server refuses to start.
     oauth:
       # -- (string) OAuth2 `client_credentials` token endpoint for upstream calls. Set → enables the whole block; requires `clientId` plus one credential.
       tokenUrl: ~

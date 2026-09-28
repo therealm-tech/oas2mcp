@@ -348,18 +348,13 @@ API may live behind different providers, with different credentials. Both
 support the same two client-authentication modes, so
 `--upstream-oauth-private-key` gives you `private_key_jwt` here too.
 
-#### Which `Authorization` wins
+#### One source per header
 
-Three things can set the upstream `Authorization`, so exactly one is picked —
-the upstream never receives two:
-
-| Priority | Source | Why it ranks there |
-| --- | --- | --- |
-| 1 | `--header 'Authorization: …'` | An explicit static override by the operator. |
-| 2 | `--upstream-oauth-*` token | The managed credential. |
-| 3 | `--forward-header Authorization` | The caller's own token, passed through. |
-
-Every other forwarded header is unaffected — only `Authorization` is contested.
+Three things can set the upstream `Authorization`: a static `--header`, the
+`--upstream-oauth-*` token, and `--forward-header Authorization`. oas2mcp refuses
+to start when two of them are configured, since one would always mask the other
+and sit in the configuration doing nothing. The same goes for any header both
+set with `--header` and forwarded with `--forward-header`.
 
 If the token cannot be obtained, the tool call **fails** and no request reaches
 the API: proxying it unauthenticated would surface as a puzzling `401` from the

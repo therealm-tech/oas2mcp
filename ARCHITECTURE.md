@@ -164,9 +164,9 @@ authorization server.
 
 - **Every outbound HTTP client comes from [`http::client`](src/http.rs).** A
   client built elsewhere silently ignores `--ca-cert`.
-- **Exactly one `Authorization` header goes upstream.** A static `--header`
-  wins over an OAuth token, which wins over a forwarded caller header; two
-  values are never sent.
+- **Every upstream header has a single source.** A header both static and
+  forwarded, or an `Authorization` from the OAuth token and from anywhere else,
+  is refused at startup, so request building never has to arbitrate.
 - **Secrets never reach a log line.** The access log omits `Authorization` and
   reports the MCP session id only as present or absent; traced JWT claims go to
   logs only, never to metric labels.
