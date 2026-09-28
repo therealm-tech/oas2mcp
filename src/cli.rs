@@ -411,9 +411,14 @@ pub struct Cli {
 
     /// `iss` claim of the `jwt-bearer` assertion, identifying oas2mcp to the
     /// authorization server. Defaults to `--upstream-oauth-client-id`. Only used
-    /// with `--upstream-oauth-grant jwt-bearer`, where oas2mcp signs it.
-    #[arg(long = "upstream-oauth-issuer", env = "UPSTREAM_OAUTH_ISSUER")]
-    pub upstream_oauth_issuer: Option<String>,
+    /// with `--upstream-oauth-grant jwt-bearer`, where oas2mcp signs it. Not
+    /// to be confused with `--oauth-expected-issuer`, the `iss` accepted on
+    /// incoming caller tokens.
+    #[arg(
+        long = "upstream-oauth-assertion-issuer",
+        env = "UPSTREAM_OAUTH_ASSERTION_ISSUER"
+    )]
+    pub upstream_oauth_assertion_issuer: Option<String>,
 
     /// Fixed `sub` for the `jwt-bearer` assertion: every call obtains a token for
     /// this one subject, whoever the caller is. Use it for a service account.

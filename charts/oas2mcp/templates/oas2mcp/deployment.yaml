@@ -203,8 +203,8 @@ spec:
             - name: UPSTREAM_OAUTH_GRANT
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.oas2mcp.upstream.oauth.issuer }}
-            - name: UPSTREAM_OAUTH_ISSUER
+            {{- with .Values.oas2mcp.upstream.oauth.assertionIssuer }}
+            - name: UPSTREAM_OAUTH_ASSERTION_ISSUER
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.upstream.oauth.subject }}

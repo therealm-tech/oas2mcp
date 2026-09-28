@@ -162,8 +162,8 @@ oas2mcp:
       tokenAudience: ~
       # -- (string) Which grant obtains the token: `client-credentials` (the default) gets one token for the server itself, shared by every caller; `jwt-bearer` (RFC 7523 §2.1) obtains one **per caller**, so the upstream API sees who is really acting, with an assertion oas2mcp signs (needs `privateKey`); `jwt-bearer-relay` does the same by relaying the caller's own verified JWT as the assertion (no key, but their token's `aud` must be the authorization server). Unset → the binary default. Maps to `UPSTREAM_OAUTH_GRANT`.
       grant: ~
-      # -- (string) `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. Unset → `clientId`. Maps to `UPSTREAM_OAUTH_ISSUER`.
-      issuer: ~
+      # -- (string) `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. Unset → `clientId`. Maps to `UPSTREAM_OAUTH_ASSERTION_ISSUER`.
+      assertionIssuer: ~
       # -- (string) Fixed `sub` for the `jwt-bearer` assertion — a named service account, the same for every caller. Mutually exclusive with `subjectClaim`. Maps to `UPSTREAM_OAUTH_SUBJECT`.
       subject: ~
       # -- (string) Claim of the **caller's** verified JWT whose value becomes the assertion's `sub` — i.e. per-caller delegation. Unset → the binary default (`sub`); many providers need `email` instead. Requires `auth.jwks` and `transport: streamable-http`; the server refuses to start otherwise. Maps to `UPSTREAM_OAUTH_SUBJECT_CLAIM`.
