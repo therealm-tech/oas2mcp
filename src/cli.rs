@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use regex::Regex;
 use url::Url;
 
@@ -575,6 +575,23 @@ pub struct Cli {
     )]
     pub max_name_len: usize,
 
+    /// Advertise each tool with the MCP behaviour hints its HTTP method implies
+    /// (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`),
+    /// so a client can tell a read from a write, e.g. to skip confirming a
+    /// `GET`. Turn it off with `--auto-tool-annotations=false` when the
+    /// document's methods do not match what its operations do.
+    #[arg(
+        global = true,
+        long = "auto-tool-annotations",
+        env = "AUTO_TOOL_ANNOTATIONS",
+        default_value_t = true,
+        action = ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true"
+    )]
+    pub auto_tool_annotations: bool,
+
     /// Path to a PEM file holding one or more extra CA certificates to trust
     /// when verifying TLS for every outbound connection (upstream API, OpenAPI
     /// document fetch, OAuth token endpoint, JWKS). Repeatable; a single file
@@ -929,6 +946,19 @@ mod tests {
         let cli =
             Cli::try_parse_from(["oas2mcp", "--max-name-len", "56"]).expect("the flag parses");
         assert_eq!(cli.max_name_len, 56);
+    }
+
+    #[test]
+    fn tool_annotations_are_on_by_default_and_can_be_turned_off() {
+        let parse = |args: &[&str]| {
+            Cli::try_parse_from(["oas2mcp"].iter().chain(args)).map(|cli| cli.auto_tool_annotations)
+        };
+        assert!(parse(&[]).expect("parses"));
+        assert!(parse(&["--auto-tool-annotations"]).expect("parses"));
+        assert!(parse(&["--auto-tool-annotations=true"]).expect("parses"));
+        assert!(!parse(&["--auto-tool-annotations=false"]).expect("parses"));
+        assert!(!parse(&["http", "--auto-tool-annotations=false"]).expect("parses"));
+        assert!(parse(&["--auto-tool-annotations=maybe"]).is_err());
     }
 
     fn http(args: &[&str]) -> Result<HttpArgs, clap::Error> {

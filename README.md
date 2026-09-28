@@ -48,6 +48,9 @@ writing a line of glue code.
   becomes `post_projmrdiscNotes`, which fits under a gateway prefix and is far
   easier for a model to pick. Filters keep matching the original
   `operationId`.
+- **Behaviour hints** — each tool carries the MCP annotations its HTTP method
+  implies (`readOnlyHint` on a `GET`, `destructiveHint` on a `DELETE`, …), so
+  a client can tell a read from a write.
 - **Three transports** — the MCP server can be exposed over:
   - `stdio` — for a local subprocess MCP client.
   - `http` — the current remote transport, single `POST /mcp`
@@ -178,6 +181,7 @@ document.
 | `--exclude-tag`   | `EXCLUDE_TAGS`   | —                | Drop operations carrying this OpenAPI tag (case-insensitive). Repeatable. Wins over the allowlist. |
 | `--rename`        | `RENAME_OPERATIONS` | —             | Rewrite tool names, as `<regex>=<replacement>` (split on the first `=`). Repeatable; rules chain in order. Applied **after** filtering. |
 | `--max-name-len`  | `MAX_NAME_LEN`   | `64`             | Maximum tool name length. A longer name is truncated and given a short hash of the full name, and the rewrite is logged. |
+| `--auto-tool-annotations` | `AUTO_TOOL_ANNOTATIONS` | `true` | Advertise each tool with the MCP behaviour hints its HTTP method implies — see [Tool annotations](#tool-annotations). Turn off with `--auto-tool-annotations=false`. |
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Base OTLP endpoint to push tool-call metrics to over HTTP (e.g. `http://localhost:4318`); `/v1/metrics` is appended. Set → OTLP export on. |
 | `--metrics-addr`  | `METRICS_ADDR`   | —                | Address to serve a Prometheus `/metrics` endpoint on (e.g. `0.0.0.0:9090`). Set → scrape endpoint on. Independent of `--otlp-endpoint`. |
 | `--otel-service-name` | `OTEL_SERVICE_NAME` | `oas2mcp`   | `service.name` reported on exported metrics.                       |
@@ -952,6 +956,27 @@ The operation's `summary`, folded onto one line, is the tool's `title`, the
 display name MCP clients show to people. The tool's `description` is the
 `summary` followed by the operation's `description`, so a client that does not
 render the title, and the model, still read the summary.
+
+### Tool annotations
+
+Each tool is advertised with the MCP behaviour hints its HTTP method implies,
+following the method semantics of RFC 9110, so a client can tell a read from a
+write — to skip confirming a `GET`, say, or to warn before a `DELETE`:
+
+| Method                    | `readOnlyHint` | `destructiveHint` | `idempotentHint` |
+| ------------------------- | -------------- | ----------------- | ---------------- |
+| `GET`, `HEAD`, `OPTIONS`, `TRACE` | `true` | `false`           | `true`           |
+| `POST`                    | `false`        | unset             | `false`          |
+| `PUT`                     | `false`        | `true`            | `true`           |
+| `PATCH`                   | `false`        | `true`            | `false`          |
+| `DELETE`                  | `false`        | `true`            | `true`           |
+
+`openWorldHint` is `true` on every tool, since each one calls an external API. A
+`POST` may create a resource or trigger anything at all, so its
+`destructiveHint` is left out and clients apply the specification's default,
+`true`. The hints are only as good as the document's use of HTTP: an API that
+deletes on a `GET` gets a tool marked read-only. For such an API, pass
+`--auto-tool-annotations=false` to advertise no annotations at all.
 
 ### The shape of a tool result
 

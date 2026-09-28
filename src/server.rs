@@ -61,6 +61,8 @@ pub struct OpenApiServer {
     upstream_token: Option<TokenProvider>,
     /// Tool-call metrics. No-op when telemetry is disabled.
     metrics: Metrics,
+    /// Advertise each tool with the behaviour hints of its HTTP method.
+    annotate_tools: bool,
 }
 
 /// The authenticated caller of a request: their JWT roles (when authorization
@@ -122,6 +124,10 @@ impl OpenApiServer {
         let upstream_token = TokenProvider::for_upstream(cli, client.clone())
             .context("configuring the upstream OAuth token provider")?;
         check_header_sources(&extra_headers, &forward_headers, upstream_token.is_some())?;
+        tracing::debug!(
+            auto_tool_annotations = cli.auto_tool_annotations,
+            "configured tool annotations"
+        );
 
         Ok(Self {
             state: Arc::new(ArcSwap::from_pointee(snapshot)),
@@ -131,6 +137,7 @@ impl OpenApiServer {
             authorizer,
             upstream_token,
             metrics,
+            annotate_tools: cli.auto_tool_annotations,
         })
     }
 
@@ -295,7 +302,7 @@ impl ServerHandler for OpenApiServer {
             .tools
             .iter()
             .filter(|spec| self.is_listed(&access, &spec.operation))
-            .map(advertised)
+            .map(|spec| advertised(spec, self.annotate_tools))
             .collect();
         Ok(ListToolsResult {
             tools,
@@ -582,25 +589,29 @@ impl OpenApiServer {
     }
 }
 
+/// The MCP tool a [`ToolSpec`] is listed as, with the hints its HTTP method
+/// implies when `annotate` is set.
+fn advertised(spec: &ToolSpec, annotate: bool) -> Tool {
+    let mut tool = Tool::new(
+        spec.name.clone(),
+        spec.description.clone().unwrap_or_default(),
+        spec.input_schema.clone(),
+    );
+    if let Some(title) = &spec.title {
+        tool = tool.with_title(title.clone());
+    }
+    if annotate {
+        tool = tool.with_annotations(spec.annotations());
+    }
+    tool
+}
+
 /// Convert a JWT `exp` (seconds since the Unix epoch) into an [`Instant`].
 ///
 /// `Instant` has no epoch, so the conversion goes through the wall clock: how far
 /// away `exp` is from now, added to now. Returns `None` for an expiry already in
 /// the past — the verifier rejects those, so it means the clocks disagree, and a
 /// zero-length trust window is the safe reading.
-/// The MCP tool a [`ToolSpec`] is listed as.
-fn advertised(spec: &ToolSpec) -> Tool {
-    let tool = Tool::new(
-        spec.name.clone(),
-        spec.description.clone().unwrap_or_default(),
-        spec.input_schema.clone(),
-    );
-    match &spec.title {
-        Some(title) => tool.with_title(title.clone()),
-        None => tool,
-    }
-}
-
 fn unix_to_instant(exp: u64) -> Option<Instant> {
     let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
     exp.checked_sub(now_unix)
@@ -919,12 +930,36 @@ paths:
         let server = OpenApiServer::from_spec(&spec_from(SPEC), &cli, None, Metrics::disabled())
             .expect("server builds");
         let state = server.state.load();
-        let tool = |name: &str| advertised(&state.tools[state.index[name]]);
+        let tool = |name: &str| advertised(&state.tools[state.index[name]], false);
 
         let a = tool("getA");
         assert_eq!(a.title.as_deref(), Some("Get an A"));
         assert_eq!(a.description.as_deref(), Some("Get an A\n\nReturns the A."));
         assert_eq!(tool("getB").title, None);
+    }
+
+    #[test]
+    fn tools_are_annotated_unless_turned_off() {
+        let listed = |args: &[&str]| {
+            let cli = Cli::try_parse_from(["oas2mcp"].iter().chain(args)).expect("CLI parses");
+            let server =
+                OpenApiServer::from_spec(&spec_from(ONE_GET), &cli, None, Metrics::disabled())
+                    .expect("server builds");
+            let state = server.state.load();
+            advertised(&state.tools[0], server.annotate_tools)
+        };
+
+        let annotated = listed(&[]);
+        let hints = annotated.annotations.clone().expect("annotated by default");
+        assert_eq!(hints.read_only_hint, Some(true));
+        let wire = serde_json::to_value(&annotated).expect("serialises");
+        assert_eq!(wire["annotations"]["readOnlyHint"], true);
+        assert_eq!(wire["annotations"]["openWorldHint"], true);
+
+        let bare = listed(&["--auto-tool-annotations=false"]);
+        assert!(bare.annotations.is_none());
+        let wire = serde_json::to_value(&bare).expect("serialises");
+        assert!(wire.get("annotations").is_none());
     }
 
     #[test]
