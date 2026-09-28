@@ -73,7 +73,7 @@ writing a line of glue code.
 - **Caller authentication and role-based tool access** — verify the caller's
   JWT against a JWKS, and optionally gate which tools they can see and call by
   mapping each `role` to a regex over operation names
-  (`streamable-http` only). Tools matching `--oauth-public-tool` stay open to
+  (`streamable-http` only). Tools mapped to the reserved role `*` stay open to
   everyone, token or not.
 - **MCP authorization discovery** — with `--oauth-resource`, `/mcp` behaves as
   the OAuth protected resource the MCP authorization spec describes: a request
@@ -156,7 +156,6 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--oauth-expected-audience` | `OAUTH_EXPECTED_AUDIENCES` | — | Audience the incoming JWT's `aud` must match. Repeatable. **Set this**: unset, a token your provider minted for another service is accepted here. |
 | `--oauth-expected-issuer` | `OAUTH_EXPECTED_ISSUERS` | —      | Issuer the incoming JWT's `iss` must match. Repeatable. Defence in depth next to the JWKS. |
 | `--oauth-clock-skew` | `OAUTH_CLOCK_SKEW` | `60s`            | Skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). |
-| `--oauth-public-tool` | `OAUTH_PUBLIC_TOOLS` | —      | Regex over operation names (before `--rename`) for tools anyone may list and call, without a token. Repeatable; newline-separated via the env var. Authenticated callers get them on top of their roles. Needs `--oauth-role-mapper`. |
 | `--oauth-resource` | `OAUTH_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests (beyond the public tools) get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--oauth-role-mapper` and `--oauth-expected-issuer`. `streamable-http` only. |
 | `--oauth-role-claim` | `OAUTH_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
 | `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs a JWKS. |
@@ -601,20 +600,23 @@ OAuth flow, and retries with the token. An invalid or expired token gets the sam
 #### Public tools
 
 Some tools can be open to anyone — a catalogue lookup, a status check — while
-the rest needs a login. Name them with `--oauth-public-tool`, a regex over tool
-names, repeatable:
+the rest needs a login. Map them to the reserved role `*` in
+`--oauth-role-mapper`:
 
 ```bash
 oas2mcp \
   --transport streamable-http --bind-addr 0.0.0.0:8000 \
   --oauth-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
   --oauth-expected-issuer https://idp.example.com/realms/main \
-  --oauth-public-tool '^get_public_' \
+  --oauth-role-mapper '*:^get_public_' \
   --oauth-resource https://mcp.example.com/mcp
 ```
 
 A caller without a token sees and can call the public tools only; an
-authenticated caller gets them on top of what its roles grant. With
+authenticated caller gets them on top of what its roles grant — and, when `*`
+entries are the only ones, every tool, as without a mapper at all. A role
+literally named `*` in your identity provider grants nothing more than being
+anonymous. With
 `--oauth-resource`, an anonymous client is no longer turned away on connection:
 `initialize`, `tools/list` and calls to public tools go through, and the `401`
 challenge comes when it calls a tool that is not public. An *invalid* token is
@@ -622,7 +624,7 @@ still challenged on any request, so a client learns its token needs replacing.
 
 - **Some clients only log in when the connection itself is refused.** Against
   such a client, public tools mean it stays anonymous and sees the public tools
-  alone. Leave `--oauth-public-tool` unset when every client must log in.
+  alone. Map no tool to `*` when every client must log in.
 - **A public tool has no caller identity to delegate.** With
   `--upstream-oauth-grant jwt-bearer` acting per caller, an anonymous call to a
   public tool fails with an upstream token error; oas2mcp warns about the
@@ -742,7 +744,7 @@ Two things to know about the syntax:
 **Filters keep matching the name *before* renaming** — the `operationId`, or the
 `<method>_<path>` fallback. That is deliberate: an existing curated
 `--include-regex`/`--exclude-regex` allowlist goes on working untouched when you add or edit
-rename rules. `--oauth-role-mapper` and `--oauth-public-tool` match that same
+rename rules. `--oauth-role-mapper` matches that same
 name, so editing a rename rule never changes who may use which tool.
 
 Whatever the rules leave behind is sanitised to `[A-Za-z0-9_-]` and then capped
