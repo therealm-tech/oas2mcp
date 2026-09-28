@@ -279,10 +279,15 @@ pub struct Cli {
     )]
     pub openapi_oauth_scopes: Vec<String>,
 
-    /// OAuth 2.0 `audience` parameter for the document-fetch token. Some
-    /// providers (e.g. Auth0) require it to issue a token for the target API.
-    #[arg(long = "openapi-oauth-audience", env = "OPENAPI_OAUTH_AUDIENCE")]
-    pub openapi_oauth_audience: Option<String>,
+    /// OAuth 2.0 `audience` parameter of the document-fetch token request, which
+    /// some providers (e.g. Auth0) require to issue a token for the target API.
+    /// It is the audience of the token obtained, not the `aud` of the client
+    /// assertion, which is `--openapi-oauth-assertion-audience`.
+    #[arg(
+        long = "openapi-oauth-token-audience",
+        env = "OPENAPI_OAUTH_TOKEN_AUDIENCE"
+    )]
+    pub openapi_oauth_token_audience: Option<String>,
 
     /// Base URL of the upstream API that tool calls are proxied to. Overrides
     /// the `servers` entry of the OpenAPI document.
@@ -449,10 +454,15 @@ pub struct Cli {
     )]
     pub upstream_oauth_scopes: Vec<String>,
 
-    /// OAuth 2.0 `audience` parameter for the upstream-API token. Some providers
-    /// (e.g. Auth0) require it to issue a token for the target API.
-    #[arg(long = "upstream-oauth-audience", env = "UPSTREAM_OAUTH_AUDIENCE")]
-    pub upstream_oauth_audience: Option<String>,
+    /// OAuth 2.0 `audience` parameter of the upstream-API token request, which
+    /// some providers (e.g. Auth0) require to issue a token for the target API.
+    /// It is the audience of the token obtained, not the `aud` of the client
+    /// assertion, which is `--upstream-oauth-assertion-audience`.
+    #[arg(
+        long = "upstream-oauth-token-audience",
+        env = "UPSTREAM_OAUTH_TOKEN_AUDIENCE"
+    )]
+    pub upstream_oauth_token_audience: Option<String>,
 
     /// Restrict which tools an authenticated caller may see and invoke based on
     /// the roles carried in their JWT, as `role:operation_regex` (e.g.
