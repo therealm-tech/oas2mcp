@@ -85,7 +85,7 @@ oas2mcp:
     # -- (int) Maximum length of a tool name; a longer one is truncated and given a short hash of the full name. Unset → the binary default (`64`, the limit Anthropic and OpenAI enforce). Lower it when a gateway prefixes the tools it aggregates. Maps to `MAX_NAME_LEN`.
     maxNameLen: ~
 
-  # -- Authenticate callers from their JWT, turned on by `jwks.url` or `jwks.file`, and optionally restrict the tool set per caller by role. Requires `transport: streamable-http` (the only transport exposing the client's JWT). A caller with no valid token sees and can call only the public tools (see `roleMapper`).
+  # -- Authenticate callers from their JWT, turned on by `jwks.url` or `jwks.file`, and optionally restrict the tool set per caller by role. Requires `transport: http` (the only transport exposing the client's JWT). A caller with no valid token sees and can call only the public tools (see `roleMapper`).
   auth:
     # -- (list) Role→tool mappings as `role:operation_regex` (e.g. `admin:.*`, `reader:^get`). A tool is visible if any of the caller's roles maps to a regex matching its operation name (the `operationId` before `rename`, like the filters). The reserved role `*` makes its tools public: usable by anyone, token or not. Without entries other than `*` ones, any authenticated caller may use every tool. Requires `jwks.url` or `jwks.file`. Maps to `INBOUND_ROLE_MAPPER`.
     roleMapper: []
@@ -124,13 +124,13 @@ oas2mcp:
   # -- (string) Upstream API base URL the tool calls are proxied to. Unset → taken from the document `servers`.
   baseUrl: ~
 
-  # -- MCP transport to expose. One of `streamable-http`, `sse`. (`stdio` makes no sense for a long-running Deployment.)
-  transport: streamable-http
+  # -- MCP transport to expose. One of `http`, `sse`. (`stdio` makes no sense for a long-running Deployment.)
+  transport: http
 
-  # -- (list) Hostnames (or `host:port`) accepted in the inbound `Host` header, checked to stop DNS rebinding. An entry without a port matches any port; `*` accepts any host. Empty → any host is accepted, because the pod binds `0.0.0.0` and cannot guess the Service/Ingress name clients use. Set it to those names to check them (e.g. `[oas2mcp.example.com]`). Only affects `transport: streamable-http`. Maps to `ALLOWED_HOSTS`.
+  # -- (list) Hostnames (or `host:port`) accepted in the inbound `Host` header, checked to stop DNS rebinding. An entry without a port matches any port; `*` accepts any host. Empty → any host is accepted, because the pod binds `0.0.0.0` and cannot guess the Service/Ingress name clients use. Set it to those names to check them (e.g. `[oas2mcp.example.com]`). Only affects `transport: http`. Maps to `ALLOWED_HOSTS`.
   allowedHosts: []
 
-  # -- Reply on `streamable-http` with an SSE flow and stateful sessions. Set to `false` when the MCP server sits behind a proxy (e.g. Envoy AI Gateway) that can't parse the SSE priming event — that switches it to single `application/json` replies (stateless). Only affects `transport: streamable-http`.
+  # -- Reply on `http` with an SSE flow and stateful sessions. Set to `false` when the MCP server sits behind a proxy (e.g. Envoy AI Gateway) that can't parse the SSE priming event — that switches it to single `application/json` replies (stateless). Only affects `transport: http`.
   streamResponses: true
 
   upstream:
@@ -141,7 +141,7 @@ oas2mcp:
       name: ~
       # -- Key in that Secret holding the newline-separated `Name: Value` headers.
       key: UPSTREAM_HEADERS
-    # -- (list) Names of incoming MCP-client request headers forwarded verbatim to the upstream API (e.g. `Authorization`). Per-call, not static; requires `transport: streamable-http`.
+    # -- (list) Names of incoming MCP-client request headers forwarded verbatim to the upstream API (e.g. `Authorization`). Per-call, not static; requires `transport: http`.
     forwardHeaders: []
     # -- Obtain the upstream `Authorization: Bearer` from an OAuth2 `client_credentials` grant, auto-refreshed before expiry, instead of a static token in `headers`. Configured independently of `openapi.oauth` — the document and the API may sit behind different providers. A token cannot be combined with an `Authorization` in `headers` or in `forwardHeaders`: the server refuses to start.
     oauth:
@@ -166,7 +166,7 @@ oas2mcp:
       assertionIssuer: ~
       # -- (string) Fixed `sub` for the `jwt-bearer` assertion — a named service account, the same for every caller. Mutually exclusive with `subjectClaim`. Maps to `UPSTREAM_OAUTH_SUBJECT`.
       subject: ~
-      # -- (string) Claim of the **caller's** verified JWT whose value becomes the assertion's `sub` — i.e. per-caller delegation. Unset → the binary default (`sub`); many providers need `email` instead. Requires `auth.jwks` and `transport: streamable-http`; the server refuses to start otherwise. Maps to `UPSTREAM_OAUTH_SUBJECT_CLAIM`.
+      # -- (string) Claim of the **caller's** verified JWT whose value becomes the assertion's `sub` — i.e. per-caller delegation. Unset → the binary default (`sub`); many providers need `email` instead. Requires `auth.jwks` and `transport: http`; the server refuses to start otherwise. Maps to `UPSTREAM_OAUTH_SUBJECT_CLAIM`.
       subjectClaim: ~
       # -- Authenticate with a JWT assertion signed per request (`private_key_jwt`, RFC 7523 §2.2) instead of a shared secret. Also signs the `jwt-bearer` grant assertion when `grant: jwt-bearer` — one key, loaded once. Mutually exclusive with `clientSecret`/`existingSecret`; setting both fails the render.
       privateKey:

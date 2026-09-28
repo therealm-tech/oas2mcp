@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::{ArgGroup, Parser, ValueEnum};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use regex::Regex;
 use url::Url;
 
@@ -93,66 +93,34 @@ impl std::fmt::Display for DocumentAuth {
     }
 }
 
-/// MCP transport to expose the server over.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-#[value(rename_all = "kebab-case")]
-pub enum Transport {
-    /// Standard input/output — for a local subprocess MCP client.
-    Stdio,
-    /// Legacy HTTP+SSE transport (deprecated by the MCP spec, kept for
-    /// compatibility with older clients).
-    Sse,
-    /// Streamable HTTP — the current remote transport, single `/mcp` endpoint.
-    StreamableHttp,
-}
-
-impl std::fmt::Display for Transport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Mirror the `ValueEnum` kebab-case names so `default_value_t` round-trips.
-        f.write_str(match self {
-            Self::Stdio => "stdio",
-            Self::Sse => "sse",
-            Self::StreamableHttp => "streamable-http",
-        })
-    }
-}
-
 fn default_bind_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 8000))
 }
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "oas2mcp", version, about, long_about = None)]
-// The document-fetch grant authenticates with *either* a shared secret or a
-// signed assertion, never both. Naming the pair as a group is what lets
-// `--openapi-oauth-token-url` require "one of these" rather than a single flag.
-#[command(group(
-    ArgGroup::new("openapi_oauth_client_auth")
-        .args(["openapi_oauth_client_secret", "openapi_oauth_private_key"])
-        .multiple(false)
-))]
-// Same rule for the upstream grant, which is configured independently: the two
-// may well authenticate against different providers with different credentials.
-#[command(group(
-    ArgGroup::new("upstream_oauth_client_auth")
-        .args(["upstream_oauth_client_secret", "upstream_oauth_private_key"])
-        .multiple(false)
-))]
-// Verifying the caller's JWT is what the inbound auth flags build on, and a
-// JWKS is what turns it on.
-#[command(group(
-    ArgGroup::new("inbound_jwks")
-        .args(["inbound_jwks_url", "inbound_jwks_file"])
-        .multiple(false)
-))]
+// A grant authenticates with a shared secret or a signed assertion, never both.
+// That "exactly one" is not an `ArgGroup`: groups do not reach the subcommands
+// that global args do, so clap would reject `oas2mcp http --openapi-oauth-*`.
+// The pairs conflict here, and `TokenConfig` refuses a grant with neither.
 pub struct Cli {
     /// Path to an OpenAPI document (JSON or YAML) on disk.
-    #[arg(long, env = "OPENAPI_FILE", conflicts_with = "openapi_url")]
+    #[arg(
+        global = true,
+        long,
+        env = "OPENAPI_FILE",
+        conflicts_with = "openapi_url"
+    )]
     pub openapi_file: Option<PathBuf>,
 
     /// URL of an OpenAPI document (JSON or YAML) fetched at startup (and
     /// periodically when `--reload-every` is set).
-    #[arg(long, env = "OPENAPI_URL", conflicts_with = "openapi_file")]
+    #[arg(
+        global = true,
+        long,
+        env = "OPENAPI_URL",
+        conflicts_with = "openapi_file"
+    )]
     pub openapi_url: Option<Url>,
 
     /// Header to send when fetching the OpenAPI document from `--openapi-url`,
@@ -161,6 +129,7 @@ pub struct Cli {
     /// `--header`, which targets the upstream API, not the document URL. When
     /// set via the environment variable, separate headers with newlines.
     #[arg(
+        global = true,
         long = "openapi-header",
         env = "OPENAPI_HEADERS",
         value_delimiter = '\n'
@@ -171,7 +140,7 @@ pub struct Cli {
     /// rebuild the exposed tool set (e.g. `30s`, `5m`, `1h`). Omit to load the
     /// document only once at startup. Ignored when the document is loaded from a
     /// file rather than a URL.
-    #[arg(long, env = "RELOAD_EVERY", value_parser = humantime::parse_duration)]
+    #[arg(global = true, long, env = "RELOAD_EVERY", value_parser = humantime::parse_duration)]
     pub reload_every: Option<Duration>,
 
     /// Which credentials fetch the document from `--openapi-url`. `own` (the
@@ -180,7 +149,7 @@ pub struct Cli {
     /// `--upstream-oauth-*` token, for an API that serves its own document —
     /// then no `--openapi-header` or `--openapi-oauth-*` flag may be set, and
     /// the upstream token must not be obtained per caller.
-    #[arg(long = "openapi-auth", env = "OPENAPI_AUTH", default_value_t = DocumentAuth::Own)]
+    #[arg(global = true, long = "openapi-auth", env = "OPENAPI_AUTH", default_value_t = DocumentAuth::Own)]
     pub openapi_auth: DocumentAuth,
 
     /// OAuth 2.0 token endpoint for the `client_credentials` grant. When set,
@@ -190,14 +159,19 @@ pub struct Cli {
     /// on a long-running server. Requires `--openapi-oauth-client-id` plus one
     /// of `--openapi-oauth-client-secret` / `--openapi-oauth-private-key`.
     #[arg(
+        global = true,
         long = "openapi-oauth-token-url",
         env = "OPENAPI_OAUTH_TOKEN_URL",
-        requires_all = ["openapi_oauth_client_id", "openapi_oauth_client_auth"]
+        requires = "openapi_oauth_client_id"
     )]
     pub openapi_oauth_token_url: Option<Url>,
 
     /// OAuth 2.0 client ID for the document-fetch `client_credentials` grant.
-    #[arg(long = "openapi-oauth-client-id", env = "OPENAPI_OAUTH_CLIENT_ID")]
+    #[arg(
+        global = true,
+        long = "openapi-oauth-client-id",
+        env = "OPENAPI_OAUTH_CLIENT_ID"
+    )]
     pub openapi_oauth_client_id: Option<String>,
 
     /// OAuth 2.0 client secret for the document-fetch `client_credentials`
@@ -205,8 +179,10 @@ pub struct Cli {
     /// command line so the secret does not leak into the process list. Mutually
     /// exclusive with `--openapi-oauth-private-key`.
     #[arg(
+        global = true,
         long = "openapi-oauth-client-secret",
-        env = "OPENAPI_OAUTH_CLIENT_SECRET"
+        env = "OPENAPI_OAUTH_CLIENT_SECRET",
+        conflicts_with = "openapi_oauth_private_key"
     )]
     pub openapi_oauth_client_secret: Option<String>,
 
@@ -218,6 +194,7 @@ pub struct Cli {
     /// `--openapi-oauth-signing-alg`. Mutually exclusive with
     /// `--openapi-oauth-client-secret`.
     #[arg(
+        global = true,
         long = "openapi-oauth-private-key",
         env = "OPENAPI_OAUTH_PRIVATE_KEY_FILE"
     )]
@@ -228,6 +205,7 @@ pub struct Cli {
     /// provider holds a single key. Only used with
     /// `--openapi-oauth-private-key`.
     #[arg(
+        global = true,
         long = "openapi-oauth-key-id",
         env = "OPENAPI_OAUTH_KEY_ID",
         requires = "openapi_oauth_private_key"
@@ -239,6 +217,7 @@ pub struct Cli {
     /// `es*`, an Ed25519 key for `eddsa`) and be one the provider accepts. Only
     /// used with `--openapi-oauth-private-key`.
     #[arg(
+        global = true,
         long = "openapi-oauth-signing-alg",
         env = "OPENAPI_OAUTH_SIGNING_ALG",
         default_value_t = SigningAlg::Rs256
@@ -251,6 +230,7 @@ pub struct Cli {
     /// wants its issuer identifier instead. Only used with
     /// `--openapi-oauth-private-key`.
     #[arg(
+        global = true,
         long = "openapi-oauth-assertion-audience",
         env = "OPENAPI_OAUTH_ASSERTION_AUDIENCE",
         requires = "openapi_oauth_private_key"
@@ -262,6 +242,7 @@ pub struct Cli {
     /// long window only widens the replay opportunity. Only used with
     /// `--openapi-oauth-private-key`.
     #[arg(
+        global = true,
         long = "openapi-oauth-assertion-lifetime",
         env = "OPENAPI_OAUTH_ASSERTION_LIFETIME",
         value_parser = humantime::parse_duration,
@@ -273,6 +254,7 @@ pub struct Cli {
     /// space-joined as the `scope` parameter. When set via the environment
     /// variable, separate scopes with newlines.
     #[arg(
+        global = true,
         long = "openapi-oauth-scope",
         env = "OPENAPI_OAUTH_SCOPES",
         value_delimiter = '\n'
@@ -284,6 +266,7 @@ pub struct Cli {
     /// It is the audience of the token obtained, not the `aud` of the client
     /// assertion, which is `--openapi-oauth-assertion-audience`.
     #[arg(
+        global = true,
         long = "openapi-oauth-token-audience",
         env = "OPENAPI_OAUTH_TOKEN_AUDIENCE"
     )]
@@ -291,28 +274,19 @@ pub struct Cli {
 
     /// Base URL of the upstream API that tool calls are proxied to. Overrides
     /// the `servers` entry of the OpenAPI document.
-    #[arg(long, env = "BASE_URL")]
+    #[arg(global = true, long, env = "BASE_URL")]
     pub base_url: Option<Url>,
 
     /// Extra header attached to every upstream request, as `Name: Value`.
     /// Repeatable; use it for auth (e.g. `Authorization: Bearer ...`). When set
     /// via the environment variable, separate headers with newlines.
-    #[arg(long = "header", env = "UPSTREAM_HEADERS", value_delimiter = '\n')]
-    pub headers: Vec<String>,
-
-    /// Name of an incoming-request header to forward verbatim to the upstream
-    /// API (e.g. `Authorization`). Repeatable; use it to pass the MCP client's
-    /// own credentials through to the API. Only the `streamable-http` transport
-    /// exposes the client's HTTP headers; ignored for `stdio` and `sse`. A
-    /// header also set with `--header`, or `Authorization` alongside
-    /// `--upstream-oauth-token-url`, is refused at startup. When set via the
-    /// environment variable, separate names with newlines.
     #[arg(
-        long = "forward-header",
-        env = "FORWARD_HEADERS",
+        global = true,
+        long = "header",
+        env = "UPSTREAM_HEADERS",
         value_delimiter = '\n'
     )]
-    pub forward_headers: Vec<String>,
+    pub headers: Vec<String>,
 
     /// OAuth 2.0 token endpoint for the `client_credentials` grant used to
     /// authenticate **upstream API calls**. When set, every proxied tool call
@@ -324,14 +298,19 @@ pub struct Cli {
     /// `--upstream-oauth-client-id` plus one of
     /// `--upstream-oauth-client-secret` / `--upstream-oauth-private-key`.
     #[arg(
+        global = true,
         long = "upstream-oauth-token-url",
         env = "UPSTREAM_OAUTH_TOKEN_URL",
-        requires_all = ["upstream_oauth_client_id", "upstream_oauth_client_auth"]
+        requires = "upstream_oauth_client_id"
     )]
     pub upstream_oauth_token_url: Option<Url>,
 
     /// OAuth 2.0 client ID for the upstream-API token.
-    #[arg(long = "upstream-oauth-client-id", env = "UPSTREAM_OAUTH_CLIENT_ID")]
+    #[arg(
+        global = true,
+        long = "upstream-oauth-client-id",
+        env = "UPSTREAM_OAUTH_CLIENT_ID"
+    )]
     pub upstream_oauth_client_id: Option<String>,
 
     /// OAuth 2.0 client secret for the upstream-API token, sent over HTTP Basic.
@@ -339,8 +318,10 @@ pub struct Cli {
     /// not leak into the process list. Mutually exclusive with
     /// `--upstream-oauth-private-key`.
     #[arg(
+        global = true,
         long = "upstream-oauth-client-secret",
-        env = "UPSTREAM_OAUTH_CLIENT_SECRET"
+        env = "UPSTREAM_OAUTH_CLIENT_SECRET",
+        conflicts_with = "upstream_oauth_private_key"
     )]
     pub upstream_oauth_client_secret: Option<String>,
 
@@ -350,6 +331,7 @@ pub struct Cli {
     /// is `--upstream-oauth-signing-alg`. Mutually exclusive with
     /// `--upstream-oauth-client-secret`.
     #[arg(
+        global = true,
         long = "upstream-oauth-private-key",
         env = "UPSTREAM_OAUTH_PRIVATE_KEY_FILE"
     )]
@@ -358,6 +340,7 @@ pub struct Cli {
     /// `kid` header to put on the upstream-API client assertion. Only used with
     /// `--upstream-oauth-private-key`.
     #[arg(
+        global = true,
         long = "upstream-oauth-key-id",
         env = "UPSTREAM_OAUTH_KEY_ID",
         requires = "upstream_oauth_private_key"
@@ -367,6 +350,7 @@ pub struct Cli {
     /// Algorithm used to sign the upstream-API client assertion. Must match the
     /// key type of `--upstream-oauth-private-key`. Only used with that flag.
     #[arg(
+        global = true,
         long = "upstream-oauth-signing-alg",
         env = "UPSTREAM_OAUTH_SIGNING_ALG",
         default_value_t = SigningAlg::Rs256
@@ -376,6 +360,7 @@ pub struct Cli {
     /// `aud` claim of the upstream-API client assertion. Defaults to the token
     /// endpoint URL. Only used with `--upstream-oauth-private-key`.
     #[arg(
+        global = true,
         long = "upstream-oauth-assertion-audience",
         env = "UPSTREAM_OAUTH_ASSERTION_AUDIENCE",
         requires = "upstream_oauth_private_key"
@@ -385,6 +370,7 @@ pub struct Cli {
     /// How long an upstream-API client assertion stays valid (e.g. `30s`).
     /// Defaults to `60s`. Only used with `--upstream-oauth-private-key`.
     #[arg(
+        global = true,
         long = "upstream-oauth-assertion-lifetime",
         env = "UPSTREAM_OAUTH_ASSERTION_LIFETIME",
         value_parser = humantime::parse_duration,
@@ -403,6 +389,7 @@ pub struct Cli {
     /// instead, which needs no key but requires the caller's token to be
     /// addressed to the authorization server.
     #[arg(
+        global = true,
         long = "upstream-oauth-grant",
         env = "UPSTREAM_OAUTH_GRANT",
         default_value_t = UpstreamGrant::ClientCredentials
@@ -415,6 +402,7 @@ pub struct Cli {
     /// to be confused with `--inbound-expected-issuer`, the `iss` accepted on
     /// incoming caller tokens.
     #[arg(
+        global = true,
         long = "upstream-oauth-assertion-issuer",
         env = "UPSTREAM_OAUTH_ASSERTION_ISSUER"
     )]
@@ -425,6 +413,7 @@ pub struct Cli {
     /// Mutually exclusive with `--upstream-oauth-subject-claim`, which is the
     /// per-caller alternative and the default.
     #[arg(
+        global = true,
         long = "upstream-oauth-subject",
         env = "UPSTREAM_OAUTH_SUBJECT",
         conflicts_with = "upstream_oauth_subject_claim"
@@ -438,11 +427,12 @@ pub struct Cli {
     /// the upstream authorization server does not know.
     ///
     /// Delegation requires a verified caller identity, so this mode needs
-    /// a JWKS (`--inbound-jwks-url`/`--inbound-jwks-file`) and the `streamable-http` transport. A
+    /// a JWKS (`--inbound-jwks-url`/`--inbound-jwks-file`) and the `http` transport. A
     /// call whose token lacks the claim is **rejected**: falling back to a
     /// broader identity would turn a configuration slip into a privilege
     /// escalation.
     #[arg(
+        global = true,
         long = "upstream-oauth-subject-claim",
         env = "UPSTREAM_OAUTH_SUBJECT_CLAIM",
         default_value = "sub"
@@ -453,6 +443,7 @@ pub struct Cli {
     /// space-joined as the `scope` parameter. When set via the environment
     /// variable, separate scopes with newlines.
     #[arg(
+        global = true,
         long = "upstream-oauth-scope",
         env = "UPSTREAM_OAUTH_SCOPES",
         value_delimiter = '\n'
@@ -464,11 +455,259 @@ pub struct Cli {
     /// It is the audience of the token obtained, not the `aud` of the client
     /// assertion, which is `--upstream-oauth-assertion-audience`.
     #[arg(
+        global = true,
         long = "upstream-oauth-token-audience",
         env = "UPSTREAM_OAUTH_TOKEN_AUDIENCE"
     )]
     pub upstream_oauth_token_audience: Option<String>,
 
+    /// Base OTLP endpoint to push tool-call metrics to over HTTP/protobuf (e.g.
+    /// `http://localhost:4318`). When set, metrics are exported to this
+    /// collector; the `/v1/metrics` signal path is appended automatically.
+    /// Honours the standard `OTEL_EXPORTER_OTLP_ENDPOINT` variable. Independent
+    /// of `--metrics-addr`; enable either, both, or neither.
+    #[arg(
+        global = true,
+        long = "otlp-endpoint",
+        env = "OTEL_EXPORTER_OTLP_ENDPOINT"
+    )]
+    pub otlp_endpoint: Option<Url>,
+
+    /// Address to serve a Prometheus `/metrics` endpoint on (e.g.
+    /// `0.0.0.0:9090`). When set, tool-call metrics are exposed for scraping on
+    /// a dedicated HTTP server, independent of the MCP transport.
+    #[arg(global = true, long = "metrics-addr", env = "METRICS_ADDR")]
+    pub metrics_addr: Option<SocketAddr>,
+
+    /// `service.name` reported on exported metrics.
+    #[arg(
+        global = true,
+        long = "otel-service-name",
+        env = "OTEL_SERVICE_NAME",
+        default_value = "oas2mcp"
+    )]
+    pub otel_service_name: String,
+
+    /// Only expose operations whose name (operationId, or `<method>_<path>`)
+    /// matches this regex (e.g. `^(get|post)ApiV4Projects`). Unanchored unless
+    /// the pattern anchors itself. Repeatable; an operation is kept if it
+    /// matches any `--include-regex` or carries any `--tag`. Use it to cut a
+    /// huge API down to a usable tool set. Invalid patterns are rejected at startup. When set via
+    /// the environment variable, separate patterns with newlines.
+    #[arg(
+        global = true,
+        long = "include-regex",
+        env = "INCLUDE_OPERATIONS_REGEX",
+        value_delimiter = '\n',
+        value_parser = Regex::new
+    )]
+    pub include_operations_regex: Vec<Regex>,
+
+    /// Drop operations whose name matches this regex. Repeatable; takes
+    /// precedence over the allowlist. Invalid patterns are rejected at startup.
+    /// When set via the environment variable, separate patterns with newlines.
+    #[arg(
+        global = true,
+        long = "exclude-regex",
+        env = "EXCLUDE_OPERATIONS_REGEX",
+        value_delimiter = '\n',
+        value_parser = Regex::new
+    )]
+    pub exclude_operations_regex: Vec<Regex>,
+
+    /// Only expose operations carrying this OpenAPI tag (case-insensitive).
+    /// Repeatable; combines with `--include-regex` as an allowlist. When set via the
+    /// environment variable, separate tags with newlines.
+    #[arg(
+        global = true,
+        long = "tag",
+        env = "INCLUDE_TAGS",
+        value_delimiter = '\n'
+    )]
+    pub include_tags: Vec<String>,
+
+    /// Drop operations carrying this OpenAPI tag (case-insensitive). Repeatable;
+    /// takes precedence over the allowlist. When set via the environment
+    /// variable, separate tags with newlines.
+    #[arg(
+        global = true,
+        long = "exclude-tag",
+        env = "EXCLUDE_TAGS",
+        value_delimiter = '\n'
+    )]
+    pub exclude_tags: Vec<String>,
+
+    /// Rewrite tool names, as `<regex>=<replacement>`, split on the **first**
+    /// `=` (a pattern matching a literal `=` writes it `\x3D`). Repeatable, and
+    /// the rules chain: each one rewrites the output of the previous, in
+    /// declaration order, so a list of abbreviations composes. The replacement
+    /// expands capture groups — write `${1}` rather than `$1` when the next
+    /// character is a letter, digit or `_`, since the longest possible group
+    /// name is taken.
+    ///
+    /// Renaming happens **after** filtering, which keeps matching the raw
+    /// `operationId`: an existing `--include-regex`/`--exclude-regex` allowlist is unaffected
+    /// by the rules added here. Invalid patterns are rejected at startup. When
+    /// set via the environment variable, separate rules with newlines.
+    ///
+    /// Example, for GitLab:
+    /// `--rename '^(get|post|put|delete|patch)ApiV4=${1}_' --rename 'Projects?Id=proj'`
+    #[arg(
+        global = true,
+        long = "rename",
+        env = "RENAME_OPERATIONS",
+        value_delimiter = '\n',
+        value_parser = RenameRule::parse
+    )]
+    pub rename_operations: Vec<RenameRule>,
+
+    /// Maximum length of a tool name. A longer name is truncated and given a
+    /// short hash of the full name, so two long names cannot collapse onto one
+    /// tool; the rewrite is logged. The default matches the limit Anthropic and
+    /// OpenAI enforce (`^[a-zA-Z0-9_-]{1,64}$`) — lower it when a gateway
+    /// namespaces the tools it aggregates (Envoy AI Gateway prefixes every tool
+    /// with `<backend>__`, which spends part of the same budget).
+    #[arg(
+        global = true,
+        long = "max-name-len",
+        env = "MAX_NAME_LEN",
+        default_value_t = DEFAULT_MAX_NAME_LEN
+    )]
+    pub max_name_len: usize,
+
+    /// Path to a PEM file holding one or more extra CA certificates to trust
+    /// when verifying TLS for every outbound connection (upstream API, OpenAPI
+    /// document fetch, OAuth token endpoint, JWKS). Repeatable; a single file
+    /// may bundle a whole chain. The platform's built-in roots stay trusted —
+    /// these are added on top, so you only need to supply your private or
+    /// corporate CA. When set via the environment variable, separate paths with
+    /// newlines.
+    #[arg(
+        global = true,
+        long = "ca-cert",
+        env = "CA_CERT_FILE",
+        value_delimiter = '\n'
+    )]
+    pub ca_certs: Vec<PathBuf>,
+
+    /// `tracing` filter directive (e.g. `info`, `oas2mcp=debug,rmcp=warn`).
+    /// Deliberately not `RUST_LOG`, which other crates read on their own.
+    #[arg(
+        global = true,
+        long = "log-filter",
+        env = "LOG_FILTER",
+        default_value = "info"
+    )]
+    pub log_filter: String,
+
+    /// The transport to serve over. Without one, `stdio`.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// The transport to serve the MCP server over.
+#[derive(Debug, Clone, Subcommand)]
+pub enum Command {
+    /// Standard input/output, for a local subprocess MCP client. The default.
+    Stdio,
+    /// The legacy HTTP+SSE transport (deprecated by the MCP spec, kept for
+    /// compatibility with older clients).
+    Sse(ListenArgs),
+    /// Streamable HTTP, the current remote transport: a single `/mcp` endpoint.
+    ///
+    /// The only transport that sees the client's HTTP headers, hence its
+    /// caller authentication and header forwarding flags.
+    Http(Box<HttpArgs>),
+}
+
+impl Command {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+            Self::Sse(_) => "sse",
+            Self::Http(_) => "http",
+        }
+    }
+}
+
+/// Where an HTTP transport listens.
+#[derive(Debug, Clone, Args)]
+pub struct ListenArgs {
+    /// Address to bind for the `sse` and `http` transports.
+    #[arg(long, env = "BIND_ADDR", default_value_t = default_bind_addr())]
+    pub bind_addr: SocketAddr,
+}
+
+/// The flags only Streamable HTTP has a use for.
+#[derive(Debug, Clone, Args)]
+pub struct HttpArgs {
+    #[command(flatten)]
+    pub listen: ListenArgs,
+
+    /// Name of an incoming-request header to forward verbatim to the upstream
+    /// API (e.g. `Authorization`). Repeatable; use it to pass the MCP client's
+    /// own credentials through to the API. Only the `http` transport
+    /// exposes the client's HTTP headers; ignored for `stdio` and `sse`. A
+    /// header also set with `--header`, or `Authorization` alongside
+    /// `--upstream-oauth-token-url`, is refused at startup. When set via the
+    /// environment variable, separate names with newlines.
+    #[arg(
+        long = "forward-header",
+        env = "FORWARD_HEADERS",
+        value_delimiter = '\n'
+    )]
+    pub forward_headers: Vec<String>,
+
+    /// Hostname, or `host:port`, accepted in the `Host` header of an incoming
+    /// `http` request. Repeatable; an entry without a port matches
+    /// any port. `*` accepts any `Host` at all.
+    ///
+    /// The check exists to stop DNS rebinding: a web page the victim visits
+    /// resolves its own domain to a loopback address and then talks to the MCP
+    /// server listening there, with the browser happily attaching the caller's
+    /// cookies. Validating `Host` breaks that, since the rebound request still
+    /// carries the attacker's hostname.
+    ///
+    /// Unset, the default follows `--bind-addr`, because that is what decides
+    /// whether the attack applies: bound to loopback, only `localhost`,
+    /// `127.0.0.1` and `::1` are accepted; bound to anything routable, the
+    /// server is deliberately reachable under a name it cannot guess (a
+    /// Kubernetes Service, an Ingress host), so any `Host` is accepted. Set
+    /// this to name those hosts explicitly. Only used by `http`;
+    /// ignored for `stdio` and `sse`. When set via the environment variable,
+    /// separate hosts with newlines.
+    #[arg(long = "allowed-host", env = "ALLOWED_HOSTS", value_delimiter = '\n')]
+    pub allowed_hosts: Vec<String>,
+
+    /// Stream `http` replies as a `text/event-stream` (SSE) flow with
+    /// stateful MCP sessions, instead of the default single `application/json`
+    /// reply.
+    ///
+    /// By default oas2mcp answers each `http` request with one
+    /// `application/json` body (running statelessly). That is the most
+    /// compatible mode: rmcp's SSE framing prepends a priming event whose
+    /// `data:` line is empty, which some strict proxies (e.g. Envoy AI Gateway)
+    /// refuse to parse — they abort on the empty event and report
+    /// `MCP message is not a response`. Turn this on only when you specifically
+    /// want SSE streaming and stateful sessions, and you are not behind such a
+    /// proxy. Only affects `http`; ignored for `stdio` and `sse`.
+    #[arg(long = "stream-responses", env = "STREAM_RESPONSES")]
+    pub stream_responses: bool,
+
+    #[command(flatten)]
+    pub inbound: InboundArgs,
+}
+
+/// How callers authenticate to oas2mcp, from their JWT.
+#[derive(Debug, Clone, Args)]
+// Verifying the caller's JWT is what the inbound auth flags build on, and a
+// JWKS is what turns it on.
+#[command(group(
+    ArgGroup::new("inbound_jwks")
+        .args(["inbound_jwks_url", "inbound_jwks_file"])
+        .multiple(false)
+))]
+pub struct InboundArgs {
     /// Restrict which tools an authenticated caller may see and invoke based on
     /// the roles carried in their JWT, as `role:operation_regex` (e.g.
     /// `admin:.*`, `reader:^get`). Repeatable; a tool is allowed if any of the
@@ -497,7 +736,7 @@ pub struct Cli {
     /// incoming JWT signatures. Set (or `--inbound-jwks-file`) → every MCP request
     /// is authenticated from its `Authorization: Bearer` JWT, and a caller with
     /// no valid token gets only the public tools (`*:` role mappings). Only the
-    /// `streamable-http` transport exposes the client's JWT: under `stdio` and
+    /// `http` transport exposes the client's JWT: under `stdio` and
     /// `sse` every caller is anonymous.
     #[arg(
         long = "inbound-jwks-url",
@@ -576,7 +815,7 @@ pub struct Cli {
     /// naming the `--inbound-expected-issuer` values as the authorization servers.
     /// That is what lets a client discover where to obtain a token on its own.
     /// Requires a JWKS and at least one `--inbound-expected-issuer`.
-    /// Only used by `streamable-http`.
+    /// Only used by `http`.
     #[arg(
         long = "inbound-resource",
         env = "INBOUND_RESOURCE",
@@ -594,160 +833,26 @@ pub struct Cli {
     /// the environment variable, separate names with newlines.
     #[arg(long = "trace-claim", env = "TRACE_CLAIMS", value_delimiter = '\n')]
     pub trace_claims: Vec<String>,
+}
 
-    /// Base OTLP endpoint to push tool-call metrics to over HTTP/protobuf (e.g.
-    /// `http://localhost:4318`). When set, metrics are exported to this
-    /// collector; the `/v1/metrics` signal path is appended automatically.
-    /// Honours the standard `OTEL_EXPORTER_OTLP_ENDPOINT` variable. Independent
-    /// of `--metrics-addr`; enable either, both, or neither.
-    #[arg(long = "otlp-endpoint", env = "OTEL_EXPORTER_OTLP_ENDPOINT")]
-    pub otlp_endpoint: Option<Url>,
+impl Cli {
+    /// The transport selected on the command line.
+    pub fn command(&self) -> &Command {
+        self.command.as_ref().unwrap_or(&Command::Stdio)
+    }
 
-    /// Address to serve a Prometheus `/metrics` endpoint on (e.g.
-    /// `0.0.0.0:9090`). When set, tool-call metrics are exposed for scraping on
-    /// a dedicated HTTP server, independent of the MCP transport.
-    #[arg(long = "metrics-addr", env = "METRICS_ADDR")]
-    pub metrics_addr: Option<SocketAddr>,
+    /// The Streamable HTTP flags, when that is the transport.
+    pub fn http(&self) -> Option<&HttpArgs> {
+        match self.command() {
+            Command::Http(http) => Some(http),
+            _ => None,
+        }
+    }
 
-    /// `service.name` reported on exported metrics.
-    #[arg(
-        long = "otel-service-name",
-        env = "OTEL_SERVICE_NAME",
-        default_value = "oas2mcp"
-    )]
-    pub otel_service_name: String,
-
-    /// Only expose operations whose name (operationId, or `<method>_<path>`)
-    /// matches this regex (e.g. `^(get|post)ApiV4Projects`). Unanchored unless
-    /// the pattern anchors itself. Repeatable; an operation is kept if it
-    /// matches any `--include-regex` or carries any `--tag`. Use it to cut a
-    /// huge API down to a usable tool set. Invalid patterns are rejected at startup. When set via
-    /// the environment variable, separate patterns with newlines.
-    #[arg(
-        long = "include-regex",
-        env = "INCLUDE_OPERATIONS_REGEX",
-        value_delimiter = '\n',
-        value_parser = Regex::new
-    )]
-    pub include_operations_regex: Vec<Regex>,
-
-    /// Drop operations whose name matches this regex. Repeatable; takes
-    /// precedence over the allowlist. Invalid patterns are rejected at startup.
-    /// When set via the environment variable, separate patterns with newlines.
-    #[arg(
-        long = "exclude-regex",
-        env = "EXCLUDE_OPERATIONS_REGEX",
-        value_delimiter = '\n',
-        value_parser = Regex::new
-    )]
-    pub exclude_operations_regex: Vec<Regex>,
-
-    /// Only expose operations carrying this OpenAPI tag (case-insensitive).
-    /// Repeatable; combines with `--include-regex` as an allowlist. When set via the
-    /// environment variable, separate tags with newlines.
-    #[arg(long = "tag", env = "INCLUDE_TAGS", value_delimiter = '\n')]
-    pub include_tags: Vec<String>,
-
-    /// Drop operations carrying this OpenAPI tag (case-insensitive). Repeatable;
-    /// takes precedence over the allowlist. When set via the environment
-    /// variable, separate tags with newlines.
-    #[arg(long = "exclude-tag", env = "EXCLUDE_TAGS", value_delimiter = '\n')]
-    pub exclude_tags: Vec<String>,
-
-    /// Rewrite tool names, as `<regex>=<replacement>`, split on the **first**
-    /// `=` (a pattern matching a literal `=` writes it `\x3D`). Repeatable, and
-    /// the rules chain: each one rewrites the output of the previous, in
-    /// declaration order, so a list of abbreviations composes. The replacement
-    /// expands capture groups — write `${1}` rather than `$1` when the next
-    /// character is a letter, digit or `_`, since the longest possible group
-    /// name is taken.
-    ///
-    /// Renaming happens **after** filtering, which keeps matching the raw
-    /// `operationId`: an existing `--include-regex`/`--exclude-regex` allowlist is unaffected
-    /// by the rules added here. Invalid patterns are rejected at startup. When
-    /// set via the environment variable, separate rules with newlines.
-    ///
-    /// Example, for GitLab:
-    /// `--rename '^(get|post|put|delete|patch)ApiV4=${1}_' --rename 'Projects?Id=proj'`
-    #[arg(
-        long = "rename",
-        env = "RENAME_OPERATIONS",
-        value_delimiter = '\n',
-        value_parser = RenameRule::parse
-    )]
-    pub rename_operations: Vec<RenameRule>,
-
-    /// Maximum length of a tool name. A longer name is truncated and given a
-    /// short hash of the full name, so two long names cannot collapse onto one
-    /// tool; the rewrite is logged. The default matches the limit Anthropic and
-    /// OpenAI enforce (`^[a-zA-Z0-9_-]{1,64}$`) — lower it when a gateway
-    /// namespaces the tools it aggregates (Envoy AI Gateway prefixes every tool
-    /// with `<backend>__`, which spends part of the same budget).
-    #[arg(
-        long = "max-name-len",
-        env = "MAX_NAME_LEN",
-        default_value_t = DEFAULT_MAX_NAME_LEN
-    )]
-    pub max_name_len: usize,
-
-    /// Path to a PEM file holding one or more extra CA certificates to trust
-    /// when verifying TLS for every outbound connection (upstream API, OpenAPI
-    /// document fetch, OAuth token endpoint, JWKS). Repeatable; a single file
-    /// may bundle a whole chain. The platform's built-in roots stay trusted —
-    /// these are added on top, so you only need to supply your private or
-    /// corporate CA. When set via the environment variable, separate paths with
-    /// newlines.
-    #[arg(long = "ca-cert", env = "CA_CERT_FILE", value_delimiter = '\n')]
-    pub ca_certs: Vec<PathBuf>,
-
-    /// MCP transport to expose.
-    #[arg(long, env = "TRANSPORT", default_value_t = Transport::Stdio)]
-    pub transport: Transport,
-
-    /// Address to bind for the `sse` and `streamable-http` transports.
-    #[arg(long, env = "BIND_ADDR", default_value_t = default_bind_addr())]
-    pub bind_addr: SocketAddr,
-
-    /// Hostname, or `host:port`, accepted in the `Host` header of an incoming
-    /// `streamable-http` request. Repeatable; an entry without a port matches
-    /// any port. `*` accepts any `Host` at all.
-    ///
-    /// The check exists to stop DNS rebinding: a web page the victim visits
-    /// resolves its own domain to a loopback address and then talks to the MCP
-    /// server listening there, with the browser happily attaching the caller's
-    /// cookies. Validating `Host` breaks that, since the rebound request still
-    /// carries the attacker's hostname.
-    ///
-    /// Unset, the default follows `--bind-addr`, because that is what decides
-    /// whether the attack applies: bound to loopback, only `localhost`,
-    /// `127.0.0.1` and `::1` are accepted; bound to anything routable, the
-    /// server is deliberately reachable under a name it cannot guess (a
-    /// Kubernetes Service, an Ingress host), so any `Host` is accepted. Set
-    /// this to name those hosts explicitly. Only used by `streamable-http`;
-    /// ignored for `stdio` and `sse`. When set via the environment variable,
-    /// separate hosts with newlines.
-    #[arg(long = "allowed-host", env = "ALLOWED_HOSTS", value_delimiter = '\n')]
-    pub allowed_hosts: Vec<String>,
-
-    /// Stream `streamable-http` replies as a `text/event-stream` (SSE) flow with
-    /// stateful MCP sessions, instead of the default single `application/json`
-    /// reply.
-    ///
-    /// By default oas2mcp answers each `streamable-http` request with one
-    /// `application/json` body (running statelessly). That is the most
-    /// compatible mode: rmcp's SSE framing prepends a priming event whose
-    /// `data:` line is empty, which some strict proxies (e.g. Envoy AI Gateway)
-    /// refuse to parse — they abort on the empty event and report
-    /// `MCP message is not a response`. Turn this on only when you specifically
-    /// want SSE streaming and stateful sessions, and you are not behind such a
-    /// proxy. Only affects `streamable-http`; ignored for `stdio` and `sse`.
-    #[arg(long = "stream-responses", env = "STREAM_RESPONSES")]
-    pub stream_responses: bool,
-
-    /// `tracing` filter directive (e.g. `info`, `oas2mcp=debug,rmcp=warn`).
-    /// Deliberately not `RUST_LOG`, which other crates read on their own.
-    #[arg(long = "log-filter", env = "LOG_FILTER", default_value = "info")]
-    pub log_filter: String,
+    /// The caller authentication flags, which only Streamable HTTP has.
+    pub fn inbound(&self) -> Option<&InboundArgs> {
+        self.http().map(|http| &http.inbound)
+    }
 }
 
 #[cfg(test)]
@@ -812,63 +917,95 @@ mod tests {
         assert_eq!(cli.max_name_len, 56);
     }
 
+    fn http(args: &[&str]) -> Result<HttpArgs, clap::Error> {
+        let cli = Cli::try_parse_from(["oas2mcp", "http"].iter().chain(args))?;
+        Ok(cli.http().expect("the http subcommand").clone())
+    }
+
+    #[test]
+    fn stdio_is_the_default_transport() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
+        assert!(matches!(cli.command(), Command::Stdio));
+        assert!(cli.http().is_none());
+    }
+
+    #[test]
+    fn shared_flags_go_before_or_after_the_subcommand() {
+        for args in [
+            ["oas2mcp", "--openapi-file", "api.yaml", "http"],
+            ["oas2mcp", "http", "--openapi-file", "api.yaml"],
+        ] {
+            let cli = Cli::try_parse_from(args).expect("parses");
+            assert_eq!(cli.openapi_file.as_deref(), Some("api.yaml".as_ref()));
+            assert!(cli.http().is_some());
+        }
+    }
+
+    #[test]
+    fn http_only_flags_are_refused_on_other_transports() {
+        for transport in ["stdio", "sse"] {
+            for flag in [
+                &["--allowed-host", "mcp.example.com"][..],
+                &["--stream-responses"],
+                &["--forward-header", "Authorization"],
+                &["--inbound-jwks-file", "jwks.json"],
+            ] {
+                let prefix = ["oas2mcp", transport];
+                let args = prefix.iter().chain(flag);
+                assert!(Cli::try_parse_from(args).is_err(), "{transport} {flag:?}");
+            }
+        }
+        assert!(Cli::try_parse_from(["oas2mcp", "--stream-responses"]).is_err());
+    }
+
     #[test]
     fn json_replies_are_the_default_and_streaming_is_opt_in() {
-        // JSON replies are the default — streaming stays off unless asked.
-        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
-        assert!(!cli.stream_responses);
-
-        // The flag opts into SSE streaming.
-        let cli = Cli::try_parse_from(["oas2mcp", "--stream-responses"]).expect("bare flag parses");
-        assert!(cli.stream_responses);
+        assert!(!http(&[]).expect("parses").stream_responses);
+        assert!(
+            http(&["--stream-responses"])
+                .expect("parses")
+                .stream_responses
+        );
     }
 
     #[test]
     fn allowed_hosts_are_repeatable_and_unset_by_default() {
         // Unset is meaningful: the transport then derives the list from the bind
         // address (see `transport::resolve_allowed_hosts`).
-        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
-        assert!(cli.allowed_hosts.is_empty());
-
-        let cli = Cli::try_parse_from([
-            "oas2mcp",
+        assert!(http(&[]).expect("parses").allowed_hosts.is_empty());
+        let args = http(&[
             "--allowed-host",
             "mcp.example.com",
             "--allowed-host",
             "10.0.0.7:8000",
         ])
         .expect("repeated hosts parse");
-        assert_eq!(cli.allowed_hosts, ["mcp.example.com", "10.0.0.7:8000"]);
+        assert_eq!(args.allowed_hosts, ["mcp.example.com", "10.0.0.7:8000"]);
     }
 
     #[test]
     fn a_role_mapper_needs_a_jwks() {
-        let mapper = ["oas2mcp", "--inbound-role-mapper", "a:.*"];
-        assert!(Cli::try_parse_from(mapper).is_err());
-        Cli::try_parse_from(
-            mapper
-                .iter()
-                .chain(&["--inbound-jwks-url", "https://idp/jwks"]),
-        )
+        assert!(http(&["--inbound-role-mapper", "a:.*"]).is_err());
+        http(&[
+            "--inbound-role-mapper",
+            "a:.*",
+            "--inbound-jwks-url",
+            "https://idp/jwks",
+        ])
         .expect("with a JWKS it parses");
-        Cli::try_parse_from(["oas2mcp", "--inbound-jwks-file", "jwks.json"])
-            .expect("a JWKS alone is enough");
+        http(&["--inbound-jwks-file", "jwks.json"]).expect("a JWKS alone is enough");
     }
 
     #[test]
     fn the_protected_resource_needs_a_jwks() {
         // Without one no token could ever satisfy the challenge.
-        let resource = [
-            "oas2mcp",
-            "--inbound-resource",
-            "https://mcp.example.com/mcp",
-        ];
-        assert!(Cli::try_parse_from(resource).is_err());
+        let resource = ["--inbound-resource", "https://mcp.example.com/mcp"];
+        assert!(http(&resource).is_err());
 
-        let cli = Cli::try_parse_from(resource.iter().chain(&["--inbound-jwks-file", "jwks.json"]))
+        let args = http(&[resource[0], resource[1], "--inbound-jwks-file", "jwks.json"])
             .expect("with a JWKS it parses");
         assert_eq!(
-            cli.inbound_resource.map(String::from).as_deref(),
+            args.inbound.inbound_resource.map(String::from).as_deref(),
             Some("https://mcp.example.com/mcp")
         );
     }
@@ -891,11 +1028,11 @@ mod tests {
             .expect_err("token-url without credentials must fail");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
 
-        // A client id with no credential is still incomplete — this is the case
-        // the old `client-id requires client-secret` chain used to catch.
-        let err = Cli::try_parse_from(oauth_args(&["--openapi-oauth-client-id", "id"]))
-            .expect_err("a client id alone must fail");
-        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        // A client id with no credential parses, but is refused when the grant
+        // is built.
+        let cli =
+            Cli::try_parse_from(oauth_args(&["--openapi-oauth-client-id", "id"])).expect("parses");
+        assert!(crate::oauth::TokenProvider::for_document(&cli, reqwest::Client::new()).is_err());
     }
 
     #[test]
@@ -970,14 +1107,14 @@ mod tests {
 
     #[test]
     fn the_upstream_grant_has_the_same_credential_rules() {
-        // Its own arg group, so it needs its own coverage: a typo in the group's
-        // member names would only show up here.
+        // Its own conflict rules, so it needs its own coverage: a typo in the
+        // argument names would only show up here.
         let err = Cli::try_parse_from([
             "oas2mcp",
             "--upstream-oauth-token-url",
             "https://idp.example.com/token",
         ])
-        .expect_err("token-url without credentials must fail");
+        .expect_err("token-url without a client id must fail");
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
 
         Cli::try_parse_from([

@@ -7,10 +7,9 @@ requests, so pass that header to upstream tool calls.
 ```bash
 export XQUIK_API_KEY="your-api-key"
 
-oas2mcp \
+oas2mcp http \
   --openapi-url https://xquik.com/openapi.json \
   --header "x-api-key: ${XQUIK_API_KEY}" \
-  --transport streamable-http \
   --bind-addr 127.0.0.1:8000
 ```
 

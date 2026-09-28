@@ -49,33 +49,24 @@ async fn main() -> anyhow::Result<()> {
     let authorizer = auth::Authorizer::from_cli(&cli)
         .await
         .context("configuring JWT authentication")?;
-    if authorizer.is_some() && cli.transport != cli::Transport::StreamableHttp {
-        tracing::warn!(
-            transport = %cli.transport,
-            "JWT authentication only takes effect on the streamable-http transport; \
-             on this transport no client JWT is available, so only the public tools are exposed"
-        );
-    }
 
     check_delegation_is_possible(&cli, authorizer.as_deref())?;
 
-    let protected = match (&cli.inbound_resource, &authorizer) {
-        (Some(resource), Some(authorizer)) => Some(
-            transport::ProtectedResource::new(
-                resource,
-                &cli.inbound_expected_issuers,
-                authorizer.clone(),
-            )
+    let protected = match (cli.inbound(), &authorizer) {
+        (Some(inbound), Some(authorizer)) => inbound
+            .inbound_resource
+            .as_ref()
+            .map(|resource| {
+                transport::ProtectedResource::new(
+                    resource,
+                    &inbound.inbound_expected_issuers,
+                    authorizer.clone(),
+                )
+            })
+            .transpose()
             .context("configuring the OAuth protected resource")?,
-        ),
         _ => None,
     };
-    if protected.is_some() && cli.transport != cli::Transport::StreamableHttp {
-        tracing::warn!(
-            transport = %cli.transport,
-            "--inbound-resource only takes effect on the streamable-http transport; ignored here"
-        );
-    }
 
     let telemetry =
         telemetry::Telemetry::from_cli(&cli).context("configuring metrics telemetry")?;
@@ -85,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
             .context("failed to build the MCP server from the OpenAPI document")?;
 
     tracing::info!(
-        transport = %cli.transport,
+        transport = cli.command().name(),
         openapi = spec.version(),
         tools = server.tool_count(),
         "starting MCP server"
@@ -118,30 +109,9 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    if cli.stream_responses && cli.transport != cli::Transport::StreamableHttp {
-        tracing::warn!(
-            transport = %cli.transport,
-            "--stream-responses only takes effect on the streamable-http transport; ignored here"
-        );
-    }
-
-    if !cli.allowed_hosts.is_empty() && cli.transport != cli::Transport::StreamableHttp {
-        tracing::warn!(
-            transport = %cli.transport,
-            "--allowed-host only takes effect on the streamable-http transport; ignored here"
-        );
-    }
-
-    transport::serve(
-        cli.transport,
-        cli.bind_addr,
-        !cli.stream_responses,
-        &cli.allowed_hosts,
-        protected,
-        server,
-    )
-    .await
-    .context("MCP transport terminated with an error")?;
+    transport::serve(cli.command(), protected, server)
+        .await
+        .context("MCP transport terminated with an error")?;
 
     // Flush any metrics buffered by the OTLP exporter before exiting.
     telemetry.shutdown();
@@ -169,23 +139,23 @@ fn check_delegation_is_possible(
         return Ok(());
     }
 
+    if cli.http().is_none() {
+        anyhow::bail!(
+            "--upstream-oauth-grant {} acts on behalf of the caller, but the {} \
+             transport exposes no client JWT: use `oas2mcp http`, or pin a fixed identity \
+             with --upstream-oauth-subject",
+            cli.upstream_oauth_grant,
+            cli.command().name()
+        );
+    }
     let Some(authorizer) = authorizer else {
         anyhow::bail!(
             "--upstream-oauth-grant {} acts on behalf of the caller, which needs a \
-             verified caller identity: configure --inbound-jwks-url or --inbound-jwks-file, or pin a \
-             fixed identity with --upstream-oauth-subject",
+             verified caller identity: configure --inbound-jwks-url or --inbound-jwks-file, or \
+             pin a fixed identity with --upstream-oauth-subject",
             cli.upstream_oauth_grant
         );
     };
-    if cli.transport != cli::Transport::StreamableHttp {
-        anyhow::bail!(
-            "--upstream-oauth-grant {} acts on behalf of the caller, but the {} \
-             transport exposes no client JWT: use --transport streamable-http, or pin a fixed \
-             identity with --upstream-oauth-subject",
-            cli.upstream_oauth_grant,
-            cli.transport
-        );
-    }
     if authorizer.has_public_tools() {
         tracing::warn!(
             "public tools with per-caller delegation: an anonymous call to a public tool \
@@ -257,7 +227,7 @@ mod tests {
 
     #[test]
     fn delegation_needs_a_verified_caller() {
-        let args = delegating(&["--transport", "streamable-http"]);
+        let args = delegating(&["http"]);
         let cli = cli_from(&args.iter().map(String::as_str).collect::<Vec<_>>());
 
         // Without an authorizer there is no verified identity, so every call
@@ -280,7 +250,7 @@ mod tests {
         // Default transport is stdio, which exposes no client headers.
         let err = check_delegation_is_possible(&cli, Some(&crate::auth::tests::test_authorizer()))
             .expect_err("stdio cannot carry a caller JWT");
-        assert!(format!("{err:#}").contains("streamable-http"), "{err:#}");
+        assert!(format!("{err:#}").contains("oas2mcp http"), "{err:#}");
     }
 
     #[test]

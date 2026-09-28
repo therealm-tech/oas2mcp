@@ -13,7 +13,7 @@ flowchart LR
     client["MCP client"]
     idp["Authorization server"]
     subgraph oas2mcp
-        transport["transport<br/>stdio · sse · streamable-http"]
+        transport["transport<br/>stdio · sse · http"]
         server["server::OpenApiServer"]
         auth["auth::Authorizer"]
         oauth["oauth::TokenProvider"]
@@ -36,8 +36,11 @@ how it is put together.
 
 ## Components
 
-- **[`cli`](src/cli.rs)** — the whole configuration surface. Every flag has an
-  environment variable, and no other module reads the environment.
+- **[`cli`](src/cli.rs)** — the whole configuration surface. The subcommand
+  picks the transport (`stdio` by default, `sse`, `http`) and owns the flags
+  only that transport can use, so clap rejects them elsewhere; every other flag
+  is global. Every flag has an environment variable, and no other module reads
+  the environment.
 - **[`openapi`](src/openapi.rs)** — fetches or reads the document and exposes a
   version-agnostic [`Spec`](src/openapi/spec.rs) over OpenAPI 3.0 and 3.1.
   Schemas stay raw JSON, never a Rust model (see
@@ -173,7 +176,8 @@ authorization server.
   reports the MCP session id only as present or absent; traced JWT claims go to
   logs only, never to metric labels.
 - **A caller's JWT is only available on Streamable HTTP.** `stdio` and `sse`
-  expose no client headers, so role mapping leaves only the public tools there and
-  delegation is refused at startup.
+  expose no client headers, so caller authentication and header forwarding are
+  flags of the `http` subcommand alone, and per-caller delegation is refused at
+  startup on the others.
 - **Accepted JWT algorithms follow the JWK's key family**, so a token cannot
   downgrade to an HMAC keyed with a public key.
