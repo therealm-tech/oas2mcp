@@ -50,7 +50,7 @@ writing a line of glue code.
   `operationId`.
 - **Three transports** — the MCP server can be exposed over:
   - `stdio` — for a local subprocess MCP client.
-  - `streamable-http` — the current remote transport, single `POST /mcp`
+  - `http` — the current remote transport, single `POST /mcp`
     endpoint. By default each request is answered with a single
     `application/json` body (stateless), which is the most interoperable mode
     — notably with strict proxies such as Envoy AI Gateway. Pass
@@ -60,7 +60,7 @@ writing a line of glue code.
     for compatibility with older clients).
 - **Auth passthrough** — attach arbitrary static headers (e.g. a bearer token)
   to every upstream request, or forward the MCP client's own request headers
-  (e.g. `Authorization`) upstream per call (`streamable-http` only).
+  (e.g. `Authorization`) upstream per call (`http` only).
 - **OAuth for the upstream API** — obtain the upstream `Authorization: Bearer`
   from an OAuth2 grant, refreshed automatically before it expires, instead of a
   static token that goes stale. Authenticates with a client secret or a signed
@@ -73,7 +73,7 @@ writing a line of glue code.
 - **Caller authentication and role-based tool access** — verify the caller's
   JWT against a JWKS, and optionally gate which tools they can see and call by
   mapping each `role` to a regex over operation names
-  (`streamable-http` only). Tools mapped to the reserved role `*` stay open to
+  (`http` only). Tools mapped to the reserved role `*` stay open to
   everyone, token or not.
 - **MCP authorization discovery** — with `--inbound-resource`, `/mcp` behaves as
   the OAuth protected resource the MCP authorization spec describes: a request
@@ -110,8 +110,14 @@ docker build -t oas2mcp .
 ## Usage
 
 ```text
-oas2mcp [OPTIONS]
+oas2mcp [OPTIONS] [stdio | sse | http] [TRANSPORT OPTIONS]
 ```
+
+The subcommand picks the transport, `stdio` when none is given. Options for
+one transport only exist under its subcommand: `--bind-addr` under `sse` and
+`http`, and `--allowed-host`, `--stream-responses`, `--forward-header` and every
+`--inbound-*` flag under `http` alone. Every other option may come before or
+after the subcommand.
 
 The OpenAPI source is required: pass exactly one of `--openapi-file` or
 `--openapi-url`.
@@ -141,7 +147,7 @@ document.
 | `--base-url`      | `BASE_URL`       | spec `servers`   | Upstream API base URL that tool calls are proxied to.              |
 | `--ca-cert`       | `CA_CERT_FILE`   | —                | Path to a PEM file with extra CA certificate(s) to trust for every outbound TLS connection (upstream, document fetch, OAuth, JWKS). Added on top of the built-in roots, so only your private/corporate CA is needed. Repeatable; newline-separated via the env var. |
 | `--header`        | `UPSTREAM_HEADERS` | —              | Extra `Name: Value` header on every upstream request. Repeatable.  |
-| `--forward-header`| `FORWARD_HEADERS`  | —              | Name of an incoming request header to forward upstream (e.g. `Authorization`). Repeatable. `streamable-http` only. |
+| `--forward-header`| `FORWARD_HEADERS`  | —              | Name of an incoming request header to forward upstream (e.g. `Authorization`). Repeatable. `http` only. |
 | `--upstream-oauth-token-url` | `UPSTREAM_OAUTH_TOKEN_URL` | — | OAuth2 `client_credentials` token endpoint for **upstream API calls**. Set → every proxied call carries an auto-refreshed bearer. Requires `--upstream-oauth-client-id` plus one credential below. |
 | `--upstream-oauth-client-id` | `UPSTREAM_OAUTH_CLIENT_ID` | —  | OAuth2 client ID for the upstream token.                           |
 | `--upstream-oauth-client-secret` | `UPSTREAM_OAUTH_CLIENT_SECRET` | — | OAuth2 client secret, sent over HTTP Basic. Mutually exclusive with `--upstream-oauth-private-key`. |
@@ -155,14 +161,14 @@ document.
 | `--upstream-oauth-grant` | `UPSTREAM_OAUTH_GRANT` | `client-credentials` | `client-credentials`; `jwt-bearer` (RFC 7523 §2.1) to obtain the token on behalf of a subject with an assertion oas2mcp signs; or `jwt-bearer-relay` to relay the caller's own JWT as that assertion. |
 | `--upstream-oauth-assertion-issuer` | `UPSTREAM_OAUTH_ASSERTION_ISSUER` | client id | `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. |
 | `--upstream-oauth-subject` | `UPSTREAM_OAUTH_SUBJECT` | —      | Fixed `sub` for the assertion — a service account. Every caller shares one token. Mutually exclusive with the claim below. |
-| `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs a JWKS (`--inbound-jwks-url`/`--inbound-jwks-file`) and `streamable-http`. |
+| `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs a JWKS (`--inbound-jwks-url`/`--inbound-jwks-file`) and `http`. |
 | `--inbound-role-mapper` | `INBOUND_ROLE_MAPPER` | —          | `role:operation_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Unset → any authenticated caller may use every tool. Requires a JWKS source below. |
-| `--inbound-jwks-url` | `INBOUND_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Set (or `--inbound-jwks-file`) → callers are authenticated from their JWT; without a valid one they get the public tools only. `streamable-http` only. |
+| `--inbound-jwks-url` | `INBOUND_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Set (or `--inbound-jwks-file`) → callers are authenticated from their JWT; without a valid one they get the public tools only. `http` only. |
 | `--inbound-jwks-file` | `INBOUND_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--inbound-jwks-url`. |
 | `--inbound-expected-audience` | `INBOUND_EXPECTED_AUDIENCES` | — | Audience the incoming JWT's `aud` must match. Repeatable. **Set this**: unset, a token your provider minted for another service is accepted here. |
 | `--inbound-expected-issuer` | `INBOUND_EXPECTED_ISSUERS` | —      | Issuer the incoming JWT's `iss` must match. Repeatable. Defence in depth next to the JWKS. |
 | `--inbound-clock-skew` | `INBOUND_CLOCK_SKEW` | `60s`            | Skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). |
-| `--inbound-resource` | `INBOUND_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests (beyond the public tools) get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--inbound-role-mapper` and `--inbound-expected-issuer`. `streamable-http` only. |
+| `--inbound-resource` | `INBOUND_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests (beyond the public tools) get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--inbound-role-mapper` and `--inbound-expected-issuer`. `http` only. |
 | `--inbound-role-claim` | `INBOUND_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
 | `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs a JWKS. |
 | `--include-regex` | `INCLUDE_OPERATIONS_REGEX` | —      | Only expose operations whose name matches this regex. Repeatable. |
@@ -174,10 +180,9 @@ document.
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Base OTLP endpoint to push tool-call metrics to over HTTP (e.g. `http://localhost:4318`); `/v1/metrics` is appended. Set → OTLP export on. |
 | `--metrics-addr`  | `METRICS_ADDR`   | —                | Address to serve a Prometheus `/metrics` endpoint on (e.g. `0.0.0.0:9090`). Set → scrape endpoint on. Independent of `--otlp-endpoint`. |
 | `--otel-service-name` | `OTEL_SERVICE_NAME` | `oas2mcp`   | `service.name` reported on exported metrics.                       |
-| `--transport`     | `TRANSPORT`      | `stdio`          | One of `stdio`, `sse`, `streamable-http`.                          |
-| `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address for the `sse` and `streamable-http` transports.       |
-| `--allowed-host`  | `ALLOWED_HOSTS`  | follows `--bind-addr` | Hostname, or `host:port`, accepted in the inbound `Host` header; `*` accepts any. Repeatable; newline-separated via the env var. `streamable-http` only — see [Host header validation](#host-header-validation). |
-| `--stream-responses` | `STREAM_RESPONSES` | `false`      | Reply on `streamable-http` with an SSE flow and stateful sessions instead of the default single `application/json` body. `streamable-http` only. |
+| `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address of the `sse` and `http` subcommands.        |
+| `--allowed-host`  | `ALLOWED_HOSTS`  | follows `--bind-addr` | Hostname, or `host:port`, accepted in the inbound `Host` header; `*` accepts any. Repeatable; newline-separated via the env var. `http` only — see [Host header validation](#host-header-validation). |
+| `--stream-responses` | `STREAM_RESPONSES` | `false`      | Reply on `http` with an SSE flow and stateful sessions instead of the default single `application/json` body. `http` only. |
 | `--log-filter`    | `LOG_FILTER`     | `info`           | `tracing` filter directive (e.g. `oas2mcp=debug,rmcp=warn`).       |
 
 Configuration resolves CLI flags → environment variables → defaults, and every
@@ -204,21 +209,19 @@ oas2mcp --openapi-file examples/petstore-3.1.yaml
 Serve a remote API over Streamable HTTP, forwarding a bearer token upstream:
 
 ```bash
-oas2mcp \
+oas2mcp http \
   --openapi-url https://api.example.com/openapi.json \
-  --transport streamable-http \
   --bind-addr 0.0.0.0:8000 \
   --header 'Authorization: Bearer <token>'
 # MCP endpoint: POST http://0.0.0.0:8000/mcp
 ```
 
 Forward each MCP client's own `Authorization` (and a tenant header) to the
-upstream API instead of a single shared token (`streamable-http` only):
+upstream API instead of a single shared token (`http` only):
 
 ```bash
-oas2mcp \
+oas2mcp http \
   --openapi-url https://api.example.com/openapi.json \
-  --transport streamable-http \
   --bind-addr 0.0.0.0:8000 \
   --forward-header Authorization \
   --forward-header X-Tenant-Id
@@ -232,7 +235,7 @@ the environment variable, separate them with newlines (e.g.
 Serve over the legacy SSE transport:
 
 ```bash
-oas2mcp --openapi-file examples/petstore.yaml --transport sse
+oas2mcp sse --openapi-file examples/petstore.yaml
 # SSE stream:   GET  http://127.0.0.1:8000/sse
 # Client posts: POST http://127.0.0.1:8000/messages?sessionId=<id>
 ```
@@ -246,11 +249,10 @@ tool set in place. If the URL is private, authenticate the fetch with
 upstream `--header`):
 
 ```bash
-oas2mcp \
+oas2mcp http \
   --openapi-url https://api.example.com/openapi.json \
   --openapi-header 'Authorization: Bearer <docs-token>' \
   --reload-every 5m \
-  --transport streamable-http \
   --bind-addr 0.0.0.0:8000
 ```
 
@@ -292,14 +294,13 @@ it automatically shortly before expiry — so the periodic reload keeps working
 indefinitely.
 
 ```bash
-oas2mcp \
+oas2mcp http \
   --openapi-url https://api.example.com/openapi.json \
   --reload-every 1h \
   --openapi-oauth-token-url https://idp.example.com/oauth/token \
   --openapi-oauth-client-id "$CLIENT_ID" \
   --openapi-oauth-client-secret "$CLIENT_SECRET" \
   --openapi-oauth-scope read:openapi \
-  --transport streamable-http \
   --bind-addr 0.0.0.0:8000
 ```
 
@@ -399,9 +400,9 @@ The `jwt-bearer` grant (RFC 7523 §2.1) fixes that: oas2mcp presents a signed
 assertion naming the caller, and the provider issues a token *for that user*.
 
 ```bash
-oas2mcp \
+oas2mcp http \
   --openapi-url https://api.example.com/openapi.json \
-  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+  --bind-addr 0.0.0.0:8000 \
   --inbound-jwks-url https://idp.example.com/.well-known/jwks.json \
   --upstream-oauth-token-url https://idp.example.com/oauth/token \
   --upstream-oauth-client-id "$CLIENT_ID" \
@@ -485,9 +486,8 @@ whitespace-separated string), and a caller whose roles match no mapping gets
 the public tools only.
 
 ```bash
-oas2mcp \
+oas2mcp http \
   --openapi-url https://api.example.com/openapi.json \
-  --transport streamable-http \
   --bind-addr 0.0.0.0:8000 \
   --inbound-jwks-url https://idp.example.com/.well-known/jwks.json \
   --inbound-role-claim roles \
@@ -496,7 +496,7 @@ oas2mcp \
 # admins get every tool; readers only the ones whose name starts with "get".
 ```
 
-This needs the caller's JWT, which only the `streamable-http` transport
+This needs the caller's JWT, which only the `http` transport
 exposes — under `stdio`/`sse` no token is available, so only the public tools
 are exposed. The signature is verified with the key family advertised by the JWK
 (an algorithm-substitution downgrade such as `HS256` against a public key is
@@ -513,9 +513,8 @@ on the tool-call log line as a single `jwt.claims` field (a JSON object that
 keeps every value's original shape — strings, numbers, arrays):
 
 ```bash
-oas2mcp \
+oas2mcp http \
   --openapi-url https://api.example.com/openapi.json \
-  --transport streamable-http \
   --bind-addr 0.0.0.0:8000 \
   --inbound-jwks-url https://idp.example.com/.well-known/jwks.json \
   --inbound-role-mapper 'admin:.*' \
@@ -538,8 +537,8 @@ this meant for me". Those are different questions, and only the second one keeps
 a token minted for another service out:
 
 ```bash
-oas2mcp \
-  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+oas2mcp http \
+  --bind-addr 0.0.0.0:8000 \
   --inbound-jwks-url https://idp.example.com/.well-known/jwks.json \
   --inbound-role-mapper 'admin:.*' \
   --inbound-expected-audience oas2mcp \
@@ -578,8 +577,8 @@ can do the login itself, provided the server points it at the authorization
 server. Set `--inbound-resource` to the URL clients reach the endpoint under:
 
 ```bash
-oas2mcp \
-  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+oas2mcp http \
+  --bind-addr 0.0.0.0:8000 \
   --inbound-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
   --inbound-expected-issuer https://idp.example.com/realms/main \
   --inbound-expected-audience oas2mcp \
@@ -631,8 +630,8 @@ the rest needs a login. Map them to the reserved role `*` in
 `--inbound-role-mapper`:
 
 ```bash
-oas2mcp \
-  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+oas2mcp http \
+  --bind-addr 0.0.0.0:8000 \
   --inbound-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
   --inbound-expected-issuer https://idp.example.com/realms/main \
   --inbound-role-mapper '*:^get_public_' \
@@ -684,9 +683,9 @@ Enable either exporter, both, or neither — they are independent:
 
 ```bash
 # OTLP push to a collector + a Prometheus scrape endpoint, at once.
-oas2mcp \
+oas2mcp http \
   --openapi-file ./examples/petstore.yaml \
-  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+  --bind-addr 0.0.0.0:8000 \
   --otlp-endpoint http://otel-collector:4318 \
   --metrics-addr 0.0.0.0:9090
 # Push: POST http://otel-collector:4318/v1/metrics  (HTTP/protobuf, every 30s)
@@ -804,12 +803,12 @@ For a stdio client (e.g. Claude Desktop / Claude Code), point it at the binary:
 }
 ```
 
-For a remote client, start the `streamable-http` transport and connect it to
+For a remote client, start the `http` transport and connect it to
 `http://<host>:<port>/mcp`.
 
 ### Host header validation
 
-The `streamable-http` transport checks the `Host` header of every request and
+The `http` transport checks the `Host` header of every request and
 answers `403 Forbidden: Host header is not allowed` when it is not on the
 allowlist. This stops DNS rebinding: a page the victim visits re-resolves its
 own domain to a loopback address and then talks to the MCP server listening
@@ -831,8 +830,8 @@ rejecting those by default would only mean rejecting every real request.
 Name the hosts explicitly to check them there too:
 
 ```bash
-oas2mcp --openapi-file petstore.yaml \
-  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+oas2mcp http --openapi-file petstore.yaml \
+  --bind-addr 0.0.0.0:8000 \
   --allowed-host mcp.example.com \
   --allowed-host petstore-oas2mcp.default.svc.cluster.local
 ```
@@ -873,7 +872,7 @@ session.
 ## Deploy on Kubernetes (Helm)
 
 A Helm chart is provided under [charts/oas2mcp](charts/oas2mcp). It deploys the
-server with the `streamable-http` transport, a restricted security context, and
+server with the `http` transport, a restricted security context, and
 resource requests/limits. The upstream auth headers are stored in a `Secret`.
 
 ```bash
@@ -976,7 +975,7 @@ the CI, and [ARCHITECTURE.md](ARCHITECTURE.md) for how the code fits together.
 - Templated `servers` URLs (`https://{region}.example.com`) are not expanded;
   pass `--base-url` for those.
 - The legacy `sse` transport is kept for compatibility but is deprecated by the
-  MCP specification; prefer `streamable-http` for new remote deployments.
+  MCP specification; prefer `http` for new remote deployments.
 
 ## License
 

@@ -69,7 +69,6 @@ spec:
           securityContext:
             {{- toYaml .Values.oas2mcp.securityContext | nindent 12 }}
           args:
-            - --transport
             - {{ .Values.oas2mcp.transport | quote }}
           env:
             - name: BIND_ADDR

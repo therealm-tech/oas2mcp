@@ -108,7 +108,10 @@ impl OpenApiServer {
         metrics: Metrics,
     ) -> anyhow::Result<Self> {
         let extra_headers = parse_headers(&cli.headers)?;
-        let forward_headers = parse_header_names(&cli.forward_headers)?;
+        let forward_headers = parse_header_names(
+            cli.http()
+                .map_or(&[], |http| http.forward_headers.as_slice()),
+        )?;
         let snapshot = build_snapshot(spec, cli)?;
         let client = crate::http::client(cli).context("building the upstream HTTP client")?;
         // Shares the upstream client, so token requests reuse its connection
@@ -775,7 +778,7 @@ paths:
         forwarded: &[(&str, &str)],
         bearer: Option<&str>,
     ) -> Vec<String> {
-        let cli = Cli::try_parse_from(std::iter::once("oas2mcp").chain(args.iter().copied()))
+        let cli = Cli::try_parse_from(["oas2mcp", "http"].into_iter().chain(args.iter().copied()))
             .expect("CLI parses");
         let spec = spec_from(ONE_GET);
         let server = OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled())
@@ -832,8 +835,8 @@ paths:
 
     #[test]
     fn forwarded_headers_travel_beside_the_token() {
-        let cli =
-            Cli::try_parse_from(["oas2mcp", "--forward-header", "X-Tenant"]).expect("CLI parses");
+        let cli = Cli::try_parse_from(["oas2mcp", "http", "--forward-header", "X-Tenant"])
+            .expect("CLI parses");
         let spec = spec_from(ONE_GET);
         let server = OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled())
             .expect("server builds");

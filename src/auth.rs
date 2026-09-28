@@ -20,7 +20,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use regex::Regex;
 use serde_json::{Map, Value};
 
-use crate::cli::Cli;
+use crate::cli::{Cli, InboundArgs};
 
 /// The role of a `--inbound-role-mapper` entry granting its tools to everyone,
 /// with or without a token.
@@ -90,13 +90,16 @@ impl Authorizer {
     /// is not set (no authorization, every tool exposed). Fetches the JWKS from
     /// the configured URL or reads it from disk — this is why it is async.
     pub async fn from_cli(cli: &Cli) -> anyhow::Result<Option<Arc<Self>>> {
-        let Some(jwks) = load_jwks(cli).await? else {
+        let Some(inbound) = cli.inbound() else {
             return Ok(None);
         };
-        let (public, rules): (Vec<_>, Vec<_>) = parse_rules(&cli.inbound_role_mapper)?
+        let Some(jwks) = load_jwks(cli, inbound).await? else {
+            return Ok(None);
+        };
+        let (public, rules): (Vec<_>, Vec<_>) = parse_rules(&inbound.inbound_role_mapper)?
             .into_iter()
             .partition(|rule| rule.role == PUBLIC_ROLE);
-        if cli.inbound_expected_audiences.is_empty() {
+        if inbound.inbound_expected_audiences.is_empty() {
             // Not an error: rejecting these tokens outright would break every
             // deployment that predates the flag. But it *is* worth saying, since
             // it means a token minted for another service passes here.
@@ -108,14 +111,14 @@ impl Authorizer {
         }
         Ok(Some(Arc::new(Self {
             jwks,
-            role_claim: cli.inbound_role_claim.clone(),
-            expected_audiences: cli.inbound_expected_audiences.clone(),
-            expected_issuers: cli.inbound_expected_issuers.clone(),
-            clock_skew: cli.inbound_clock_skew.unwrap_or(DEFAULT_CLOCK_SKEW),
+            role_claim: inbound.inbound_role_claim.clone(),
+            expected_audiences: inbound.inbound_expected_audiences.clone(),
+            expected_issuers: inbound.inbound_expected_issuers.clone(),
+            clock_skew: inbound.inbound_clock_skew.unwrap_or(DEFAULT_CLOCK_SKEW),
             subject_claim: cli.upstream_oauth_subject_claim.clone(),
             rules,
             public_tools: public.into_iter().map(|rule| rule.pattern).collect(),
-            trace_claims: cli.trace_claims.clone(),
+            trace_claims: inbound.trace_claims.clone(),
         })))
     }
 
@@ -224,8 +227,8 @@ fn parse_rules(raw: &[String]) -> anyhow::Result<Vec<RoleRule>> {
 
 /// Load the JWKS from the configured URL (fetched at startup) or file, or
 /// `None` when neither is set.
-async fn load_jwks(cli: &Cli) -> anyhow::Result<Option<JwkSet>> {
-    let bytes = match (&cli.inbound_jwks_url, &cli.inbound_jwks_file) {
+async fn load_jwks(cli: &Cli, inbound: &InboundArgs) -> anyhow::Result<Option<JwkSet>> {
+    let bytes = match (&inbound.inbound_jwks_url, &inbound.inbound_jwks_file) {
         (Some(url), _) => {
             tracing::debug!(%url, "fetching JWKS for JWT verification");
             let client = crate::http::client(cli).context("building the JWKS HTTP client")?;

@@ -147,8 +147,8 @@ true
 {{- if not (or .Values.oas2mcp.auth.jwks.url .Values.oas2mcp.auth.jwks.file) -}}
 {{- fail (printf "oas2mcp.upstream.oauth.grant=%s acts on behalf of the caller, which needs a verified identity: set oas2mcp.auth.jwks.url or oas2mcp.auth.jwks.file, or pin oas2mcp.upstream.oauth.subject" (.Values.oas2mcp.upstream.oauth.grant | toString)) -}}
 {{- end -}}
-{{- if ne .Values.oas2mcp.transport "streamable-http" -}}
-{{- fail (printf "oas2mcp.upstream.oauth.grant=%s acts on behalf of the caller, which needs transport=streamable-http (no other transport carries a client JWT), or pin oas2mcp.upstream.oauth.subject" (.Values.oas2mcp.upstream.oauth.grant | toString)) -}}
+{{- if ne .Values.oas2mcp.transport "http" -}}
+{{- fail (printf "oas2mcp.upstream.oauth.grant=%s acts on behalf of the caller, which needs transport=http (no other transport carries a client JWT), or pin oas2mcp.upstream.oauth.subject" (.Values.oas2mcp.upstream.oauth.grant | toString)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

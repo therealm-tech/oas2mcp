@@ -13,7 +13,7 @@ use rmcp::transport::stdio;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
-use crate::cli::Transport;
+use crate::cli::Command;
 use crate::server::OpenApiServer;
 
 pub use protected_resource::ProtectedResource;
@@ -29,25 +29,26 @@ const ANY_HOST: &str = "*";
 /// that have to read the body themselves. `rmcp`'s own default.
 const MAX_REQUEST_BODY_BYTES: usize = 4 * 1024 * 1024;
 
-/// Serve the MCP server over `transport`, blocking until shutdown.
-///
-/// `json_response` and `allowed_hosts` only affect `streamable-http`: the former
-/// makes POST replies a single `application/json` body instead of an SSE stream,
-/// the latter gates the inbound `Host` header (see `Cli`). `protected`, when
-/// set, requires a bearer token on `/mcp` and serves the resource metadata.
+/// Serve the MCP server over the transport `command` selects, blocking until
+/// shutdown. `protected`, when set, requires a bearer token on `/mcp` and
+/// serves the resource metadata; only Streamable HTTP has one.
 pub async fn serve(
-    transport: Transport,
-    bind: SocketAddr,
-    json_response: bool,
-    allowed_hosts: &[String],
+    command: &Command,
     protected: Option<ProtectedResource>,
     server: OpenApiServer,
 ) -> anyhow::Result<()> {
-    match transport {
-        Transport::Stdio => serve_stdio(server).await,
-        Transport::Sse => sse::serve(bind, server).await,
-        Transport::StreamableHttp => {
-            serve_streamable_http(bind, json_response, allowed_hosts, protected, server).await
+    match command {
+        Command::Stdio => serve_stdio(server).await,
+        Command::Sse(listen) => sse::serve(listen.bind_addr, server).await,
+        Command::Http(http) => {
+            serve_streamable_http(
+                http.listen.bind_addr,
+                !http.stream_responses,
+                &http.allowed_hosts,
+                protected,
+                server,
+            )
+            .await
         }
     }
 }

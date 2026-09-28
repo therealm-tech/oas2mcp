@@ -99,13 +99,13 @@ echo "== starting oas2mcp"
 # The document fetch authenticates with a signed client assertion (§2.2); tool
 # calls obtain a per-caller token with the jwt-bearer grant (§2.1), relaying the
 # caller's own assertion.
-"$OAS2MCP" \
+"$OAS2MCP" http \
   --openapi-url "$API_URL/openapi.json" \
   --openapi-oauth-token-url "$KEYCLOAK_URL/realms/$KEYCLOAK_REALM/protocol/openid-connect/token" \
   --openapi-oauth-client-id oas2mcp-doc \
   --openapi-oauth-private-key tests/fixtures/test_rsa_key.pem \
   --openapi-oauth-signing-alg rs256 \
-  --transport streamable-http --bind-addr "127.0.0.1:$MCP_PORT" \
+  --bind-addr "127.0.0.1:$MCP_PORT" \
   --inbound-jwks-file "$logs/oneaccess-jwks.json" \
   --inbound-role-mapper 'admin:.*' \
   --inbound-role-mapper 'reader:^(getPets|whoami)$' \
