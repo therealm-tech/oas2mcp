@@ -117,6 +117,12 @@ sequenceDiagram
   gets every tool when no `--inbound-role-mapper` is set, and with one, the tools
   its roles map to. A verified token with no matching role is still accepted,
   and gets the public tools alone.
+- **The response `Content-Type` picks the content block.** A text media type
+  (or an untyped body that is valid UTF-8) is read as text and parsed as JSON
+  for `structuredContent`. `image/*` and `audio/*` become MCP image and audio
+  blocks, and any other type an embedded resource with a base64 `blob` named by
+  the request URL, each after a one-line text summary of status, type and size
+  so a client that drops binary content still sees the outcome.
 - **Upstream failures are tool results, not protocol errors.** An upstream
   `4xx`/`5xx` reaches the model as an `isError` result carrying the status, so
   it can reason about it. A failure to obtain the upstream token is an error
