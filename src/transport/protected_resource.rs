@@ -2,7 +2,8 @@
 //! authorization spec: a bearer challenge on unauthenticated requests, and the
 //! Protected Resource Metadata (RFC 9728) the challenge points clients to.
 //!
-//! With public tools configured, a request without a token is let in and only
+//! With public tools or anonymous discovery configured, a request without a
+//! token is let in and only
 //! challenged when it calls a tool that is not public. The handler enforces
 //! access either way; the challenge here is what prompts a client to log in.
 
@@ -135,7 +136,7 @@ struct Gate {
 async fn require_bearer(State(gate): State<Arc<Gate>>, request: Request, next: Next) -> Response {
     let resource = &gate.resource;
     let Some(token) = bearer_token(request.headers()) else {
-        if resource.authorizer.has_public_tools() {
+        if resource.authorizer.admits_anonymous() {
             return admit_anonymous(&gate, request, next).await;
         }
         tracing::debug!("challenging an MCP request that carries no bearer token");
@@ -190,7 +191,8 @@ mod tests {
 
     use super::*;
     use crate::auth::tests::{
-        TEST_KID, in_one_hour, sign, test_authorizer, test_authorizer_with_public_tools,
+        TEST_KID, in_one_hour, sign, test_authorizer, test_authorizer_with_anonymous_discovery,
+        test_authorizer_with_public_tools,
     };
 
     const ISSUER: &str = "https://idp.example.com/realms/main";
@@ -358,6 +360,28 @@ mod tests {
         let response = send_body(&app, "POST", "/mcp", Some("not.a.jwt"), Body::from(list)).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert!(challenge_of(&response).contains("error=\"invalid_token\""));
+    }
+
+    #[tokio::test]
+    async fn with_anonymous_discovery_an_anonymous_client_lists_but_is_challenged_on_call() {
+        let mcp = Router::new().route("/mcp", axum::routing::post(|body: Bytes| async { body }));
+        let authorizer = Arc::new(test_authorizer_with_anonymous_discovery());
+        let is_public = authorizer.clone();
+        let app = ProtectedResource::new(
+            &Url::parse("https://mcp.example.com/mcp").expect("valid URL"),
+            &[ISSUER.to_string()],
+            authorizer,
+        )
+        .expect("valid resource")
+        .protect(mcp, Arc::new(move |tool: &str| is_public.is_public(tool)));
+
+        let list = rpc("tools/list", json!({}));
+        let response = send_body(&app, "POST", "/mcp", None, Body::from(list)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let call = rpc("tools/call", json!({ "name": "delete_pet" }));
+        let response = send_body(&app, "POST", "/mcp", None, Body::from(call)).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

@@ -7,7 +7,8 @@
 //! tool is visible and callable only if one of the caller's roles maps to a
 //! regex matching its operation. Without a
 //! mapper, any authenticated caller may use every tool. A caller with no valid
-//! token gets the public tools only.
+//! token gets the public tools only, though with `--inbound-anonymous-discovery`
+//! it lists every tool.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -80,6 +81,9 @@ pub struct Authorizer {
     rules: Vec<RoleRule>,
     /// Tools anyone may use, with or without a token: the `*:` role mappings.
     public_tools: Vec<Regex>,
+    /// Whether a caller without a valid token lists every tool, from
+    /// `--inbound-anonymous-discovery`. It still calls the public ones alone.
+    anonymous_discovery: bool,
     /// Names of the claims to copy into the per-call tracing log, from
     /// `--trace-claim`. Empty disables claim tracing.
     trace_claims: Vec<String>,
@@ -118,6 +122,7 @@ impl Authorizer {
             subject_claim: cli.upstream_oauth_subject_claim.clone(),
             rules,
             public_tools: public.into_iter().map(|rule| rule.pattern).collect(),
+            anonymous_discovery: inbound.inbound_anonymous_discovery,
             trace_claims: inbound.trace_claims.clone(),
         })))
     }
@@ -190,6 +195,17 @@ impl Authorizer {
 
     pub fn has_public_tools(&self) -> bool {
         !self.public_tools.is_empty()
+    }
+
+    /// Whether a caller without a valid token lists every tool.
+    pub fn anonymous_discovery(&self) -> bool {
+        self.anonymous_discovery
+    }
+
+    /// Whether a request without a token has anything to do here: a public tool
+    /// to call, or the catalogue to discover.
+    pub fn admits_anonymous(&self) -> bool {
+        self.has_public_tools() || self.anonymous_discovery
     }
 }
 
@@ -380,6 +396,7 @@ pub(crate) mod tests {
             clock_skew: DEFAULT_CLOCK_SKEW,
             rules: parse_rules(&["admin:.*".into(), "reader:^get".into()]).expect("valid mappings"),
             public_tools: vec![],
+            anonymous_discovery: false,
             trace_claims: vec![],
         };
 
@@ -465,6 +482,7 @@ pub(crate) mod tests {
             clock_skew: DEFAULT_CLOCK_SKEW,
             rules: parse_rules(&["admin:.*".into()]).expect("valid mapping"),
             public_tools: vec![],
+            anonymous_discovery: false,
             trace_claims: vec!["sub".into(), "email".into()],
         }
     }
@@ -478,6 +496,24 @@ pub(crate) mod tests {
                 .collect(),
             ..test_authorizer()
         }
+    }
+
+    /// [`test_authorizer`] with `--inbound-anonymous-discovery` on.
+    pub(crate) fn test_authorizer_with_anonymous_discovery() -> Authorizer {
+        Authorizer {
+            anonymous_discovery: true,
+            ..test_authorizer()
+        }
+    }
+
+    #[test]
+    fn anonymous_discovery_or_public_tools_admit_an_anonymous_caller() {
+        assert!(!test_authorizer().admits_anonymous());
+        assert!(test_authorizer_with_public_tools(&["^get_public"]).admits_anonymous());
+        let discovery = test_authorizer_with_anonymous_discovery();
+        assert!(discovery.admits_anonymous());
+        // Discovery lists the tools, it does not make them public.
+        assert!(!discovery.is_public("delete_pet"));
     }
 
     #[test]
