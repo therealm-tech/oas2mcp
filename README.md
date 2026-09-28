@@ -146,8 +146,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--upstream-oauth-assertion-lifetime` | `UPSTREAM_OAUTH_ASSERTION_LIFETIME` | `60s` | Upstream client assertion validity window. |
 | `--upstream-oauth-scope` | `UPSTREAM_OAUTH_SCOPES` | —          | OAuth2 scope requested for the upstream token. Repeatable; newline-separated via the env var. |
 | `--upstream-oauth-audience` | `UPSTREAM_OAUTH_AUDIENCE` | —      | OAuth2 `audience` parameter for the upstream token (e.g. Auth0). |
-| `--upstream-oauth-grant` | `UPSTREAM_OAUTH_GRANT` | `client-credentials` | `client-credentials`, or `jwt-bearer` (RFC 7523 §2.1) to obtain the token on behalf of a subject. |
-| `--upstream-oauth-assertion` | `UPSTREAM_OAUTH_ASSERTION` | `self-signed` | Who signs the `jwt-bearer` assertion: `self-signed` (by oas2mcp) or `caller` (relay the caller's own JWT). |
+| `--upstream-oauth-grant` | `UPSTREAM_OAUTH_GRANT` | `client-credentials` | `client-credentials`; `jwt-bearer` (RFC 7523 §2.1) to obtain the token on behalf of a subject with an assertion oas2mcp signs; or `jwt-bearer-relay` to relay the caller's own JWT as that assertion. |
 | `--upstream-oauth-issuer` | `UPSTREAM_OAUTH_ISSUER` | client id | `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. |
 | `--upstream-oauth-subject` | `UPSTREAM_OAUTH_SUBJECT` | —      | Fixed `sub` for the assertion — a service account. Every caller shares one token. Mutually exclusive with the claim below. |
 | `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs a JWKS (`--oauth-jwks-url`/`--oauth-jwks-file`) and `streamable-http`. |
@@ -417,19 +416,19 @@ delegation and a security hole:
 | One shared service identity | `--upstream-oauth-grant client-credentials` (the default) |
 | A named service account | `--upstream-oauth-grant jwt-bearer --upstream-oauth-subject svc@example.com` |
 | Per-caller delegation | `--upstream-oauth-grant jwt-bearer` (subject from the caller's claim) |
-| Relay the caller's own token | `--upstream-oauth-grant jwt-bearer --upstream-oauth-assertion caller` |
+| Relay the caller's own token | `--upstream-oauth-grant jwt-bearer-relay` |
 
-A `self-signed` assertion needs `--upstream-oauth-private-key`: a shared secret
+`jwt-bearer` needs `--upstream-oauth-private-key` to sign its assertion: a shared secret
 cannot sign one, and oas2mcp says so at startup rather than failing every call.
 The same key signs both the client assertion (§2.2) and the grant assertion
 (§2.1) — it is loaded once.
 
-**The `self-signed` mode is a powerful credential.** The provider must be
+**The `jwt-bearer` key is a powerful credential.** The provider must be
 configured to trust oas2mcp to assert those subjects, which makes that key, in
 effect, "speak as anyone". Keep the provider's trust configuration as narrow as
 it goes, scope the upstream token to the minimum, and treat the key accordingly.
 
-The `caller` mode signs nothing and needs no key: the caller's verified JWT is
+`jwt-bearer-relay` signs nothing and needs no key: the caller's verified JWT is
 relayed as the assertion, so the provider trusts *their* issuer rather than us.
 It is the cleanest option when it works, but it requires the caller's token to be
 addressed (`aud`) to the authorization server, which most identity providers do

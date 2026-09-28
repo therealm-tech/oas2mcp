@@ -27,7 +27,7 @@ use std::time::Duration;
 use anyhow::{Context as _, bail};
 use url::Url;
 
-use crate::cli::{AssertionSource, Cli, SigningAlg, UpstreamGrant};
+use crate::cli::{Cli, SigningAlg, UpstreamGrant};
 
 pub use assertion::AssertionConfig;
 pub use key::SigningKey;
@@ -138,7 +138,8 @@ struct GrantFlags<'a> {
 
 /// The flags selecting the RFC 7523 §2.1 grant's shape.
 struct JwtBearerFlags<'a> {
-    assertion: AssertionSource,
+    /// Relay the caller's JWT as the assertion rather than sign one.
+    relay: bool,
     issuer: Option<&'a String>,
     subject: Option<&'a String>,
 }
@@ -175,14 +176,13 @@ fn upstream_flags(cli: &Cli) -> Option<GrantFlags<'_>> {
         assertion_lifetime: cli.upstream_oauth_assertion_lifetime,
         scopes: &cli.upstream_oauth_scopes,
         audience: cli.upstream_oauth_audience.as_ref(),
-        jwt_bearer: match cli.upstream_oauth_grant {
-            UpstreamGrant::ClientCredentials => None,
-            UpstreamGrant::JwtBearer => Some(JwtBearerFlags {
-                assertion: cli.upstream_oauth_assertion,
+        jwt_bearer: (cli.upstream_oauth_grant != UpstreamGrant::ClientCredentials).then(|| {
+            JwtBearerFlags {
+                relay: cli.upstream_oauth_grant == UpstreamGrant::JwtBearerRelay,
                 issuer: cli.upstream_oauth_issuer.as_ref(),
                 subject: cli.upstream_oauth_subject.as_ref(),
-            }),
-        },
+            }
+        }),
     })
 }
 
@@ -264,17 +264,17 @@ impl TokenConfig {
 
         let grant = match flags.jwt_bearer {
             None => Grant::ClientCredentials,
-            Some(jwt_bearer) => Grant::JwtBearer(match jwt_bearer.assertion {
-                AssertionSource::Caller => {
+            Some(jwt_bearer) => Grant::JwtBearer(match jwt_bearer.relay {
+                true => {
                     if jwt_bearer.subject.is_some() {
                         bail!(
-                            "{prefix}-subject has no meaning with {prefix}-assertion caller: \
+                            "{prefix}-subject has no meaning with {prefix}-grant jwt-bearer-relay: \
                              the relayed token already names its own subject"
                         );
                     }
                     GrantAssertion::Caller
                 }
-                AssertionSource::SelfSigned => {
+                false => {
                     // A shared secret cannot sign anything. Rather than accept a
                     // configuration that could never mint an assertion, say so at
                     // startup.
@@ -282,7 +282,7 @@ impl TokenConfig {
                         bail!(
                             "{prefix}-grant jwt-bearer needs {prefix}-private-key to sign the \
                              assertion; a client secret cannot sign one. Use \
-                             {prefix}-assertion caller to relay the caller's token instead."
+                             {prefix}-grant jwt-bearer-relay to relay the caller's token instead."
                         )
                     };
                     GrantAssertion::SelfSigned {
@@ -482,7 +482,7 @@ mod tests {
         assert!(message.contains("cannot sign one"), "{message}");
         // And it points at the way out.
         assert!(
-            message.contains("--upstream-oauth-assertion caller"),
+            message.contains("--upstream-oauth-grant jwt-bearer-relay"),
             "{message}"
         );
     }
@@ -497,9 +497,7 @@ mod tests {
             "--upstream-oauth-client-secret",
             "secret",
             "--upstream-oauth-grant",
-            "jwt-bearer",
-            "--upstream-oauth-assertion",
-            "caller",
+            "jwt-bearer-relay",
         ]);
         let config = TokenConfig::for_upstream(&cli)
             .expect("relaying the caller's token needs nothing signed")
@@ -578,9 +576,7 @@ mod tests {
             "--upstream-oauth-client-secret",
             "secret",
             "--upstream-oauth-grant",
-            "jwt-bearer",
-            "--upstream-oauth-assertion",
-            "caller",
+            "jwt-bearer-relay",
             "--upstream-oauth-subject",
             "service-acct",
         ]);
