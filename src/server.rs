@@ -12,7 +12,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData, ServerHandler};
@@ -266,14 +266,14 @@ impl OpenApiServer {
 }
 
 impl ServerHandler for OpenApiServer {
-    fn get_info(&self) -> ServerInfo {
-        // `ServerInfo` is `#[non_exhaustive]`, so build from default and set fields.
+    fn get_info(&self) -> ServerConfig {
+        // `ServerConfig` is `#[non_exhaustive]`, so build from default and set fields.
         // Identify as this crate (not rmcp, which `from_build_env` would report).
         let mut server_info = Implementation::default();
         server_info.name = env!("CARGO_PKG_NAME").to_string();
         server_info.version = env!("CARGO_PKG_VERSION").to_string();
 
-        let mut info = ServerInfo::default();
+        let mut info = ServerConfig::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = server_info;
         info.instructions = Some(self.state.load().instructions.clone());
