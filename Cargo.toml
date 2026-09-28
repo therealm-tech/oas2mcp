@@ -65,6 +65,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = "0.10"
 url = "2"
 anyhow = "1"
+base64 = "0.23.1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -81,6 +82,5 @@ prometheus = { version = "0.14.0", default-features = false }
 uuid = { version = "1.24.0", features = ["v4"] }
 
 [dev-dependencies]
-base64 = "0.23.1"
 # `ServiceExt::oneshot`, to drive an axum router in a test without a socket.
 tower = { version = "0.5", features = ["util"] }
