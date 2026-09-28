@@ -248,14 +248,7 @@ impl Spec {
 
     /// Resolve `reference` and deserialize the target, following `$ref` chains.
     fn resolve_as<T: DeserializeOwned>(&self, reference: &str) -> Option<T> {
-        let mut target = self.resolve_value(reference)?;
-        // A component may itself be a bare `$ref` to another component.
-        for _ in 0..MAX_REF_HOPS {
-            let Some(next) = target.get("$ref").and_then(Value::as_str) else {
-                break;
-            };
-            target = self.resolve_value(next)?;
-        }
+        let target = self.resolve_chain(reference)?;
         match T::deserialize(target) {
             Ok(item) => Some(item),
             Err(err) => {
@@ -263,6 +256,24 @@ impl Spec {
                 None
             }
         }
+    }
+
+    /// Resolve `reference`, following the chain while the target is itself a
+    /// bare `$ref` to another component.
+    pub fn resolve_chain(&self, reference: &str) -> Option<&Value> {
+        let mut target = self.resolve_value(reference)?;
+        for _ in 0..MAX_REF_HOPS {
+            let Some(next) = target.get("$ref").and_then(Value::as_str) else {
+                break;
+            };
+            target = self.resolve_value(next)?;
+        }
+        Some(target)
+    }
+
+    /// The whole document, as decoded.
+    pub fn raw(&self) -> &Value {
+        &self.raw
     }
 
     /// Look a local `$ref` up as a JSON pointer into the document. External

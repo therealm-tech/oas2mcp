@@ -144,6 +144,15 @@ pub struct Cli {
     #[arg(global = true, long, env = "RELOAD_EVERY", value_parser = humantime::parse_duration)]
     pub reload_every: Option<Duration>,
 
+    /// Expose the OpenAPI document as the MCP resource `openapi://document`
+    /// (`application/json`), so a client can read the API contract. Each
+    /// caller reads a copy cut down to the operations it can list — those the
+    /// filters keep and its roles grant — with the components they reference.
+    /// The rest (`info`, `servers`, security schemes in use, the shared schemas)
+    /// is shown as written, so leave it off when those must stay private.
+    #[arg(global = true, long = "openapi-resource", env = "OPENAPI_RESOURCE")]
+    pub openapi_resource: bool,
+
     /// Which credentials fetch the document from `--openapi-url`. `own` (the
     /// default) uses `--openapi-header` and `--openapi-oauth-*`. `upstream`
     /// reuses those of the upstream API calls, `--header` and the

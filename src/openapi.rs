@@ -1,5 +1,6 @@
 //! Loading and parsing of the OpenAPI document.
 
+pub mod prune;
 pub mod spec;
 
 use anyhow::{Context as _, bail};

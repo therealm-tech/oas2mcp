@@ -137,6 +137,7 @@ document.
 | `--openapi-header`| `OPENAPI_HEADERS`| —                | `Name: Value` header sent when fetching `--openapi-url` (e.g. for a private document). Repeatable. |
 | `--openapi-auth`  | `OPENAPI_AUTH`   | `own`            | Credentials for the document fetch: `own` (`--openapi-header`, `--openapi-oauth-*`) or `upstream` (`--header` and the `--upstream-oauth-*` token). |
 | `--reload-every`  | `RELOAD_EVERY`   | —                | Re-fetch `--openapi-url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Off by default; ignored for a file source. |
+| `--openapi-resource` | `OPENAPI_RESOURCE` | `false`       | Expose the OpenAPI document as the MCP resource `openapi://document`, cut down per caller to the operations it can list — see [Reading the API contract](#reading-the-api-contract). |
 | `--openapi-oauth-token-url` | `OPENAPI_OAUTH_TOKEN_URL` | — | OAuth2 `client_credentials` token endpoint. Set → the document fetch uses an auto-refreshed bearer token. Requires `--openapi-oauth-client-id` plus one of the two credentials below. |
 | `--openapi-oauth-client-id` | `OPENAPI_OAUTH_CLIENT_ID` | — | OAuth2 client ID for the document-fetch token.                     |
 | `--openapi-oauth-client-secret` | `OPENAPI_OAUTH_CLIENT_SECRET` | — | OAuth2 client secret, sent over HTTP Basic. Prefer the env var so it stays out of the process list. Mutually exclusive with `--openapi-oauth-private-key`. |
@@ -822,6 +823,38 @@ A renamed tool also carries its origin in its description (`OpenAPI operationId:
 postApiV4Projects…`), so a trace can be mapped back to the document. If two
 operations still end up with the same name, both are kept and the later one gets
 a `_2` suffix, with a warning naming both.
+
+### Reading the API contract
+
+`--openapi-resource` exposes the OpenAPI document as an MCP resource, so a
+client can read the contract behind the tools instead of guessing it from the
+input schemas: the server advertises the `resources` capability, and
+`resources/list` returns one resource, `openapi://document`, which
+`resources/read` serves as `application/json` text. It follows every reload.
+
+```bash
+oas2mcp http --openapi-url https://api.example.com/openapi.json --openapi-resource
+```
+
+The whole document would describe every operation, including those
+`--include-regex`/`--exclude-regex`/`--tag`/`--exclude-tag` drop and those a
+caller's roles hide, so each caller reads a copy cut down to the operations it
+lists in `tools/list`:
+
+- `paths` keeps those operations alone; a path left with none is dropped, and
+  `webhooks` always are.
+- `components` keeps what the remaining document references, transitively:
+  `$ref`s, discriminator mappings, and the security schemes a `security`
+  requirement names. `tags` keeps the ones a remaining operation carries.
+- Everything else — `info`, `servers`, the top-level `security`,
+  `externalDocs`, extensions — is served as written.
+
+What still shows is therefore the document's metadata and every schema a
+visible operation shares with a hidden one, descriptions included. Leave the
+flag off when those must stay private. An anonymous caller reads the document
+cut down to the public tools (all of them with `--inbound-anonymous-discovery`),
+and a URI other than `openapi://document` is answered with a resource-not-found
+error (`-32002`, or `-32602` from protocol `2026-07-28` on).
 
 ### Using it from an MCP client
 

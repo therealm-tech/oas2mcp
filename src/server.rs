@@ -14,8 +14,10 @@ use base64::engine::general_purpose::STANDARD;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Icon, Implementation,
-    ListToolsResult, PaginatedRequestParams, ResourceContents, ServerCapabilities, ServerConfig,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Icon,
+    Implementation, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
+    ReadResourceRequestMethod, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+    Resource, ResourceContents, ResourcesCapability, ServerCapabilities, ServerConfig,
     SubscriptionFilter, Tool,
 };
 use rmcp::service::{NotificationContext, Peer, RequestContext, RoleServer, SubscriptionContext};
@@ -29,15 +31,20 @@ use crate::cli::Cli;
 use crate::filter::{FilterConfig, OperationFilter};
 use crate::oauth::{Delegation, TokenProvider};
 use crate::openapi::Spec;
+use crate::openapi::prune::prune;
 use crate::pagination;
 use crate::rename::{RenameConfig, ToolRenamer};
 use crate::telemetry::{Metrics, Outcome};
 use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
 
+/// URI of the OpenAPI document resource (`--openapi-resource`).
+const OPENAPI_URI: &str = "openapi://document";
+
 /// The part of the server that an OpenAPI reload replaces: the resolved tools,
 /// their name index, the upstream base URL (which may be derived from the
-/// document's `servers`), the API title and the instructions string. Swapped
-/// atomically as a whole so a reload never exposes a half-updated state.
+/// document's `servers`), the API title, the instructions string and, with
+/// `--openapi-resource`, the document itself. Swapped atomically as a whole so
+/// a reload never exposes a half-updated state.
 struct Snapshot {
     tools: Vec<ToolSpec>,
     index: HashMap<String, usize>,
@@ -47,6 +54,8 @@ struct Snapshot {
     /// Identifies the tool set, so a `tools/list` cursor cut from an earlier
     /// snapshot is recognised as stale.
     fingerprint: u64,
+    /// The document served as a resource; `None` when the resource is off.
+    document: Option<Spec>,
 }
 
 /// MCP server backed by an OpenAPI document. Cheap to clone (everything shared
@@ -368,14 +377,16 @@ impl ServerHandler for OpenApiServer {
         server_info.title.clone_from(&state.title);
 
         let mut info = ServerConfig::default();
-        info.capabilities = if self.list_changed.is_some() {
-            ServerCapabilities::builder()
-                .enable_tools()
-                .enable_tool_list_changed()
-                .build()
-        } else {
-            ServerCapabilities::builder().enable_tools().build()
-        };
+        let mut capabilities = ServerCapabilities::builder().enable_tools().build();
+        if self.list_changed.is_some()
+            && let Some(tools) = capabilities.tools.as_mut()
+        {
+            tools.list_changed = Some(true);
+        }
+        if state.document.is_some() {
+            capabilities.resources = Some(ResourcesCapability::default());
+        }
+        info.capabilities = capabilities;
         info.server_info = server_info;
         info.instructions = Some(state.instructions.clone());
         info
@@ -432,6 +443,26 @@ impl ServerHandler for OpenApiServer {
         let access = self.caller(&context).access;
         let cursor = request.as_ref().and_then(|params| params.cursor.as_deref());
         self.list_page(&access, cursor)
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        Ok(self.openapi_resources())
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        if self.state.load().document.is_none() {
+            return Err(ErrorData::method_not_found::<ReadResourceRequestMethod>());
+        }
+        let access = self.caller(&context).access;
+        self.read_openapi(&request.uri, &access).map(Into::into)
     }
 
     async fn call_tool(
@@ -730,6 +761,72 @@ impl OpenApiServer {
         discovers || self.is_allowed(access, operation)
     }
 
+    /// The resources on offer: the OpenAPI document, when it is exposed.
+    fn openapi_resources(&self) -> ListResourcesResult {
+        let state = self.state.load();
+        let resources = state
+            .document
+            .as_ref()
+            .map(|spec| {
+                Resource::new(OPENAPI_URI, "openapi")
+                    .with_title(format!("{} OpenAPI document", spec.info().title))
+                    .with_description(
+                        "The OpenAPI document of the upstream API, limited to the operations \
+                         you can list as tools.",
+                    )
+                    .with_mime_type("application/json")
+            })
+            .into_iter()
+            .collect();
+        ListResourcesResult {
+            resources,
+            next_cursor: None,
+            ..Default::default()
+        }
+    }
+
+    /// Read the resource at `uri` as a caller with `access`: the OpenAPI
+    /// document cut down to the operations that caller lists as tools. The
+    /// resource must be exposed.
+    fn read_openapi(&self, uri: &str, access: &Access) -> Result<ReadResourceResult, ErrorData> {
+        if uri != OPENAPI_URI {
+            return Err(ErrorData::resource_not_found(
+                format!("unknown resource `{uri}`"),
+                Some(serde_json::json!({ "uri": uri })),
+            ));
+        }
+        let state = self.state.load_full();
+        let Some(spec) = state.document.as_ref() else {
+            return Err(ErrorData::method_not_found::<ReadResourceRequestMethod>());
+        };
+        let listed: HashSet<(&str, String)> = state
+            .tools
+            .iter()
+            .filter(|tool| self.is_listed(access, &tool.operation))
+            .map(|tool| {
+                (
+                    tool.path_template.as_str(),
+                    tool.method.as_str().to_ascii_lowercase(),
+                )
+            })
+            .collect();
+        tracing::debug!(
+            operations = listed.len(),
+            "serving the OpenAPI document cut down to the caller's tools"
+        );
+        let document = prune(spec, |path, method| {
+            listed.contains(&(path, method.to_string()))
+        });
+        let text = serde_json::to_string(&document).map_err(|err| {
+            ErrorData::internal_error(format!("serialising the OpenAPI document: {err}"), None)
+        })?;
+        // The content depends on who asks: no cache may serve it to another caller.
+        Ok(ReadResourceResult::new(vec![
+            ResourceContents::text(text, OPENAPI_URI).with_mime_type("application/json"),
+        ])
+        .with_cache_scope(CacheScope::Private))
+    }
+
     /// Whether the tool advertised as `name` may be used without a token.
     pub fn is_public_tool(&self, name: &str) -> bool {
         let state = self.state.load();
@@ -874,6 +971,8 @@ fn build_snapshot(spec: &Spec, cli: &Cli) -> anyhow::Result<Snapshot> {
         .map(|(i, t)| (t.name.clone(), i))
         .collect();
 
+    let document = cli.openapi_resource.then(|| spec.clone());
+
     let instructions = format!(
         "MCP server proxying the \"{}\" API (version {}). \
          Each tool maps to one OpenAPI operation and is executed as an HTTP \
@@ -910,6 +1009,7 @@ fn build_snapshot(spec: &Spec, cli: &Cli) -> anyhow::Result<Snapshot> {
         title,
         instructions,
         fingerprint,
+        document,
     })
 }
 
@@ -1641,6 +1741,151 @@ paths:
         assert!(err.message.contains("stale"), "{}", err.message);
     }
 
+    const THREE_OPS: &str = r#"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a:
+    get: { operationId: getA, responses: { "200": { description: ok } } }
+    delete: { operationId: deleteA, responses: { "204": { description: gone } } }
+  /internal: { get: { operationId: getInternal, responses: { "200": { description: ok } } } }
+"#;
+
+    /// The operations of the document a caller with `access` reads.
+    fn document_operations(server: &OpenApiServer, access: &Access) -> Vec<String> {
+        let result = server
+            .read_openapi(OPENAPI_URI, access)
+            .expect("the document reads");
+        let [
+            ResourceContents::TextResourceContents {
+                text, mime_type, ..
+            },
+        ] = result.contents.as_slice()
+        else {
+            panic!("one text content expected, got {:?}", result.contents);
+        };
+        assert_eq!(mime_type.as_deref(), Some("application/json"));
+        let document: Value = serde_json::from_str(text).expect("the document is JSON");
+        let mut operations: Vec<String> = document["paths"]
+            .as_object()
+            .expect("paths is an object")
+            .values()
+            .flat_map(|item| item.as_object().expect("path item").values())
+            .filter_map(|operation| operation.get("operationId")?.as_str().map(String::from))
+            .collect();
+        operations.sort();
+        operations
+    }
+
+    fn resource_server(args: &[&str], authorizer: Option<Authorizer>) -> OpenApiServer {
+        let cli = Cli::try_parse_from(["oas2mcp"].into_iter().chain(args.iter().copied()))
+            .expect("CLI parses");
+        OpenApiServer::from_spec(
+            &spec_from(THREE_OPS),
+            &cli,
+            authorizer.map(Arc::new),
+            Metrics::disabled(),
+        )
+        .expect("server builds")
+    }
+
+    #[test]
+    fn the_openapi_resource_is_off_by_default() {
+        let server = resource_server(&[], None);
+
+        assert!(server.get_info().capabilities.resources.is_none());
+        assert!(server.openapi_resources().resources.is_empty());
+        let err = server
+            .read_openapi(OPENAPI_URI, &Access::Unrestricted)
+            .expect_err("nothing to read");
+        assert_eq!(err.code, rmcp::model::ErrorCode::METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn the_openapi_resource_is_listed_and_advertised_when_on() {
+        let server = resource_server(&["--openapi-resource"], None);
+
+        assert!(server.get_info().capabilities.resources.is_some());
+        let resources = server.openapi_resources().resources;
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].uri, OPENAPI_URI);
+        assert_eq!(resources[0].mime_type.as_deref(), Some("application/json"));
+    }
+
+    #[test]
+    fn the_document_leaves_out_what_the_filters_drop() {
+        let server = resource_server(&["--openapi-resource", "--exclude-regex", "Internal"], None);
+
+        assert_eq!(
+            document_operations(&server, &Access::Unrestricted),
+            ["deleteA", "getA"]
+        );
+    }
+
+    #[test]
+    fn each_caller_reads_the_operations_it_can_list() {
+        let authorizer = crate::auth::tests::test_authorizer_with_public_tools(&["^getA$"]);
+        let server = resource_server(&["--openapi-resource"], Some(authorizer));
+
+        assert_eq!(document_operations(&server, &Access::Anonymous), ["getA"]);
+        let admin = Access::Authenticated(HashSet::from(["admin".to_string()]));
+        assert_eq!(
+            document_operations(&server, &admin),
+            ["deleteA", "getA", "getInternal"]
+        );
+        let nobody = Access::Authenticated(HashSet::from(["nobody".to_string()]));
+        assert_eq!(document_operations(&server, &nobody), ["getA"]);
+    }
+
+    #[test]
+    fn anonymous_discovery_shows_every_operation_in_the_document() {
+        let authorizer = crate::auth::tests::test_authorizer_with_anonymous_discovery();
+        let server = resource_server(&["--openapi-resource"], Some(authorizer));
+
+        assert_eq!(
+            document_operations(&server, &Access::Anonymous),
+            ["deleteA", "getA", "getInternal"]
+        );
+    }
+
+    #[test]
+    fn the_document_follows_a_reload() {
+        let cli = Cli::try_parse_from(["oas2mcp", "--openapi-resource"]).expect("CLI parses");
+        let server = OpenApiServer::from_spec(&spec_from(ONE_GET), &cli, None, Metrics::disabled())
+            .expect("server builds");
+        assert_eq!(
+            document_operations(&server, &Access::Unrestricted),
+            ["getA"]
+        );
+
+        server
+            .reload(&spec_from(THREE_OPS), &cli)
+            .expect("reload succeeds");
+        assert_eq!(
+            document_operations(&server, &Access::Unrestricted),
+            ["deleteA", "getA", "getInternal"]
+        );
+    }
+
+    #[test]
+    fn an_unknown_resource_uri_is_not_found() {
+        let server = resource_server(&["--openapi-resource"], None);
+
+        let err = server
+            .read_openapi("openapi://other", &Access::Unrestricted)
+            .expect_err("no such resource");
+        assert_eq!(err.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
+        assert_eq!(
+            err.data,
+            Some(serde_json::json!({ "uri": "openapi://other" }))
+        );
+    }
+
+    /// Build the request one tool call would send, and hand back its headers.
+    ///
+    /// Goes through the real `build_request`, so the test sees exactly what
+    /// the upstream would receive.
     /// Build the request one tool call would send, and hand back its headers.
     ///
     /// Goes through the real `build_request`, so the test sees exactly what

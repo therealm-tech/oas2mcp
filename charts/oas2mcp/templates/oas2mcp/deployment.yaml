@@ -83,6 +83,10 @@ spec:
             - name: STREAM_RESPONSES
               value: "true"
             {{- end }}
+            {{- if .Values.oas2mcp.openapi.resource }}
+            - name: OPENAPI_RESOURCE
+              value: "true"
+            {{- end }}
             {{- if .Values.oas2mcp.openapi.inline }}
             - name: OPENAPI_FILE
               value: /etc/oas2mcp/openapi.yaml
