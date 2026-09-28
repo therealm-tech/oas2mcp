@@ -278,7 +278,8 @@ pub struct Cli {
     /// API (e.g. `Authorization`). Repeatable; use it to pass the MCP client's
     /// own credentials through to the API. Only the `streamable-http` transport
     /// exposes the client's HTTP headers; ignored for `stdio` and `sse`. A
-    /// static `--header` of the same name takes precedence. When set via the
+    /// header also set with `--header`, or `Authorization` alongside
+    /// `--upstream-oauth-token-url`, is refused at startup. When set via the
     /// environment variable, separate names with newlines.
     #[arg(
         long = "forward-header",

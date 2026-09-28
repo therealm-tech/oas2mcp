@@ -107,6 +107,7 @@ impl OpenApiServer {
         // pool and TLS trust (including `--ca-cert`).
         let upstream_token = TokenProvider::for_upstream(cli, client.clone())
             .context("configuring the upstream OAuth token provider")?;
+        check_header_sources(&extra_headers, &forward_headers, upstream_token.is_some())?;
 
         Ok(Self {
             state: Arc::new(ArcSwap::from_pointee(snapshot)),
@@ -225,27 +226,13 @@ impl OpenApiServer {
             }
         }
 
-        // `Authorization` can come from three places, so pick exactly one — the
-        // upstream must never receive two. A static `--header` is the operator's
-        // explicit override and wins; then the OAuth token; then a header
-        // forwarded from the caller.
-        let oauth_bearer = bearer.filter(|_| !self.extra_headers.contains_key(AUTHORIZATION));
-
-        // Forwarded incoming-request headers, unless a static header of the
-        // same name is configured (static headers win).
-        for name in forwarded.keys() {
-            if self.extra_headers.contains_key(name) {
-                continue;
-            }
-            if oauth_bearer.is_some() && name == AUTHORIZATION {
-                continue;
-            }
-            for value in forwarded.get_all(name) {
-                request = request.header(name.clone(), value.clone());
-            }
+        // Each header has a single source: `check_header_sources` refuses to
+        // start otherwise, so none of these can overwrite another.
+        for (name, value) in forwarded {
+            request = request.header(name.clone(), value.clone());
         }
 
-        if let Some(token) = oauth_bearer {
+        if let Some(token) = bearer {
             let value = HeaderValue::from_str(&format!("Bearer {token}"))
                 .context("building the Authorization header from the upstream OAuth token")?;
             request = request.header(AUTHORIZATION, value);
@@ -527,6 +514,38 @@ fn unix_to_instant(exp: u64) -> Option<Instant> {
         .map(|remaining| Instant::now() + std::time::Duration::from_secs(remaining))
 }
 
+/// Refuse a configuration where a header has two sources, since one of them
+/// could never take effect: a static `--header` would always mask the same
+/// header forwarded from the caller, and the upstream OAuth token owns
+/// `Authorization` outright.
+fn check_header_sources(
+    extra: &HeaderMap,
+    forwarded: &[HeaderName],
+    upstream_oauth: bool,
+) -> anyhow::Result<()> {
+    if let Some(name) = forwarded.iter().find(|name| extra.contains_key(*name)) {
+        bail!(
+            "`{name}` is both set with --header and forwarded with --forward-header; \
+             the static value would always win, so keep only one"
+        );
+    }
+    if upstream_oauth {
+        if extra.contains_key(AUTHORIZATION) {
+            bail!(
+                "--header sets `Authorization`, which the --upstream-oauth-* token also sets; \
+                 keep only one"
+            );
+        }
+        if forwarded.contains(&AUTHORIZATION) {
+            bail!(
+                "--forward-header Authorization would always be replaced by the \
+                 --upstream-oauth-* token; keep only one"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Pick the headers named in `allow` out of `src`, preserving multiple values
 /// for the same name.
 fn filter_forwarded(allow: &[HeaderName], src: &HeaderMap) -> HeaderMap {
@@ -769,34 +788,7 @@ paths:
     }
 
     #[test]
-    fn a_static_header_outranks_the_oauth_token() {
-        // `--header` is the operator's explicit override, so it wins — and the
-        // token must not be added alongside it.
-        assert_eq!(
-            authorization_of(
-                &["--header", "Authorization: Basic static"],
-                &[],
-                Some("tok-1")
-            ),
-            vec!["Basic static".to_string()]
-        );
-    }
-
-    #[test]
-    fn the_oauth_token_outranks_a_forwarded_authorization() {
-        let auth = authorization_of(
-            &["--forward-header", "Authorization"],
-            &[("authorization", "Bearer from-caller")],
-            Some("tok-1"),
-        );
-        // Exactly one value: two `Authorization` headers is precisely the bug
-        // this precedence exists to prevent.
-        assert_eq!(auth, vec!["Bearer tok-1".to_string()]);
-    }
-
-    #[test]
-    fn a_forwarded_authorization_still_applies_without_a_token() {
-        // No upstream OAuth configured: the previous behaviour is untouched.
+    fn a_forwarded_authorization_applies_without_a_token() {
         assert_eq!(
             authorization_of(
                 &["--forward-header", "Authorization"],
@@ -808,22 +800,15 @@ paths:
     }
 
     #[test]
-    fn other_forwarded_headers_are_untouched_by_the_token() {
-        let cli = Cli::try_parse_from([
-            "oas2mcp",
-            "--forward-header",
-            "X-Tenant",
-            "--forward-header",
-            "Authorization",
-        ])
-        .expect("CLI parses");
+    fn forwarded_headers_travel_beside_the_token() {
+        let cli =
+            Cli::try_parse_from(["oas2mcp", "--forward-header", "X-Tenant"]).expect("CLI parses");
         let spec = spec_from(ONE_GET);
         let server = OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled())
             .expect("server builds");
 
         let mut incoming = HeaderMap::new();
         incoming.insert("x-tenant", HeaderValue::from_static("acme"));
-        incoming.insert("authorization", HeaderValue::from_static("Bearer caller"));
 
         let state = server.state.load();
         let request = server
@@ -838,8 +823,6 @@ paths:
             .build()
             .expect("the request is well-formed");
 
-        // Only `Authorization` is displaced by the OAuth token; the rest of the
-        // forwarding allow-list keeps working.
         assert_eq!(
             request
                 .headers()
@@ -853,6 +836,41 @@ paths:
                 .get(AUTHORIZATION)
                 .map(|v| v.to_str().unwrap()),
             Some("Bearer tok-1")
+        );
+    }
+
+    #[test]
+    fn a_header_with_two_sources_is_refused() {
+        let headers = |raw: &[&str]| {
+            parse_headers(&raw.iter().map(|h| h.to_string()).collect::<Vec<_>>())
+                .expect("valid headers")
+        };
+        let names = |raw: &[&str]| {
+            parse_header_names(&raw.iter().map(|h| h.to_string()).collect::<Vec<_>>())
+                .expect("valid names")
+        };
+
+        // Static and forwarded under one name: the forwarded value never lands.
+        assert!(
+            check_header_sources(&headers(&["X-Tenant: acme"]), &names(&["x-tenant"]), false)
+                .is_err()
+        );
+        // The upstream token owns `Authorization`, from either other source.
+        assert!(check_header_sources(&headers(&["Authorization: Basic x"]), &[], true).is_err());
+        assert!(check_header_sources(&HeaderMap::new(), &names(&["Authorization"]), true).is_err());
+
+        // One source per header is fine, whichever it is.
+        assert!(
+            check_header_sources(
+                &headers(&["Authorization: Basic x"]),
+                &names(&["X-Tenant"]),
+                false
+            )
+            .is_ok()
+        );
+        assert!(check_header_sources(&HeaderMap::new(), &names(&["Authorization"]), false).is_ok());
+        assert!(
+            check_header_sources(&headers(&["X-Api-Key: k"]), &names(&["X-Tenant"]), true).is_ok()
         );
     }
 
