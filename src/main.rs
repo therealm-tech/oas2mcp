@@ -199,8 +199,6 @@ async fn reload_loop(
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser as _;
-
     use super::*;
 
     fn cli_from(args: &[&str]) -> Cli {
