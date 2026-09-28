@@ -954,13 +954,17 @@ A result carries the upstream response twice, in two fields with two audiences:
 | Field               | Content                                       | Read it if you are |
 | ------------------- | --------------------------------------------- | ------------------ |
 | `content`           | One text block, `HTTP <status>\n\n<body>`      | a human or a model |
-| `structuredContent` | The response body parsed as JSON, verbatim    | a program          |
+| `structuredContent` | The response body parsed as JSON              | a program          |
 | `isError`           | `true` when the upstream status is 4xx or 5xx | either             |
 
 **A machine should read `structuredContent`.** It is the parsed body and nothing
 else — no status line to strip, no string to split. It is absent when the body
 is not JSON (an empty `204`, a `text/plain` payload, a gateway's HTML error
-page), so treat it as optional and fall back to the text block.
+page), so treat it as optional and fall back to the text block. It is always a
+JSON object: an object body is passed through verbatim, while an array or a
+scalar body is wrapped as `{"result": <body>}`, because MCP protocol versions up
+to `2025-11-25` type `structuredContent` as an object. The shape is the same
+whichever version the client negotiates.
 
 The text block always exists and always keeps its status prefix: that is what
 lets a model tell a `404` from a `200`, where `isError` only says yes or no. A

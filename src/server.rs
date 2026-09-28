@@ -692,6 +692,9 @@ fn value_to_string(value: &Value) -> String {
 /// `structuredContent`, so a client reads the data without splitting the
 /// string. A body that is not JSON — an empty 204, `text/plain`, a gateway's
 /// error page — leaves `structuredContent` unset.
+///
+/// Protocol versions up to 2025-11-25 type `structuredContent` as a JSON
+/// object, so an array or scalar body is wrapped as `{"result": <body>}`.
 fn shape_response(status: reqwest::StatusCode, body: &str) -> CallToolResult {
     let content = vec![ContentBlock::text(format!("HTTP {status}\n\n{body}"))];
     let mut result = if status.is_client_error() || status.is_server_error() {
@@ -700,7 +703,12 @@ fn shape_response(status: reqwest::StatusCode, body: &str) -> CallToolResult {
         CallToolResult::success(content)
     };
     // `CallToolResult` is `#[non_exhaustive]`, hence the build-then-assign.
-    result.structured_content = serde_json::from_str::<Value>(body).ok();
+    result.structured_content = serde_json::from_str::<Value>(body)
+        .ok()
+        .map(|value| match value {
+            Value::Object(_) => value,
+            other => serde_json::json!({ "result": other }),
+        });
     result
 }
 
@@ -1075,13 +1083,21 @@ paths:
     }
 
     #[test]
-    fn a_json_scalar_body_is_still_structured_content() {
-        // `structuredContent` is any JSON value, not only an object — a bare
-        // array or number from an upstream is worth attaching too.
-        let result = shape_response(reqwest::StatusCode::OK, "[1,2,3]");
-        assert_eq!(
-            result.structured_content,
-            Some(serde_json::json!([1, 2, 3]))
-        );
+    fn a_non_object_json_body_is_wrapped_into_an_object() {
+        for (body, value) in [
+            ("[1,2,3]", serde_json::json!([1, 2, 3])),
+            ("42", serde_json::json!(42)),
+            (r#""ok""#, serde_json::json!("ok")),
+            ("true", serde_json::json!(true)),
+            ("null", Value::Null),
+        ] {
+            let result = shape_response(reqwest::StatusCode::OK, body);
+            assert_eq!(
+                result.structured_content,
+                Some(serde_json::json!({ "result": value })),
+                "body: {body:?}"
+            );
+            assert_eq!(text_of(&result), format!("HTTP 200 OK\n\n{body}"));
+        }
     }
 }
