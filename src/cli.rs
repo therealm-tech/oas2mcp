@@ -601,6 +601,16 @@ pub struct Cli {
     #[arg(global = true, long = "tools-page-size", env = "TOOLS_PAGE_SIZE")]
     pub tools_page_size: Option<NonZeroUsize>,
 
+    /// Declare an MCP `outputSchema` on each tool whose operation documents a
+    /// JSON object body, the same on every success (`2xx`) response.
+    ///
+    /// Off by default: a declared schema is a contract. `structuredContent`
+    /// must then conform to it, and clients may validate it, so an upstream
+    /// that strays from its own OpenAPI document makes the call fail on the
+    /// client side instead of returning what the upstream sent.
+    #[arg(global = true, long = "tool-output-schema", env = "TOOL_OUTPUT_SCHEMA")]
+    pub tool_output_schema: bool,
+
     /// Path to a PEM file holding one or more extra CA certificates to trust
     /// when verifying TLS for every outbound connection (upstream API, OpenAPI
     /// document fetch, OAuth token endpoint, JWKS). Repeatable; a single file

@@ -183,6 +183,7 @@ document.
 | `--max-name-len`  | `MAX_NAME_LEN`   | `64`             | Maximum tool name length. A longer name is truncated and given a short hash of the full name, and the rewrite is logged. |
 | `--auto-tool-annotations` | `AUTO_TOOL_ANNOTATIONS` | `true` | Advertise each tool with the MCP behaviour hints its HTTP method implies — see [Tool annotations](#tool-annotations). Turn off with `--auto-tool-annotations=false`. |
 | `--tools-page-size` | `TOOLS_PAGE_SIZE` | —            | Maximum number of tools per `tools/list` reply, walked with the MCP cursor. Unset → every tool in one reply, since many clients read only the first page. A cursor issued before a reload that changed the tool set is refused (`-32602`); the client lists again from the start. |
+| `--tool-output-schema` | `TOOL_OUTPUT_SCHEMA` | `false`   | Declare an MCP `outputSchema` on each tool whose success response has a JSON object body. See [Output schemas](#output-schemas) for the trade-off. |
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Base OTLP endpoint to push tool-call metrics to over HTTP (e.g. `http://localhost:4318`); `/v1/metrics` is appended. Set → OTLP export on. |
 | `--metrics-addr`  | `METRICS_ADDR`   | —                | Address to serve a Prometheus `/metrics` endpoint on (e.g. `0.0.0.0:9090`). Set → scrape endpoint on. Independent of `--otlp-endpoint`. |
 | `--otel-service-name` | `OTEL_SERVICE_NAME` | `oas2mcp`   | `service.name` reported on exported metrics.                       |
@@ -1004,9 +1005,33 @@ lets a model tell a `404` from a `200`, where `isError` only says yes or no. A
 failing call still gets a `structuredContent` when the upstream error body is
 itself JSON.
 
-`structuredContent` is not yet described by a per-tool `outputSchema`, so it is
-informative rather than contractual — clients should not validate against a
-declared schema that isn't there.
+Without `--tool-output-schema`, no tool declares an `outputSchema`, and
+`structuredContent` is informative rather than contractual.
+
+### Output schemas
+
+With `--tool-output-schema`, a tool declares an `outputSchema` taken from its
+operation's success response, with local `$ref`s inlined as in the input
+schema. It is declared only when every success response the operation
+documents (each `2xx` code and the `2XX` range) carries the same
+`application/json` or `…+json` body schema, and that schema is `type: object` —
+the only root MCP accepts. An operation answering an array, a scalar, no body,
+or a `204` beside a `200`, declares none. `default` is not read: it
+conventionally describes errors.
+
+The schema is a contract, which is why it is off by default. MCP requires
+`structuredContent` to conform to the declared schema, and clients may validate
+it: an upstream that strays from its own OpenAPI document — an undocumented
+field under `additionalProperties: false`, a missing required one, a `null`
+where the document says `string` — then fails the call on the client side
+instead of returning what the upstream sent. The schema is advertised in the
+dialect the document is written in, so a 3.0 schema (`nullable`) read as JSON
+Schema 2020-12 can reject values the upstream considers valid. Turn it on for
+an upstream you trust to honour its document.
+
+A tool with an output schema returns an upstream error without
+`structuredContent`: the error body would not conform to the success schema. It
+stays in the text block.
 
 #### Binary responses
 
