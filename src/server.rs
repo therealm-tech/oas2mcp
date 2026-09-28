@@ -64,9 +64,7 @@ pub struct OpenApiServer {
 /// is enabled), the claims selected for tracing, and the identity a delegated
 /// upstream token is obtained for.
 struct Caller {
-    /// `None` when no authorizer is configured (no restriction); `Some` carries
-    /// the verified roles, empty when the token is missing or invalid.
-    roles: Option<HashSet<String>>,
+    access: Access,
     /// The `--trace-claim` claims present in the verified token, logged with the
     /// tool call. Empty unless claim tracing is configured and the token carried
     /// them.
@@ -74,6 +72,16 @@ struct Caller {
     /// The verified identity to delegate as, from a **successfully verified**
     /// token only. `None` denies delegation.
     identity: Option<Identity>,
+}
+
+/// Which tools a request may see and call.
+enum Access {
+    /// No authorizer is configured: every tool.
+    Unrestricted,
+    /// No valid token: the public tools only.
+    Anonymous,
+    /// A verified token carrying these roles.
+    Authenticated(HashSet<String>),
 }
 
 /// A verified caller identity, everything a delegated token request needs.
@@ -272,13 +280,13 @@ impl ServerHandler for OpenApiServer {
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        let roles = self.caller(&context).roles;
+        let access = self.caller(&context).access;
         let tools = self
             .state
             .load()
             .tools
             .iter()
-            .filter(|spec| self.is_allowed(&roles, &spec.name))
+            .filter(|spec| self.is_allowed(&access, &spec.name))
             .map(|spec| {
                 Tool::new(
                     spec.name.clone(),
@@ -314,7 +322,7 @@ impl ServerHandler for OpenApiServer {
         // not call it either. Reported as an unknown tool so the gate does not
         // leak which tools exist to an unauthorized caller.
         let caller = self.caller(&context);
-        if !self.is_allowed(&caller.roles, &spec.name) {
+        if !self.is_allowed(&caller.access, &spec.name) {
             tracing::warn!(tool = %spec.name, "denying tool call: caller is not authorized");
             return Err(ErrorData::invalid_params(
                 Cow::from(format!("unknown tool `{}`", request.name)),
@@ -418,19 +426,15 @@ impl ServerHandler for OpenApiServer {
 }
 
 impl OpenApiServer {
-    /// Resolve the caller's identity for this request: their JWT roles and
-    /// `sub`.
+    /// Resolve the caller's identity for this request: their access and `sub`.
     ///
-    /// `roles` is `None` when no authorizer is configured — meaning "no
-    /// restriction", every tool is allowed. It is `Some(roles)` when an
-    /// authorizer is configured; the set is empty when the request carries no
-    /// bearer token (e.g. `stdio`/`sse`, which expose no client headers) or the
-    /// token fails verification, which denies access to every tool. `sub` is set
-    /// only from a successfully verified token.
+    /// A request without a bearer token (always the case on `stdio`/`sse`, which
+    /// expose no client headers) or whose token fails verification is anonymous.
+    /// `sub` is set only from a successfully verified token.
     fn caller(&self, context: &RequestContext<RoleServer>) -> Caller {
         let Some(authorizer) = self.authorizer.as_ref() else {
             return Caller {
-                roles: None,
+                access: Access::Unrestricted,
                 traced_claims: Map::new(),
                 identity: None,
             };
@@ -442,7 +446,7 @@ impl OpenApiServer {
         match token {
             Some(token) => match authorizer.verify(token) {
                 Ok(claims) => Caller {
-                    roles: Some(claims.roles),
+                    access: Access::Authenticated(claims.roles),
                     traced_claims: claims.traced,
                     identity: claims.subject.map(|subject| Identity {
                         subject,
@@ -454,7 +458,7 @@ impl OpenApiServer {
                 Err(err) => {
                     tracing::warn!(error = %format!("{err:#}"), "rejecting request: JWT verification failed");
                     Caller {
-                        roles: Some(HashSet::new()),
+                        access: Access::Anonymous,
                         traced_claims: Map::new(),
                         identity: None,
                     }
@@ -465,11 +469,11 @@ impl OpenApiServer {
                     tracing::debug!("no bearer token: serving the public tools only");
                 } else {
                     tracing::warn!(
-                        "rejecting request: no bearer token on a role-restricted server"
+                        "no bearer token on a JWT-protected server: no tool is available"
                     );
                 }
                 Caller {
-                    roles: Some(HashSet::new()),
+                    access: Access::Anonymous,
                     traced_claims: Map::new(),
                     identity: None,
                 }
@@ -477,12 +481,12 @@ impl OpenApiServer {
         }
     }
 
-    /// Whether the tool named `name` is visible/callable for this request's
-    /// roles. `None` roles means no authorizer is configured, so allow all.
-    fn is_allowed(&self, roles: &Option<HashSet<String>>, name: &str) -> bool {
-        match (&self.authorizer, roles) {
-            (Some(authorizer), Some(roles)) => authorizer.allows(roles, name),
-            _ => true,
+    /// Whether the tool named `name` is visible/callable with `access`.
+    fn is_allowed(&self, access: &Access, name: &str) -> bool {
+        match (access, &self.authorizer) {
+            (Access::Unrestricted, _) | (_, None) => true,
+            (Access::Anonymous, Some(authorizer)) => authorizer.is_public(name),
+            (Access::Authenticated(roles), Some(authorizer)) => authorizer.allows(roles, name),
         }
     }
 
