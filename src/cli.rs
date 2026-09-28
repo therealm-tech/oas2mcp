@@ -133,6 +133,13 @@ fn default_bind_addr() -> SocketAddr {
         .args(["upstream_oauth_client_secret", "upstream_oauth_private_key"])
         .multiple(false)
 ))]
+// Verifying the caller's JWT is what the inbound auth flags build on, and a
+// JWKS is what turns it on.
+#[command(group(
+    ArgGroup::new("oauth_jwks")
+        .args(["oauth_jwks_url", "oauth_jwks_file"])
+        .multiple(false)
+))]
 pub struct Cli {
     /// Path to an OpenAPI document (JSON or YAML) on disk.
     #[arg(long, env = "OPENAPI_FILE", conflicts_with = "openapi_url")]
@@ -415,7 +422,7 @@ pub struct Cli {
     /// the upstream authorization server does not know.
     ///
     /// Delegation requires a verified caller identity, so this mode needs
-    /// `--oauth-role-mapper` with a JWKS and the `streamable-http` transport. A
+    /// a JWKS (`--oauth-jwks-url`/`--oauth-jwks-file`) and the `streamable-http` transport. A
     /// call whose token lacks the claim is **rejected**: falling back to a
     /// broader identity would turn a configuration slip into a privilege
     /// escalation.
@@ -441,28 +448,28 @@ pub struct Cli {
     #[arg(long = "upstream-oauth-audience", env = "UPSTREAM_OAUTH_AUDIENCE")]
     pub upstream_oauth_audience: Option<String>,
 
-    /// Restrict which tools a caller may see and invoke based on the roles
-    /// carried in their JWT, as `role:tool_name_regex` (e.g.
+    /// Restrict which tools an authenticated caller may see and invoke based on
+    /// the roles carried in their JWT, as `role:tool_name_regex` (e.g.
     /// `admin:.*`, `reader:^get`). Repeatable; a tool is allowed if any of the
-    /// caller's roles maps to a regex matching the tool name. When set, the
-    /// incoming request's `Authorization: Bearer` JWT is verified against a
-    /// JWKS (`--oauth-jwks-url` or `--oauth-jwks-file`, one is required) and the
-    /// roles are read from the `--oauth-role-claim` claim. A caller with no
-    /// valid token, or whose roles match nothing, sees and can call only the
-    /// `--oauth-public-tool` tools.
-    /// Only the `streamable-http` transport exposes the client's JWT; ignored
-    /// for `stdio` and `sse`. Invalid regexes are rejected at startup. When set
-    /// via the environment variable, separate entries with newlines.
+    /// caller's roles maps to a regex matching the tool name. The roles are read
+    /// from the `--oauth-role-claim` claim. Unset, any authenticated caller may
+    /// use every tool. Requires `--oauth-jwks-url` or `--oauth-jwks-file`.
+    /// Invalid regexes are rejected at startup. When set via the environment
+    /// variable, separate entries with newlines.
     #[arg(
         long = "oauth-role-mapper",
         env = "OAUTH_ROLE_MAPPER",
-        value_delimiter = '\n'
+        value_delimiter = '\n',
+        requires = "oauth_jwks"
     )]
     pub oauth_role_mapper: Vec<String>,
 
     /// URL of a JWKS document, fetched at startup, whose keys verify the
-    /// incoming JWT signatures. Required (with `--oauth-jwks-file` as the
-    /// alternative) when `--oauth-role-mapper` is set.
+    /// incoming JWT signatures. Set (or `--oauth-jwks-file`) → every MCP request
+    /// is authenticated from its `Authorization: Bearer` JWT, and a caller with
+    /// no valid token gets only the `--oauth-public-tool` tools. Only the
+    /// `streamable-http` transport exposes the client's JWT: under `stdio` and
+    /// `sse` every caller is anonymous.
     #[arg(
         long = "oauth-jwks-url",
         env = "OAUTH_JWKS_URL",
@@ -483,9 +490,8 @@ pub struct Cli {
     /// enough to call tools here. `aud` is what scopes a token to one audience,
     /// and checking it is what stops it being replayed against another. Left
     /// opt-in only because turning it on unconditionally would reject the tokens
-    /// of anyone already running without it. Only used with
-    /// `--oauth-role-mapper`. When set via the environment variable, separate
-    /// values with newlines.
+    /// of anyone already running without it. Only used with a JWKS. When set
+    /// via the environment variable, separate values with newlines.
     #[arg(
         long = "oauth-expected-audience",
         env = "OAUTH_EXPECTED_AUDIENCES",
@@ -500,8 +506,8 @@ pub struct Cli {
     /// token: it catches a key deliberately shared across logical issuers, such
     /// as a staging and a production realm behind one key set. Worth setting when
     /// delegation is on, since the issuer is half of the identity a delegated
-    /// token is cached under. Only used with `--oauth-role-mapper`. When set via
-    /// the environment variable, separate values with newlines.
+    /// token is cached under. Only used with a JWKS. When set via the
+    /// environment variable, separate values with newlines.
     #[arg(
         long = "oauth-expected-issuer",
         env = "OAUTH_EXPECTED_ISSUERS",
@@ -513,7 +519,7 @@ pub struct Cli {
     /// (e.g. `30s`, `2m`). Defaults to `60s`. Raise it if your provider and this
     /// server disagree about the time — the symptom is tokens that are rejected
     /// intermittently, right after being issued or right before expiring. Only
-    /// used with `--oauth-role-mapper`.
+    /// used with a JWKS.
     #[arg(
         long = "oauth-clock-skew",
         env = "OAUTH_CLOCK_SKEW",
@@ -523,7 +529,7 @@ pub struct Cli {
 
     /// Name of the JWT claim listing the caller's roles. The claim value may be
     /// an array of strings or a single whitespace-separated string. Only used
-    /// when `--oauth-role-mapper` is set.
+    /// with `--oauth-role-mapper`.
     #[arg(
         long = "oauth-role-claim",
         env = "OAUTH_ROLE_CLAIM",
@@ -535,15 +541,15 @@ pub struct Cli {
     /// not (e.g. `^get_public_`). Repeatable. An authenticated caller gets these
     /// on top of what their roles grant. With `--oauth-resource`, a caller
     /// without a token is let in and only challenged when it calls a tool that
-    /// is not public. Requires `--oauth-role-mapper`: without it every tool is
-    /// already public. Invalid regexes are rejected at startup. When set via the
+    /// is not public. Requires a JWKS: without one every tool is already
+    /// public. Invalid regexes are rejected at startup. When set via the
     /// environment variable, separate patterns with newlines.
     #[arg(
         long = "oauth-public-tool",
         env = "OAUTH_PUBLIC_TOOLS",
         value_delimiter = '\n',
         value_parser = Regex::new,
-        requires = "oauth_role_mapper"
+        requires = "oauth_jwks"
     )]
     pub oauth_public_tools: Vec<Regex>,
 
@@ -556,12 +562,12 @@ pub struct Cli {
     /// (RFC 9728) is served under `/.well-known/oauth-protected-resource`,
     /// naming the `--oauth-expected-issuer` values as the authorization servers.
     /// That is what lets a client discover where to obtain a token on its own.
-    /// Requires `--oauth-role-mapper` and at least one `--oauth-expected-issuer`.
+    /// Requires a JWKS and at least one `--oauth-expected-issuer`.
     /// Only used by `streamable-http`.
     #[arg(
         long = "oauth-resource",
         env = "OAUTH_RESOURCE",
-        requires = "oauth_role_mapper"
+        requires = "oauth_jwks"
     )]
     pub oauth_resource: Option<Url>,
 
@@ -570,8 +576,8 @@ pub struct Cli {
     /// Repeatable; each named claim that is present in the verified token is
     /// emitted, keeping its JSON shape. Claims are written to logs only, never
     /// added to metric labels, so this never inflates metric cardinality. Reads
-    /// the claims from the JWT verified for role-based access, so it only takes
-    /// effect when `--oauth-role-mapper` (and a JWKS) is configured. When set via
+    /// the claims from the verified caller JWT, so it only takes effect with a
+    /// JWKS. When set via
     /// the environment variable, separate names with newlines.
     #[arg(long = "trace-claim", env = "TRACE_CLAIMS", value_delimiter = '\n')]
     pub trace_claims: Vec<String>,
@@ -738,7 +744,8 @@ pub struct Cli {
     pub stream_responses: bool,
 
     /// `tracing` filter directive (e.g. `info`, `oas2mcp=debug,rmcp=warn`).
-    #[arg(long = "log-filter", env = "RUST_LOG", default_value = "info")]
+    /// Deliberately not `RUST_LOG`, which other crates read on their own.
+    #[arg(long = "log-filter", env = "LOG_FILTER", default_value = "info")]
     pub log_filter: String,
 }
 
@@ -834,13 +841,27 @@ mod tests {
     }
 
     #[test]
-    fn the_protected_resource_needs_a_role_mapper() {
-        // Without one there is no JWKS, so no token could ever satisfy the challenge.
+    fn a_role_mapper_needs_a_jwks() {
+        let mapper = ["oas2mcp", "--oauth-role-mapper", "a:.*"];
+        assert!(Cli::try_parse_from(mapper).is_err());
+        Cli::try_parse_from(
+            mapper
+                .iter()
+                .chain(&["--oauth-jwks-url", "https://idp/jwks"]),
+        )
+        .expect("with a JWKS it parses");
+        Cli::try_parse_from(["oas2mcp", "--oauth-jwks-file", "jwks.json"])
+            .expect("a JWKS alone is enough");
+    }
+
+    #[test]
+    fn the_protected_resource_needs_a_jwks() {
+        // Without one no token could ever satisfy the challenge.
         let resource = ["oas2mcp", "--oauth-resource", "https://mcp.example.com/mcp"];
         assert!(Cli::try_parse_from(resource).is_err());
 
-        let cli = Cli::try_parse_from(resource.iter().chain(&["--oauth-role-mapper", "a:.*"]))
-            .expect("with a role mapper it parses");
+        let cli = Cli::try_parse_from(resource.iter().chain(&["--oauth-jwks-file", "jwks.json"]))
+            .expect("with a JWKS it parses");
         assert_eq!(
             cli.oauth_resource.map(String::from).as_deref(),
             Some("https://mcp.example.com/mcp")
@@ -848,22 +869,22 @@ mod tests {
     }
 
     #[test]
-    fn public_tools_need_a_role_mapper_and_valid_regexes() {
+    fn public_tools_need_a_jwks_and_valid_regexes() {
         let public = ["oas2mcp", "--oauth-public-tool", "^get_public"];
-        // Without a role mapper every tool is public already.
+        // Without a JWKS every tool is public already.
         assert!(Cli::try_parse_from(public).is_err());
         assert!(
             Cli::try_parse_from([
                 "oas2mcp",
-                "--oauth-role-mapper",
-                "a:.*",
+                "--oauth-jwks-file",
+                "jwks.json",
                 "--oauth-public-tool",
                 "("
             ])
             .is_err()
         );
-        let cli = Cli::try_parse_from(public.iter().chain(&["--oauth-role-mapper", "a:.*"]))
-            .expect("with a role mapper it parses");
+        let cli = Cli::try_parse_from(public.iter().chain(&["--oauth-jwks-file", "jwks.json"]))
+            .expect("with a JWKS it parses");
         assert_eq!(cli.oauth_public_tools[0].as_str(), "^get_public");
     }
 

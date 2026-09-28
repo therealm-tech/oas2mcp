@@ -74,7 +74,7 @@ spec:
           env:
             - name: BIND_ADDR
               value: "0.0.0.0:{{ .Values.oas2mcp.service.port }}"
-            - name: RUST_LOG
+            - name: LOG_FILTER
               value: {{ .Values.oas2mcp.logFilter | quote }}
             {{- with .Values.oas2mcp.allowedHosts }}
             - name: ALLOWED_HOSTS

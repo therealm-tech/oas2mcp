@@ -144,8 +144,8 @@ true
 */}}
 {{- define "oas2mcp.upstreamDelegationValidate" -}}
 {{- if and .Values.oas2mcp.upstream.oauth.tokenUrl (eq (.Values.oas2mcp.upstream.oauth.grant | toString) "jwt-bearer") (not .Values.oas2mcp.upstream.oauth.subject) -}}
-{{- if not .Values.oas2mcp.auth.roleMapper -}}
-{{- fail "oas2mcp.upstream.oauth.grant=jwt-bearer acts on behalf of the caller, which needs a verified identity: set oas2mcp.auth.roleMapper with a JWKS, or pin oas2mcp.upstream.oauth.subject" -}}
+{{- if not (or .Values.oas2mcp.auth.jwks.url .Values.oas2mcp.auth.jwks.file) -}}
+{{- fail "oas2mcp.upstream.oauth.grant=jwt-bearer acts on behalf of the caller, which needs a verified identity: set oas2mcp.auth.jwks.url or oas2mcp.auth.jwks.file, or pin oas2mcp.upstream.oauth.subject" -}}
 {{- end -}}
 {{- if ne .Values.oas2mcp.transport "streamable-http" -}}
 {{- fail "oas2mcp.upstream.oauth.grant=jwt-bearer acts on behalf of the caller, which needs transport=streamable-http (no other transport carries a client JWT), or pin oas2mcp.upstream.oauth.subject" -}}

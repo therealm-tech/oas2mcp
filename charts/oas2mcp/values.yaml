@@ -87,9 +87,9 @@ oas2mcp:
     # -- (int) Maximum length of a tool name; a longer one is truncated and given a short hash of the full name. Unset → the binary default (`64`, the limit Anthropic and OpenAI enforce). Lower it when a gateway prefixes the tools it aggregates. Maps to `MAX_NAME_LEN`.
     maxNameLen: ~
 
-  # -- Restrict the tool set per caller by matching the roles in their verified JWT against tool-name regexes. Requires `transport: streamable-http` (the only transport exposing the client's JWT). A caller with no valid token, or whose roles match nothing, sees and can call only the `publicTools`.
+  # -- Authenticate callers from their JWT, turned on by `jwks.url` or `jwks.file`, and optionally restrict the tool set per caller by role. Requires `transport: streamable-http` (the only transport exposing the client's JWT). A caller with no valid token sees and can call only the `publicTools`.
   auth:
-    # -- (list) Role→tool mappings as `role:tool_name_regex` (e.g. `admin:.*`, `reader:^get`). A tool is visible if any of the caller's roles maps to a regex matching the tool name. Set → enables JWT verification, which requires `jwks.url` or `jwks.file`. Maps to `OAUTH_ROLE_MAPPER`.
+    # -- (list) Role→tool mappings as `role:tool_name_regex` (e.g. `admin:.*`, `reader:^get`). A tool is visible if any of the caller's roles maps to a regex matching the tool name. Empty → any authenticated caller may use every tool. Requires `jwks.url` or `jwks.file`. Maps to `OAUTH_ROLE_MAPPER`.
     roleMapper: []
     # -- (string) JWT claim listing the caller's roles (an array or a whitespace-separated string). Unset → the binary default (`roles`). Maps to `OAUTH_ROLE_CLAIM`.
     roleClaim: ~
@@ -99,15 +99,15 @@ oas2mcp:
     expectedIssuers: []
     # -- (string) Clock skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). Unset → the binary default (`60s`). Raise it when tokens are rejected intermittently because the provider's clock and this server's disagree. Maps to `OAUTH_CLOCK_SKEW`.
     clockSkew: ~
-    # -- (list) Regexes over tool names for tools anyone may list and call, without a token (e.g. `^get_public_`). Authenticated callers get them on top of their roles. With `resource` set, an anonymous client is let in and only challenged when it calls a tool that is not public. Needs `roleMapper`. Maps to `OAUTH_PUBLIC_TOOLS`.
+    # -- (list) Regexes over tool names for tools anyone may list and call, without a token (e.g. `^get_public_`). Authenticated callers get them on top of their roles. With `resource` set, an anonymous client is let in and only challenged when it calls a tool that is not public. Needs a JWKS. Maps to `OAUTH_PUBLIC_TOOLS`.
     publicTools: []
-    # -- (string) Canonical URL MCP clients reach the endpoint under (e.g. `https://oas2mcp.example.com/mcp`). Set → a request without a valid bearer token (other than an anonymous one reaching only `publicTools`) gets a `401` whose `WWW-Authenticate` challenge points at the Protected Resource Metadata (RFC 9728), served under `/.well-known/oauth-protected-resource` and naming `expectedIssuers` as the authorization servers, so an MCP client can discover where to log in on its own. Requires `roleMapper` and at least one `expectedIssuers` entry. Maps to `OAUTH_RESOURCE`.
+    # -- (string) Canonical URL MCP clients reach the endpoint under (e.g. `https://oas2mcp.example.com/mcp`). Set → a request without a valid bearer token (other than an anonymous one reaching only `publicTools`) gets a `401` whose `WWW-Authenticate` challenge points at the Protected Resource Metadata (RFC 9728), served under `/.well-known/oauth-protected-resource` and naming `expectedIssuers` as the authorization servers, so an MCP client can discover where to log in on its own. Requires a JWKS and at least one `expectedIssuers` entry. Maps to `OAUTH_RESOURCE`.
     resource: ~
-    # -- (list) JWT claim names copied into the per-call tracing log as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`), for observability. Logged only, never a metric label. Needs `roleMapper` (claims come from the verified JWT). Defaults to `[sub]`; set `[]` to disable. Maps to `TRACE_CLAIMS`.
+    # -- (list) JWT claim names copied into the per-call tracing log as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`), for observability. Logged only, never a metric label. Needs a JWKS (claims come from the verified JWT). Defaults to `[sub]`; set `[]` to disable. Maps to `TRACE_CLAIMS`.
     traceClaims:
       - sub
     jwks:
-      # -- (string) URL of a JWKS document, fetched at startup, whose keys verify incoming JWT signatures. Mutually exclusive with `file`. One of the two is required when `roleMapper` is set. Maps to `OAUTH_JWKS_URL`.
+      # -- (string) URL of a JWKS document, fetched at startup, whose keys verify incoming JWT signatures. Mutually exclusive with `file`. Set → every request is authenticated from its JWT. Maps to `OAUTH_JWKS_URL`.
       url: ~
       # -- (string) Path to a JWKS document on disk (mount it via `extraVolumes`/`extraVolumeMounts`). Mutually exclusive with `url`. Maps to `OAUTH_JWKS_FILE`.
       file: ~
@@ -172,7 +172,7 @@ oas2mcp:
       issuer: ~
       # -- (string) Fixed `sub` for the `jwt-bearer` assertion — a named service account, the same for every caller. Mutually exclusive with `subjectClaim`. Maps to `UPSTREAM_OAUTH_SUBJECT`.
       subject: ~
-      # -- (string) Claim of the **caller's** verified JWT whose value becomes the assertion's `sub` — i.e. per-caller delegation. Unset → the binary default (`sub`); many providers need `email` instead. Requires `auth.roleMapper` with a JWKS and `transport: streamable-http`; the server refuses to start otherwise. Maps to `UPSTREAM_OAUTH_SUBJECT_CLAIM`.
+      # -- (string) Claim of the **caller's** verified JWT whose value becomes the assertion's `sub` — i.e. per-caller delegation. Unset → the binary default (`sub`); many providers need `email` instead. Requires `auth.jwks` and `transport: streamable-http`; the server refuses to start otherwise. Maps to `UPSTREAM_OAUTH_SUBJECT_CLAIM`.
       subjectClaim: ~
       # -- Authenticate with a JWT assertion signed per request (`private_key_jwt`, RFC 7523 §2.2) instead of a shared secret. Also signs the `jwt-bearer` grant assertion when `grant: jwt-bearer` with a `self-signed` assertion — one key, loaded once. Mutually exclusive with `clientSecret`/`existingSecret`; setting both fails the render.
       privateKey:
@@ -192,7 +192,7 @@ oas2mcp:
         # -- (string) How long a client assertion stays valid (e.g. `30s`). Unset → the binary default (`60s`). Maps to `UPSTREAM_OAUTH_ASSERTION_LIFETIME`.
         assertionLifetime: ~
 
-  # -- `tracing` filter directive, mapped to `RUST_LOG`.
+  # -- `tracing` filter directive, mapped to `LOG_FILTER`.
   logFilter: info
 
   service:

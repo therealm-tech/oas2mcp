@@ -31,7 +31,7 @@ use crate::server::OpenApiServer;
 async fn main() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
 
-    // The filter directive flows through clap (RUST_LOG), never read directly.
+    // The filter directive flows through clap (LOG_FILTER), never read directly.
     // SSE/stdio multiplex protocol traffic, so logs always go to stderr.
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(&cli.log_filter))
@@ -48,11 +48,11 @@ async fn main() -> anyhow::Result<()> {
 
     let authorizer = auth::Authorizer::from_cli(&cli)
         .await
-        .context("configuring JWT role-based authorization")?;
+        .context("configuring JWT authentication")?;
     if authorizer.is_some() && cli.transport != cli::Transport::StreamableHttp {
         tracing::warn!(
             transport = %cli.transport,
-            "--oauth-role-mapper only takes effect on the streamable-http transport; \
+            "JWT authentication only takes effect on the streamable-http transport; \
              on this transport no client JWT is available, so only the public tools are exposed"
         );
     }
@@ -169,7 +169,7 @@ fn check_delegation_is_possible(cli: &Cli, has_authorizer: bool) -> anyhow::Resu
     if !has_authorizer {
         anyhow::bail!(
             "--upstream-oauth-grant jwt-bearer acts on behalf of the caller, which needs a \
-             verified caller identity: configure --oauth-role-mapper with a JWKS, or pin a \
+             verified caller identity: configure --oauth-jwks-url or --oauth-jwks-file, or pin a \
              fixed identity with --upstream-oauth-subject"
         );
     }
