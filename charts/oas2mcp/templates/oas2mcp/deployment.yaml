@@ -140,6 +140,10 @@ spec:
             - name: OPENAPI_OAUTH_AUDIENCE
               value: {{ . | quote }}
             {{- end }}
+            {{- with .Values.oas2mcp.openapi.auth }}
+            - name: OPENAPI_AUTH
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.oas2mcp.openapi.reloadEvery }}
             - name: RELOAD_EVERY
               value: {{ . | quote }}

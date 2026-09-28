@@ -7,7 +7,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde_json::Value;
 use url::Url;
 
-use crate::cli::Cli;
+use crate::cli::{Cli, DocumentAuth};
 use crate::oauth::TokenProvider;
 use crate::server::parse_headers;
 
@@ -25,14 +25,41 @@ pub struct DocAuth {
 }
 
 impl DocAuth {
-    /// Build the document-fetch auth from the CLI: parse the static
-    /// `--openapi-header` values and, if configured, the OAuth provider. The
-    /// HTTP client is shared with the OAuth token requests.
+    /// Build the document-fetch auth from the CLI: the static headers and, if
+    /// configured, the OAuth provider, from the `--openapi-*` flags or from the
+    /// upstream ones (`--openapi-auth`). The HTTP client is shared with the
+    /// OAuth token requests.
     pub fn from_cli(cli: &Cli) -> anyhow::Result<Self> {
         let client = crate::http::client(cli).context("building the document-fetch HTTP client")?;
-        let static_headers =
-            parse_headers(&cli.openapi_headers).context("parsing --openapi-header values")?;
-        let oauth = TokenProvider::for_document(cli, client.clone())?;
+        let (static_headers, oauth) = match cli.openapi_auth {
+            DocumentAuth::Own => (
+                parse_headers(&cli.openapi_headers).context("parsing --openapi-header values")?,
+                TokenProvider::for_document(cli, client.clone())?,
+            ),
+            DocumentAuth::Upstream => {
+                if !cli.openapi_headers.is_empty() || cli.openapi_oauth_token_url.is_some() {
+                    bail!(
+                        "--openapi-auth upstream fetches the document with the upstream \
+                         credentials, so --openapi-header and --openapi-oauth-* would go unused; \
+                         drop them, or use --openapi-auth own"
+                    );
+                }
+                let oauth = TokenProvider::for_upstream(cli, client.clone())?;
+                if oauth
+                    .as_ref()
+                    .is_some_and(TokenProvider::needs_caller_identity)
+                {
+                    bail!(
+                        "--openapi-auth upstream cannot reuse a per-caller upstream token: the \
+                         document fetch has no caller to act for"
+                    );
+                }
+                (
+                    parse_headers(&cli.headers).context("parsing --header values")?,
+                    oauth,
+                )
+            }
+        };
         Ok(Self {
             client,
             static_headers,
@@ -115,6 +142,56 @@ fn parse(bytes: &[u8]) -> anyhow::Result<Spec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn doc_auth(args: &[&str]) -> anyhow::Result<DocAuth> {
+        use clap::Parser as _;
+        let cli = Cli::try_parse_from(std::iter::once("oas2mcp").chain(args.iter().copied()))
+            .expect("CLI parses");
+        DocAuth::from_cli(&cli)
+    }
+
+    const UPSTREAM_OAUTH: [&str; 6] = [
+        "--upstream-oauth-token-url",
+        "https://idp.example.com/token",
+        "--upstream-oauth-client-id",
+        "id",
+        "--upstream-oauth-client-secret",
+        "secret",
+    ];
+
+    #[test]
+    fn the_upstream_mode_reuses_the_upstream_credentials() {
+        let auth =
+            doc_auth(&["--openapi-auth", "upstream", "--header", "X-Api-Key: k"]).expect("builds");
+        assert_eq!(auth.static_headers.get("x-api-key").unwrap(), "k");
+        assert!(auth.oauth.is_none());
+
+        let args: Vec<&str> = ["--openapi-auth", "upstream"]
+            .into_iter()
+            .chain(UPSTREAM_OAUTH)
+            .collect();
+        assert!(doc_auth(&args).expect("builds").oauth.is_some());
+    }
+
+    #[test]
+    fn the_upstream_mode_refuses_what_it_would_ignore() {
+        // Document-fetch flags that would never be read.
+        assert!(doc_auth(&["--openapi-auth", "upstream", "--openapi-header", "X: y"]).is_err());
+        // A per-caller token, when the document fetch has no caller.
+        let args: Vec<&str> = [
+            "--openapi-auth",
+            "upstream",
+            "--upstream-oauth-grant",
+            "jwt-bearer-relay",
+        ]
+        .into_iter()
+        .chain(UPSTREAM_OAUTH)
+        .collect();
+        let err = doc_auth(&args)
+            .err()
+            .expect("a per-caller token is refused");
+        assert!(format!("{err:#}").contains("no caller"), "{err:#}");
+    }
 
     #[test]
     fn parses_json_and_yaml_alike() {
