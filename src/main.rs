@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    check_delegation_is_possible(&cli, authorizer.is_some())?;
+    check_delegation_is_possible(&cli, authorizer.as_deref())?;
 
     let protected = match (&cli.oauth_resource, &authorizer) {
         (Some(resource), Some(authorizer)) => Some(
@@ -158,7 +158,10 @@ async fn main() -> anyhow::Result<()> {
 /// first tool call. And the alternative — falling back to the client's own
 /// identity — is exactly the privilege escalation the delegation exists to
 /// avoid.
-fn check_delegation_is_possible(cli: &Cli, has_authorizer: bool) -> anyhow::Result<()> {
+fn check_delegation_is_possible(
+    cli: &Cli,
+    authorizer: Option<&auth::Authorizer>,
+) -> anyhow::Result<()> {
     let delegates = cli.upstream_oauth_token_url.is_some()
         && cli.upstream_oauth_grant != cli::UpstreamGrant::ClientCredentials
         && cli.upstream_oauth_subject.is_none();
@@ -166,14 +169,14 @@ fn check_delegation_is_possible(cli: &Cli, has_authorizer: bool) -> anyhow::Resu
         return Ok(());
     }
 
-    if !has_authorizer {
+    let Some(authorizer) = authorizer else {
         anyhow::bail!(
             "--upstream-oauth-grant {} acts on behalf of the caller, which needs a \
              verified caller identity: configure --oauth-jwks-url or --oauth-jwks-file, or pin a \
              fixed identity with --upstream-oauth-subject",
             cli.upstream_oauth_grant
         );
-    }
+    };
     if cli.transport != cli::Transport::StreamableHttp {
         anyhow::bail!(
             "--upstream-oauth-grant {} acts on behalf of the caller, but the {} \
@@ -183,9 +186,9 @@ fn check_delegation_is_possible(cli: &Cli, has_authorizer: bool) -> anyhow::Resu
             cli.transport
         );
     }
-    if !cli.oauth_public_tools.is_empty() {
+    if authorizer.has_public_tools() {
         tracing::warn!(
-            "--oauth-public-tool with per-caller delegation: an anonymous call to a public tool \
+            "public tools with per-caller delegation: an anonymous call to a public tool \
              has no identity to delegate, so it fails with an upstream token error"
         );
     }
@@ -259,14 +262,15 @@ mod tests {
 
         // Without an authorizer there is no verified identity, so every call
         // would fail. Better to say so now than at the first tool call.
-        let err = check_delegation_is_possible(&cli, false)
+        let err = check_delegation_is_possible(&cli, None)
             .expect_err("delegation without an authorizer must be refused");
         assert!(
             format!("{err:#}").contains("verified caller identity"),
             "{err:#}"
         );
 
-        check_delegation_is_possible(&cli, true).expect("with an authorizer it is fine");
+        check_delegation_is_possible(&cli, Some(&crate::auth::tests::test_authorizer()))
+            .expect("with an authorizer it is fine");
     }
 
     #[test]
@@ -274,8 +278,8 @@ mod tests {
         let args = delegating(&[]);
         let cli = cli_from(&args.iter().map(String::as_str).collect::<Vec<_>>());
         // Default transport is stdio, which exposes no client headers.
-        let err =
-            check_delegation_is_possible(&cli, true).expect_err("stdio cannot carry a caller JWT");
+        let err = check_delegation_is_possible(&cli, Some(&crate::auth::tests::test_authorizer()))
+            .expect_err("stdio cannot carry a caller JWT");
         assert!(format!("{err:#}").contains("streamable-http"), "{err:#}");
     }
 
@@ -285,7 +289,7 @@ mod tests {
         // authorizer at all.
         let args = delegating(&["--upstream-oauth-subject", "service-acct"]);
         let cli = cli_from(&args.iter().map(String::as_str).collect::<Vec<_>>());
-        check_delegation_is_possible(&cli, false).expect("a fixed subject delegates to nobody");
+        check_delegation_is_possible(&cli, None).expect("a fixed subject delegates to nobody");
     }
 
     #[test]
@@ -298,6 +302,6 @@ mod tests {
             "--upstream-oauth-client-secret",
             "secret",
         ]);
-        check_delegation_is_possible(&cli, false).expect("client_credentials delegates to nobody");
+        check_delegation_is_possible(&cli, None).expect("client_credentials delegates to nobody");
     }
 }
