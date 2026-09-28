@@ -75,7 +75,7 @@ writing a line of glue code.
   mapping each `role` to a regex over operation names
   (`streamable-http` only). Tools mapped to the reserved role `*` stay open to
   everyone, token or not.
-- **MCP authorization discovery** — with `--oauth-resource`, `/mcp` behaves as
+- **MCP authorization discovery** — with `--inbound-resource`, `/mcp` behaves as
   the OAuth protected resource the MCP authorization spec describes: a request
   without a valid token is answered `401` with a `WWW-Authenticate` challenge,
   and the Protected Resource Metadata (RFC 9728) tells the client which
@@ -116,6 +116,11 @@ oas2mcp [OPTIONS]
 The OpenAPI source is required: pass exactly one of `--openapi-file` or
 `--openapi-url`.
 
+Three families of flags configure three directions of authentication:
+`--inbound-*` how callers authenticate to oas2mcp, `--upstream-oauth-*` how
+oas2mcp authenticates to the API, and `--openapi-oauth-*` how it fetches the
+document.
+
 | Option            | Env              | Default          | Description                                                        |
 | ----------------- | ---------------- | ---------------- | ------------------------------------------------------------------ |
 | `--openapi-file`  | `OPENAPI_FILE`   | —                | Path to an OpenAPI document (JSON or YAML) on disk.                |
@@ -150,15 +155,15 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--upstream-oauth-grant` | `UPSTREAM_OAUTH_GRANT` | `client-credentials` | `client-credentials`; `jwt-bearer` (RFC 7523 §2.1) to obtain the token on behalf of a subject with an assertion oas2mcp signs; or `jwt-bearer-relay` to relay the caller's own JWT as that assertion. |
 | `--upstream-oauth-assertion-issuer` | `UPSTREAM_OAUTH_ASSERTION_ISSUER` | client id | `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. |
 | `--upstream-oauth-subject` | `UPSTREAM_OAUTH_SUBJECT` | —      | Fixed `sub` for the assertion — a service account. Every caller shares one token. Mutually exclusive with the claim below. |
-| `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs a JWKS (`--oauth-jwks-url`/`--oauth-jwks-file`) and `streamable-http`. |
-| `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:operation_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Unset → any authenticated caller may use every tool. Requires a JWKS source below. |
-| `--oauth-jwks-url` | `OAUTH_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Set (or `--oauth-jwks-file`) → callers are authenticated from their JWT; without a valid one they get the public tools only. `streamable-http` only. |
-| `--oauth-jwks-file` | `OAUTH_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--oauth-jwks-url`. |
-| `--oauth-expected-audience` | `OAUTH_EXPECTED_AUDIENCES` | — | Audience the incoming JWT's `aud` must match. Repeatable. **Set this**: unset, a token your provider minted for another service is accepted here. |
-| `--oauth-expected-issuer` | `OAUTH_EXPECTED_ISSUERS` | —      | Issuer the incoming JWT's `iss` must match. Repeatable. Defence in depth next to the JWKS. |
-| `--oauth-clock-skew` | `OAUTH_CLOCK_SKEW` | `60s`            | Skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). |
-| `--oauth-resource` | `OAUTH_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests (beyond the public tools) get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--oauth-role-mapper` and `--oauth-expected-issuer`. `streamable-http` only. |
-| `--oauth-role-claim` | `OAUTH_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
+| `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs a JWKS (`--inbound-jwks-url`/`--inbound-jwks-file`) and `streamable-http`. |
+| `--inbound-role-mapper` | `INBOUND_ROLE_MAPPER` | —          | `role:operation_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Unset → any authenticated caller may use every tool. Requires a JWKS source below. |
+| `--inbound-jwks-url` | `INBOUND_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Set (or `--inbound-jwks-file`) → callers are authenticated from their JWT; without a valid one they get the public tools only. `streamable-http` only. |
+| `--inbound-jwks-file` | `INBOUND_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--inbound-jwks-url`. |
+| `--inbound-expected-audience` | `INBOUND_EXPECTED_AUDIENCES` | — | Audience the incoming JWT's `aud` must match. Repeatable. **Set this**: unset, a token your provider minted for another service is accepted here. |
+| `--inbound-expected-issuer` | `INBOUND_EXPECTED_ISSUERS` | —      | Issuer the incoming JWT's `iss` must match. Repeatable. Defence in depth next to the JWKS. |
+| `--inbound-clock-skew` | `INBOUND_CLOCK_SKEW` | `60s`            | Skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). |
+| `--inbound-resource` | `INBOUND_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests (beyond the public tools) get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--inbound-role-mapper` and `--inbound-expected-issuer`. `streamable-http` only. |
+| `--inbound-role-claim` | `INBOUND_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
 | `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs a JWKS. |
 | `--include-regex` | `INCLUDE_OPERATIONS_REGEX` | —      | Only expose operations whose name matches this regex. Repeatable. |
 | `--exclude-regex` | `EXCLUDE_OPERATIONS_REGEX` | —      | Drop operations whose name matches this regex. Repeatable. Wins over the allowlist. |
@@ -387,7 +392,7 @@ broken API.
 `client_credentials` gets one token for the server itself, so every tool call
 reaches the API as the same principal. The upstream audit log shows one identity,
 and the API can no longer apply per-user authorization — the only gate left is
-`--oauth-role-mapper`, which filters *tool names*, not data. A `reader:^get`
+`--inbound-role-mapper`, which filters *tool names*, not data. A `reader:^get`
 rule lets `getAllCustomers` through for the intern as readily as for the CFO.
 
 The `jwt-bearer` grant (RFC 7523 §2.1) fixes that: oas2mcp presents a signed
@@ -397,7 +402,7 @@ assertion naming the caller, and the provider issues a token *for that user*.
 oas2mcp \
   --openapi-url https://api.example.com/openapi.json \
   --transport streamable-http --bind-addr 0.0.0.0:8000 \
-  --oauth-jwks-url https://idp.example.com/.well-known/jwks.json \
+  --inbound-jwks-url https://idp.example.com/.well-known/jwks.json \
   --upstream-oauth-token-url https://idp.example.com/oauth/token \
   --upstream-oauth-client-id "$CLIENT_ID" \
   --upstream-oauth-private-key /etc/oas2mcp/upstream-key.pem \
@@ -462,20 +467,20 @@ RFC 8693 token exchange, which oas2mcp does not implement.
 ### Authenticating callers and role-based tool access
 
 The filters above are global: every MCP client sees the same tools. To tie
-access to the **caller's own JWT**, give oas2mcp a JWKS (`--oauth-jwks-url`,
-fetched once at startup, or `--oauth-jwks-file`): the incoming request's
+access to the **caller's own JWT**, give oas2mcp a JWKS (`--inbound-jwks-url`,
+fetched once at startup, or `--inbound-jwks-file`): the incoming request's
 `Authorization: Bearer` JWT is then verified against it. A verified caller may
 use every tool; a caller with no token or an invalid/expired one gets only the
-[public tools](#public-tools), if any — or, with `--oauth-resource`, is refused
+[public tools](#public-tools), if any — or, with `--inbound-resource`, is refused
 with a `401` that tells it where to log in (see
 [below](#letting-mcp-clients-find-the-authorization-server)).
 
-When callers have different privileges, add one or more `--oauth-role-mapper`
+When callers have different privileges, add one or more `--inbound-role-mapper`
 entries of the form `role:operation_regex`: a tool is then visible (in
 `tools/list`) and callable (in `tools/call`) only when one of the caller's roles
 maps to a regex matching its operation name — the `operationId` before
 `--rename`, like the filters. The roles are read from the
-`--oauth-role-claim` claim (default `roles`; an array of strings or a
+`--inbound-role-claim` claim (default `roles`; an array of strings or a
 whitespace-separated string), and a caller whose roles match no mapping gets
 the public tools only.
 
@@ -484,10 +489,10 @@ oas2mcp \
   --openapi-url https://api.example.com/openapi.json \
   --transport streamable-http \
   --bind-addr 0.0.0.0:8000 \
-  --oauth-jwks-url https://idp.example.com/.well-known/jwks.json \
-  --oauth-role-claim roles \
-  --oauth-role-mapper 'admin:.*' \
-  --oauth-role-mapper 'reader:^get'
+  --inbound-jwks-url https://idp.example.com/.well-known/jwks.json \
+  --inbound-role-claim roles \
+  --inbound-role-mapper 'admin:.*' \
+  --inbound-role-mapper 'reader:^get'
 # admins get every tool; readers only the ones whose name starts with "get".
 ```
 
@@ -497,7 +502,7 @@ are exposed. The signature is verified with the key family advertised by the JWK
 (an algorithm-substitution downgrade such as `HS256` against a public key is
 rejected), and the token's `exp` is enforced. Invalid regexes are rejected at
 startup. With multiple entries set through the environment variable, separate
-them with newlines (e.g. `OAUTH_ROLE_MAPPER=$'admin:.*\nreader:^get'`).
+them with newlines (e.g. `INBOUND_ROLE_MAPPER=$'admin:.*\nreader:^get'`).
 
 #### Tracing the caller's JWT claims
 
@@ -512,8 +517,8 @@ oas2mcp \
   --openapi-url https://api.example.com/openapi.json \
   --transport streamable-http \
   --bind-addr 0.0.0.0:8000 \
-  --oauth-jwks-url https://idp.example.com/.well-known/jwks.json \
-  --oauth-role-mapper 'admin:.*' \
+  --inbound-jwks-url https://idp.example.com/.well-known/jwks.json \
+  --inbound-role-mapper 'admin:.*' \
   --trace-claim sub \
   --trace-claim email \
   --trace-claim tenant_id
@@ -535,18 +540,18 @@ a token minted for another service out:
 ```bash
 oas2mcp \
   --transport streamable-http --bind-addr 0.0.0.0:8000 \
-  --oauth-jwks-url https://idp.example.com/.well-known/jwks.json \
-  --oauth-role-mapper 'admin:.*' \
-  --oauth-expected-audience oas2mcp \
-  --oauth-expected-issuer https://idp.example.com/
+  --inbound-jwks-url https://idp.example.com/.well-known/jwks.json \
+  --inbound-role-mapper 'admin:.*' \
+  --inbound-expected-audience oas2mcp \
+  --inbound-expected-issuer https://idp.example.com/
 ```
 
-- **`--oauth-expected-audience` is the one that matters.** Without it, every token
+- **`--inbound-expected-audience` is the one that matters.** Without it, every token
   your JWKS can verify is accepted — including one your provider issued for a
   different service entirely, with whatever roles it happens to carry. `aud` is
   what scopes a token to one audience; checking it is what stops it being replayed
   here. oas2mcp warns at startup while it is unset.
-- **`--oauth-expected-issuer` is defence in depth.** The JWKS already pins who
+- **`--inbound-expected-issuer` is defence in depth.** The JWKS already pins who
   signed the token, so this mainly catches a key deliberately shared across
   logical issuers — a staging and a production realm behind one key set, say. It
   also firms up delegation, where the issuer is half of the identity a delegated
@@ -562,7 +567,7 @@ unconditionally would reject the tokens of every deployment that predates them.
 That is a migration concern, not a recommendation: set them.
 
 If tokens are rejected intermittently — right after being issued, or just before
-expiring — suspect the clocks before the config, and widen `--oauth-clock-skew`.
+expiring — suspect the clocks before the config, and widen `--inbound-clock-skew`.
 
 #### Letting MCP clients find the authorization server
 
@@ -570,15 +575,15 @@ By default a caller without a token is not turned away: it gets an empty tool
 list, and nothing tells it where a token would come from. An MCP client that
 implements the [MCP authorization spec](https://modelcontextprotocol.io/specification/latest/basic/authorization)
 can do the login itself, provided the server points it at the authorization
-server. Set `--oauth-resource` to the URL clients reach the endpoint under:
+server. Set `--inbound-resource` to the URL clients reach the endpoint under:
 
 ```bash
 oas2mcp \
   --transport streamable-http --bind-addr 0.0.0.0:8000 \
-  --oauth-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
-  --oauth-expected-issuer https://idp.example.com/realms/main \
-  --oauth-expected-audience oas2mcp \
-  --oauth-resource https://mcp.example.com/mcp
+  --inbound-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
+  --inbound-expected-issuer https://idp.example.com/realms/main \
+  --inbound-expected-audience oas2mcp \
+  --inbound-resource https://mcp.example.com/mcp
 ```
 
 Every request to `/mcp` then needs a valid bearer token. Without one the answer
@@ -590,7 +595,7 @@ WWW-Authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/
 ```
 
 and the metadata it points at, served without authentication, names the
-`--oauth-expected-issuer` values as the authorization servers:
+`--inbound-expected-issuer` values as the authorization servers:
 
 ```json
 {
@@ -606,7 +611,7 @@ OAuth flow, and retries with the token. An invalid or expired token gets the sam
 
 - **The issuers are the authorization servers.** Advertising any other server
   would send clients to fetch tokens this one then refuses, so at least one
-  `--oauth-expected-issuer` is required.
+  `--inbound-expected-issuer` is required.
 - **The metadata is served at two paths**: the one derived from the resource URL
   (`/.well-known/oauth-protected-resource/mcp`, per RFC 9728 §3) and the bare
   `/.well-known/oauth-protected-resource` clients fall back to. Behind a reverse
@@ -623,15 +628,15 @@ OAuth flow, and retries with the token. An invalid or expired token gets the sam
 
 Some tools can be open to anyone — a catalogue lookup, a status check — while
 the rest needs a login. Map them to the reserved role `*` in
-`--oauth-role-mapper`:
+`--inbound-role-mapper`:
 
 ```bash
 oas2mcp \
   --transport streamable-http --bind-addr 0.0.0.0:8000 \
-  --oauth-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
-  --oauth-expected-issuer https://idp.example.com/realms/main \
-  --oauth-role-mapper '*:^get_public_' \
-  --oauth-resource https://mcp.example.com/mcp
+  --inbound-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
+  --inbound-expected-issuer https://idp.example.com/realms/main \
+  --inbound-role-mapper '*:^get_public_' \
+  --inbound-resource https://mcp.example.com/mcp
 ```
 
 A caller without a token sees and can call the public tools only; an
@@ -639,7 +644,7 @@ authenticated caller gets them on top of what its roles grant — and, when `*`
 entries are the only ones, every tool, as without a mapper at all. A role
 literally named `*` in your identity provider grants nothing more than being
 anonymous. With
-`--oauth-resource`, an anonymous client is no longer turned away on connection:
+`--inbound-resource`, an anonymous client is no longer turned away on connection:
 `initialize`, `tools/list` and calls to public tools go through, and the `401`
 challenge comes when it calls a tool that is not public. An *invalid* token is
 still challenged on any request, so a client learns its token needs replacing.
@@ -766,7 +771,7 @@ Two things to know about the syntax:
 **Filters keep matching the name *before* renaming** — the `operationId`, or the
 `<method>_<path>` fallback. That is deliberate: an existing curated
 `--include-regex`/`--exclude-regex` allowlist goes on working untouched when you add or edit
-rename rules. `--oauth-role-mapper` matches that same
+rename rules. `--inbound-role-mapper` matches that same
 name, so editing a rename rule never changes who may use which tool.
 
 Whatever the rules leave behind is sanitised to `[A-Za-z0-9_-]` and then capped

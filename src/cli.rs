@@ -141,8 +141,8 @@ fn default_bind_addr() -> SocketAddr {
 // Verifying the caller's JWT is what the inbound auth flags build on, and a
 // JWKS is what turns it on.
 #[command(group(
-    ArgGroup::new("oauth_jwks")
-        .args(["oauth_jwks_url", "oauth_jwks_file"])
+    ArgGroup::new("inbound_jwks")
+        .args(["inbound_jwks_url", "inbound_jwks_file"])
         .multiple(false)
 ))]
 pub struct Cli {
@@ -412,7 +412,7 @@ pub struct Cli {
     /// `iss` claim of the `jwt-bearer` assertion, identifying oas2mcp to the
     /// authorization server. Defaults to `--upstream-oauth-client-id`. Only used
     /// with `--upstream-oauth-grant jwt-bearer`, where oas2mcp signs it. Not
-    /// to be confused with `--oauth-expected-issuer`, the `iss` accepted on
+    /// to be confused with `--inbound-expected-issuer`, the `iss` accepted on
     /// incoming caller tokens.
     #[arg(
         long = "upstream-oauth-assertion-issuer",
@@ -438,7 +438,7 @@ pub struct Cli {
     /// the upstream authorization server does not know.
     ///
     /// Delegation requires a verified caller identity, so this mode needs
-    /// a JWKS (`--oauth-jwks-url`/`--oauth-jwks-file`) and the `streamable-http` transport. A
+    /// a JWKS (`--inbound-jwks-url`/`--inbound-jwks-file`) and the `streamable-http` transport. A
     /// call whose token lacks the claim is **rejected**: falling back to a
     /// broader identity would turn a configuration slip into a privilege
     /// escalation.
@@ -474,42 +474,42 @@ pub struct Cli {
     /// `admin:.*`, `reader:^get`). Repeatable; a tool is allowed if any of the
     /// caller's roles maps to a regex matching its operation name: the
     /// `operationId` (or `<method>_<path>`) before `--rename`, like the
-    /// filters. The roles are read from the `--oauth-role-claim` claim.
+    /// filters. The roles are read from the `--inbound-role-claim` claim.
     ///
     /// The role `*` is reserved: `*:^get_public` makes those tools **public**,
     /// usable by anyone, token or not, and added to what every authenticated
-    /// caller's roles grant. With `--oauth-resource`, an anonymous caller is let
+    /// caller's roles grant. With `--inbound-resource`, an anonymous caller is let
     /// in and only challenged when it calls a tool that is not public.
     ///
     /// Without entries other than `*` ones, any authenticated caller may use
-    /// every tool. Requires `--oauth-jwks-url` or `--oauth-jwks-file`.
+    /// every tool. Requires `--inbound-jwks-url` or `--inbound-jwks-file`.
     /// Invalid regexes are rejected at startup. When set via the environment
     /// variable, separate entries with newlines.
     #[arg(
-        long = "oauth-role-mapper",
-        env = "OAUTH_ROLE_MAPPER",
+        long = "inbound-role-mapper",
+        env = "INBOUND_ROLE_MAPPER",
         value_delimiter = '\n',
-        requires = "oauth_jwks"
+        requires = "inbound_jwks"
     )]
-    pub oauth_role_mapper: Vec<String>,
+    pub inbound_role_mapper: Vec<String>,
 
     /// URL of a JWKS document, fetched at startup, whose keys verify the
-    /// incoming JWT signatures. Set (or `--oauth-jwks-file`) → every MCP request
+    /// incoming JWT signatures. Set (or `--inbound-jwks-file`) → every MCP request
     /// is authenticated from its `Authorization: Bearer` JWT, and a caller with
     /// no valid token gets only the public tools (`*:` role mappings). Only the
     /// `streamable-http` transport exposes the client's JWT: under `stdio` and
     /// `sse` every caller is anonymous.
     #[arg(
-        long = "oauth-jwks-url",
-        env = "OAUTH_JWKS_URL",
-        conflicts_with = "oauth_jwks_file"
+        long = "inbound-jwks-url",
+        env = "INBOUND_JWKS_URL",
+        conflicts_with = "inbound_jwks_file"
     )]
-    pub oauth_jwks_url: Option<Url>,
+    pub inbound_jwks_url: Option<Url>,
 
     /// Path to a JWKS document on disk whose keys verify the incoming JWT
-    /// signatures. Mutually exclusive with `--oauth-jwks-url`.
-    #[arg(long = "oauth-jwks-file", env = "OAUTH_JWKS_FILE")]
-    pub oauth_jwks_file: Option<PathBuf>,
+    /// signatures. Mutually exclusive with `--inbound-jwks-url`.
+    #[arg(long = "inbound-jwks-file", env = "INBOUND_JWKS_FILE")]
+    pub inbound_jwks_file: Option<PathBuf>,
 
     /// Audience the incoming JWT must be addressed to, checked against its `aud`
     /// claim. Repeatable; the token is accepted if its `aud` matches any of them.
@@ -522,11 +522,11 @@ pub struct Cli {
     /// of anyone already running without it. Only used with a JWKS. When set
     /// via the environment variable, separate values with newlines.
     #[arg(
-        long = "oauth-expected-audience",
-        env = "OAUTH_EXPECTED_AUDIENCES",
+        long = "inbound-expected-audience",
+        env = "INBOUND_EXPECTED_AUDIENCES",
         value_delimiter = '\n'
     )]
-    pub oauth_expected_audiences: Vec<String>,
+    pub inbound_expected_audiences: Vec<String>,
 
     /// Issuer the incoming JWT must come from, checked against its `iss` claim.
     /// Repeatable; the token is accepted if its `iss` matches any of them.
@@ -538,11 +538,11 @@ pub struct Cli {
     /// token is cached under. Only used with a JWKS. When set via the
     /// environment variable, separate values with newlines.
     #[arg(
-        long = "oauth-expected-issuer",
-        env = "OAUTH_EXPECTED_ISSUERS",
+        long = "inbound-expected-issuer",
+        env = "INBOUND_EXPECTED_ISSUERS",
         value_delimiter = '\n'
     )]
-    pub oauth_expected_issuers: Vec<String>,
+    pub inbound_expected_issuers: Vec<String>,
 
     /// Clock skew tolerated when checking the incoming JWT's `exp` and `nbf`
     /// (e.g. `30s`, `2m`). Defaults to `60s`. Raise it if your provider and this
@@ -550,21 +550,21 @@ pub struct Cli {
     /// intermittently, right after being issued or right before expiring. Only
     /// used with a JWKS.
     #[arg(
-        long = "oauth-clock-skew",
-        env = "OAUTH_CLOCK_SKEW",
+        long = "inbound-clock-skew",
+        env = "INBOUND_CLOCK_SKEW",
         value_parser = humantime::parse_duration
     )]
-    pub oauth_clock_skew: Option<Duration>,
+    pub inbound_clock_skew: Option<Duration>,
 
     /// Name of the JWT claim listing the caller's roles. The claim value may be
     /// an array of strings or a single whitespace-separated string. Only used
-    /// with `--oauth-role-mapper`.
+    /// with `--inbound-role-mapper`.
     #[arg(
-        long = "oauth-role-claim",
-        env = "OAUTH_ROLE_CLAIM",
+        long = "inbound-role-claim",
+        env = "INBOUND_ROLE_CLAIM",
         default_value = "roles"
     )]
-    pub oauth_role_claim: String,
+    pub inbound_role_claim: String,
 
     /// Canonical URL MCP clients reach this server's endpoint under (e.g.
     /// `https://mcp.example.com/mcp`). Set → oas2mcp acts as an OAuth protected
@@ -573,16 +573,16 @@ pub struct Cli {
     /// `WWW-Authenticate` challenge (unless a public tool lets an
     /// anonymous one through), and the Protected Resource Metadata
     /// (RFC 9728) is served under `/.well-known/oauth-protected-resource`,
-    /// naming the `--oauth-expected-issuer` values as the authorization servers.
+    /// naming the `--inbound-expected-issuer` values as the authorization servers.
     /// That is what lets a client discover where to obtain a token on its own.
-    /// Requires a JWKS and at least one `--oauth-expected-issuer`.
+    /// Requires a JWKS and at least one `--inbound-expected-issuer`.
     /// Only used by `streamable-http`.
     #[arg(
-        long = "oauth-resource",
-        env = "OAUTH_RESOURCE",
-        requires = "oauth_jwks"
+        long = "inbound-resource",
+        env = "INBOUND_RESOURCE",
+        requires = "inbound_jwks"
     )]
-    pub oauth_resource: Option<Url>,
+    pub inbound_resource: Option<Url>,
 
     /// Name of a JWT claim to surface in the per-call tracing log as a
     /// `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`), for observability.
@@ -843,28 +843,32 @@ mod tests {
 
     #[test]
     fn a_role_mapper_needs_a_jwks() {
-        let mapper = ["oas2mcp", "--oauth-role-mapper", "a:.*"];
+        let mapper = ["oas2mcp", "--inbound-role-mapper", "a:.*"];
         assert!(Cli::try_parse_from(mapper).is_err());
         Cli::try_parse_from(
             mapper
                 .iter()
-                .chain(&["--oauth-jwks-url", "https://idp/jwks"]),
+                .chain(&["--inbound-jwks-url", "https://idp/jwks"]),
         )
         .expect("with a JWKS it parses");
-        Cli::try_parse_from(["oas2mcp", "--oauth-jwks-file", "jwks.json"])
+        Cli::try_parse_from(["oas2mcp", "--inbound-jwks-file", "jwks.json"])
             .expect("a JWKS alone is enough");
     }
 
     #[test]
     fn the_protected_resource_needs_a_jwks() {
         // Without one no token could ever satisfy the challenge.
-        let resource = ["oas2mcp", "--oauth-resource", "https://mcp.example.com/mcp"];
+        let resource = [
+            "oas2mcp",
+            "--inbound-resource",
+            "https://mcp.example.com/mcp",
+        ];
         assert!(Cli::try_parse_from(resource).is_err());
 
-        let cli = Cli::try_parse_from(resource.iter().chain(&["--oauth-jwks-file", "jwks.json"]))
+        let cli = Cli::try_parse_from(resource.iter().chain(&["--inbound-jwks-file", "jwks.json"]))
             .expect("with a JWKS it parses");
         assert_eq!(
-            cli.oauth_resource.map(String::from).as_deref(),
+            cli.inbound_resource.map(String::from).as_deref(),
             Some("https://mcp.example.com/mcp")
         );
     }
