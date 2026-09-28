@@ -2,8 +2,11 @@
 
 # --- chef: cargo-chef base ---------------------------------------------------
 FROM rust:1-bookworm AS chef
-RUN cargo install cargo-chef --locked
 WORKDIR /usr/local/src/oas2mcp
+# Before `cook`: otherwise the dependencies are built with the image's rustc and
+# rebuilt from scratch by the pinned one once the sources are copied in.
+COPY rust-toolchain.toml .
+RUN rustup toolchain install && cargo install cargo-chef --locked
 
 # --- planner: capture the dependency recipe ----------------------------------
 FROM chef AS planner
@@ -23,13 +26,13 @@ RUN cargo build --release --locked
 # (aws-lc-sys). Distroless ships no shell, no package manager and no OS package
 # layer, so an image scanner finds essentially nothing to flag — unlike
 # debian:bookworm-slim, whose ~20 unfixed HIGH/CRITICAL advisories we used to
-# carry. TLS roots (ca-certificates) and a nonroot user (uid 65532) are baked
+# carry. TLS roots (ca-certificates) and a nonroot user (65532:65532) are baked
 # into the image.
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 COPY --from=builder \
      /usr/local/src/oas2mcp/target/release/oas2mcp /usr/local/bin/oas2mcp
 
-USER nonroot
+USER 65532:65532
 # Default to the remote transport; override TRANSPORT/BIND_ADDR as needed.
 ENV TRANSPORT=streamable-http \
     BIND_ADDR=0.0.0.0:8000

@@ -86,7 +86,8 @@ writing a line of glue code.
 
 ## Install
 
-Requires a recent Rust toolchain (edition 2024).
+Requires `rustup`: the toolchain version is pinned in `rust-toolchain.toml` and
+installed on the first `cargo` invocation.
 
 ```bash
 cargo build --release
