@@ -449,9 +449,11 @@ pub struct Cli {
     pub upstream_oauth_audience: Option<String>,
 
     /// Restrict which tools an authenticated caller may see and invoke based on
-    /// the roles carried in their JWT, as `role:tool_name_regex` (e.g.
+    /// the roles carried in their JWT, as `role:operation_regex` (e.g.
     /// `admin:.*`, `reader:^get`). Repeatable; a tool is allowed if any of the
-    /// caller's roles maps to a regex matching the tool name. The roles are read
+    /// caller's roles maps to a regex matching its operation name: the
+    /// `operationId` (or `<method>_<path>`) before `--rename`, like the
+    /// filters. The roles are read
     /// from the `--oauth-role-claim` claim. Unset, any authenticated caller may
     /// use every tool. Requires `--oauth-jwks-url` or `--oauth-jwks-file`.
     /// Invalid regexes are rejected at startup. When set via the environment
@@ -537,7 +539,8 @@ pub struct Cli {
     )]
     pub oauth_role_claim: String,
 
-    /// Regex over tool names naming the tools anyone may list and call, token or
+    /// Regex over operation names (the `operationId` before `--rename`, like the
+    /// filters) naming the tools anyone may list and call, token or
     /// not (e.g. `^get_public_`). Repeatable. An authenticated caller gets these
     /// on top of what their roles grant. With `--oauth-resource`, a caller
     /// without a token is let in and only challenged when it calls a tool that

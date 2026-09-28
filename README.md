@@ -72,7 +72,7 @@ writing a line of glue code.
   authorization, instead of every call arriving as one shared service account.
 - **Caller authentication and role-based tool access** — verify the caller's
   JWT against a JWKS, and optionally gate which tools they can see and call by
-  mapping each `role` to a tool-name regex
+  mapping each `role` to a regex over operation names
   (`streamable-http` only). Tools matching `--oauth-public-tool` stay open to
   everyone, token or not.
 - **MCP authorization discovery** — with `--oauth-resource`, `/mcp` behaves as
@@ -151,13 +151,13 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--upstream-oauth-issuer` | `UPSTREAM_OAUTH_ISSUER` | client id | `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. |
 | `--upstream-oauth-subject` | `UPSTREAM_OAUTH_SUBJECT` | —      | Fixed `sub` for the assertion — a service account. Every caller shares one token. Mutually exclusive with the claim below. |
 | `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs a JWKS (`--oauth-jwks-url`/`--oauth-jwks-file`) and `streamable-http`. |
-| `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:tool_name_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Unset → any authenticated caller may use every tool. Requires a JWKS source below. |
+| `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:operation_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Unset → any authenticated caller may use every tool. Requires a JWKS source below. |
 | `--oauth-jwks-url` | `OAUTH_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Set (or `--oauth-jwks-file`) → callers are authenticated from their JWT; without a valid one they get the public tools only. `streamable-http` only. |
 | `--oauth-jwks-file` | `OAUTH_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--oauth-jwks-url`. |
 | `--oauth-expected-audience` | `OAUTH_EXPECTED_AUDIENCES` | — | Audience the incoming JWT's `aud` must match. Repeatable. **Set this**: unset, a token your provider minted for another service is accepted here. |
 | `--oauth-expected-issuer` | `OAUTH_EXPECTED_ISSUERS` | —      | Issuer the incoming JWT's `iss` must match. Repeatable. Defence in depth next to the JWKS. |
 | `--oauth-clock-skew` | `OAUTH_CLOCK_SKEW` | `60s`            | Skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). |
-| `--oauth-public-tool` | `OAUTH_PUBLIC_TOOLS` | —      | Tool-name regex for tools anyone may list and call, without a token. Repeatable; newline-separated via the env var. Authenticated callers get them on top of their roles. Needs `--oauth-role-mapper`. |
+| `--oauth-public-tool` | `OAUTH_PUBLIC_TOOLS` | —      | Regex over operation names (before `--rename`) for tools anyone may list and call, without a token. Repeatable; newline-separated via the env var. Authenticated callers get them on top of their roles. Needs `--oauth-role-mapper`. |
 | `--oauth-resource` | `OAUTH_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests (beyond the public tools) get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--oauth-role-mapper` and `--oauth-expected-issuer`. `streamable-http` only. |
 | `--oauth-role-claim` | `OAUTH_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
 | `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs a JWKS. |
@@ -453,9 +453,10 @@ with a `401` that tells it where to log in (see
 [below](#letting-mcp-clients-find-the-authorization-server)).
 
 When callers have different privileges, add one or more `--oauth-role-mapper`
-entries of the form `role:tool_name_regex`: a tool is then visible (in
+entries of the form `role:operation_regex`: a tool is then visible (in
 `tools/list`) and callable (in `tools/call`) only when one of the caller's roles
-maps to a regex matching the tool name. The roles are read from the
+maps to a regex matching its operation name — the `operationId` before
+`--rename`, like the filters. The roles are read from the
 `--oauth-role-claim` claim (default `roles`; an array of strings or a
 whitespace-separated string), and a caller whose roles match no mapping gets
 the public tools only.
@@ -745,8 +746,8 @@ Two things to know about the syntax:
 **Filters keep matching the name *before* renaming** — the `operationId`, or the
 `<method>_<path>` fallback. That is deliberate: an existing curated
 `--include`/`--exclude` allowlist goes on working untouched when you add or edit
-rename rules. `--oauth-role-mapper` is the other way round: it matches the tool
-name as advertised, i.e. after renaming.
+rename rules. `--oauth-role-mapper` and `--oauth-public-tool` match that same
+name, so editing a rename rule never changes who may use which tool.
 
 Whatever the rules leave behind is sanitised to `[A-Za-z0-9_-]` and then capped
 at `--max-name-len` (64 by default; set it to 56 if a `gitlab__` gateway prefix

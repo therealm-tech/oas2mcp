@@ -52,7 +52,7 @@ how it is put together.
   visibility on `tools/list` and `tools/call`, and executes calls.
 - **[`auth`](src/auth.rs)** — `Authorizer`: verifies the caller's JWT against a
   JWKS (signature, `exp`, optionally `aud`/`iss`), extracts roles, the delegation
-  subject and traced claims, and matches roles to tool-name regexes.
+  subject and traced claims, and matches roles to operation-name regexes.
 - **[`oauth`](src/oauth/mod.rs)** — `TokenProvider`: obtains, caches and
   refreshes OAuth tokens for the document fetch and for upstream calls, with a
   client secret or a signed assertion, and per-caller tokens for the
