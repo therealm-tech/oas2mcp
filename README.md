@@ -121,6 +121,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--openapi-file`  | `OPENAPI_FILE`   | —                | Path to an OpenAPI document (JSON or YAML) on disk.                |
 | `--openapi-url`   | `OPENAPI_URL`    | —                | URL of an OpenAPI document fetched at startup (and on each reload).|
 | `--openapi-header`| `OPENAPI_HEADERS`| —                | `Name: Value` header sent when fetching `--openapi-url` (e.g. for a private document). Repeatable. |
+| `--openapi-auth`  | `OPENAPI_AUTH`   | `own`            | Credentials for the document fetch: `own` (`--openapi-header`, `--openapi-oauth-*`) or `upstream` (`--header` and the `--upstream-oauth-*` token). |
 | `--reload-every`  | `RELOAD_EVERY`   | —                | Re-fetch `--openapi-url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Off by default; ignored for a file source. |
 | `--openapi-oauth-token-url` | `OPENAPI_OAUTH_TOKEN_URL` | — | OAuth2 `client_credentials` token endpoint. Set → the document fetch uses an auto-refreshed bearer token. Requires `--openapi-oauth-client-id` plus one of the two credentials below. |
 | `--openapi-oauth-client-id` | `OPENAPI_OAUTH_CLIENT_ID` | — | OAuth2 client ID for the document-fetch token.                     |
@@ -255,6 +256,27 @@ loaded tool set is kept, so a transient upstream blip never empties the server.
 the server does not yet emit an MCP `tools/list_changed` notification, so a
 connected client picks up the new tools on its next `tools/list` call.
 
+#### Fetching the document with the upstream credentials
+
+When the API serves its own document, the credentials that call it can fetch
+the document too. `--openapi-auth upstream` sends the document request with
+`--header` and the `--upstream-oauth-*` token, so none of the `--openapi-header`
+/ `--openapi-oauth-*` flags need repeating:
+
+```bash
+oas2mcp \
+  --openapi-url https://api.example.com/openapi.json \
+  --openapi-auth upstream \
+  --upstream-oauth-token-url https://idp.example.com/oauth/token \
+  --upstream-oauth-client-id "$CLIENT_ID" \
+  --upstream-oauth-client-secret "$CLIENT_SECRET"
+```
+
+Setting an `--openapi-header` or `--openapi-oauth-*` flag alongside it is refused,
+since it would never be read. So is an upstream token obtained per caller
+(`jwt-bearer` without `--upstream-oauth-subject`, or `jwt-bearer-relay`): the
+document fetch has no caller to act for.
+
 #### OAuth for the document fetch
 
 A static `--openapi-header` bearer token works for a one-shot fetch, but on a
@@ -279,7 +301,7 @@ oas2mcp \
 Client authentication uses HTTP Basic against the token endpoint (RFC 6749).
 The OAuth bearer takes precedence over any static `Authorization` set via
 `--openapi-header`. This auth covers the **document fetch only**; upstream API
-calls still use `--header` / `--forward-header`.
+calls are configured separately (see [below](#oauth-for-the-upstream-api)).
 
 ##### Authenticating with a signed assertion instead of a secret
 

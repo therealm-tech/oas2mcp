@@ -32,6 +32,8 @@ oas2mcp:
       name: ~
       # -- Key in that Secret holding the newline-separated `Name: Value` headers.
       key: OPENAPI_HEADERS
+    # -- (string) Credentials for fetching `url`: `own` (`headers` and `oauth` here) or `upstream` (the `upstream` headers and OAuth token, for an API that serves its own document; `headers` and `oauth` here must then be empty, and the upstream token must not be per caller). Unset → the binary default (`own`). Maps to `OPENAPI_AUTH`.
+    auth: ~
     # -- (string) Re-fetch `url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Unset → load once at startup. Ignored with `inline`.
     reloadEvery: ~
     oauth:

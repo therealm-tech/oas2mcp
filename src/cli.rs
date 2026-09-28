@@ -74,6 +74,25 @@ impl std::fmt::Display for UpstreamGrant {
     }
 }
 
+/// Which credentials authenticate the OpenAPI document fetch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum DocumentAuth {
+    /// Its own: `--openapi-header` and `--openapi-oauth-*`.
+    Own,
+    /// The upstream API's: `--header` and the `--upstream-oauth-*` token.
+    Upstream,
+}
+
+impl std::fmt::Display for DocumentAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Own => "own",
+            Self::Upstream => "upstream",
+        })
+    }
+}
+
 /// MCP transport to expose the server over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
@@ -154,6 +173,15 @@ pub struct Cli {
     /// file rather than a URL.
     #[arg(long, env = "RELOAD_EVERY", value_parser = humantime::parse_duration)]
     pub reload_every: Option<Duration>,
+
+    /// Which credentials fetch the document from `--openapi-url`. `own` (the
+    /// default) uses `--openapi-header` and `--openapi-oauth-*`. `upstream`
+    /// reuses those of the upstream API calls, `--header` and the
+    /// `--upstream-oauth-*` token, for an API that serves its own document —
+    /// then no `--openapi-header` or `--openapi-oauth-*` flag may be set, and
+    /// the upstream token must not be obtained per caller.
+    #[arg(long = "openapi-auth", env = "OPENAPI_AUTH", default_value_t = DocumentAuth::Own)]
+    pub openapi_auth: DocumentAuth,
 
     /// OAuth 2.0 token endpoint for the `client_credentials` grant. When set,
     /// the OpenAPI document fetch (initial and every reload) authenticates with
