@@ -265,9 +265,20 @@ oas2mcp http \
 The interval accepts any `humantime` duration (`30s`, `5m`, `1h`, `90m`, …).
 If a reload fails to fetch or parse, the error is logged and the previously
 loaded tool set is kept, so a transient upstream blip never empties the server.
-`--reload-every` is ignored when the document is loaded from a file. Note that
-the server does not yet emit an MCP `tools/list_changed` notification, so a
-connected client picks up the new tools on its next `tools/list` call.
+`--reload-every` is ignored when the document is loaded from a file.
+
+When a reload changes the advertised tools (a tool added or removed, a new
+description or input schema), the server sends
+`notifications/tools/list_changed`, and it advertises `tools.listChanged` only
+when the document is reloaded. A client receives the notification when it has
+a channel to receive it on:
+
+- a client using protocol `2026-07-28` receives it on its
+  `subscriptions/listen` stream, on every transport;
+- an older client receives it on `stdio`, `sse`, and `http --stream-responses`
+  (on its `GET /mcp` stream). Plain `http` is stateless and keeps no stream
+  open for an older client, which picks up the new tools on its next
+  `tools/list` call.
 
 #### Fetching the document with the upstream credentials
 

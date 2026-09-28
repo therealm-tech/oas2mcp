@@ -107,20 +107,24 @@ async fn serve_streamable_http(
     server: OpenApiServer,
 ) -> anyhow::Result<()> {
     let public = server.clone();
+    // rmcp only honours `json_response` in stateless mode: the session
+    // path always replies over SSE (with a priming event) regardless. So
+    // enabling JSON replies means turning legacy sessions off too. That
+    // is fine behind a proxy — oas2mcp is a stateless request/response
+    // proxy, and a gateway like Envoy manages MCP sessions itself.
+    let config = StreamableHttpServerConfig::default()
+        .with_json_response(json_response)
+        .with_legacy_session_mode(!json_response)
+        .with_allowed_hosts(resolve_allowed_hosts(bind, allowed_hosts))
+        .with_max_request_body_bytes(MAX_REQUEST_BODY_BYTES);
+    // Session and `subscriptions/listen` streams stay open until the client
+    // leaves; without closing them, a graceful shutdown would wait on them.
+    let streams = config.cancellation_token.clone();
     // One server instance is built per MCP session.
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),
-        // rmcp only honours `json_response` in stateless mode: the session
-        // path always replies over SSE (with a priming event) regardless. So
-        // enabling JSON replies means turning legacy sessions off too. That
-        // is fine behind a proxy — oas2mcp is a stateless request/response
-        // proxy, and a gateway like Envoy manages MCP sessions itself.
-        StreamableHttpServerConfig::default()
-            .with_json_response(json_response)
-            .with_legacy_session_mode(!json_response)
-            .with_allowed_hosts(resolve_allowed_hosts(bind, allowed_hosts))
-            .with_max_request_body_bytes(MAX_REQUEST_BODY_BYTES),
+        config,
     );
     // The access log wraps `rmcp`'s service: most of its rejections happen in
     // there, and this is the only place they become visible.
@@ -136,7 +140,10 @@ async fn serve_streamable_http(
     tracing::info!(%bind, "Streamable HTTP MCP endpoint listening at POST /mcp");
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            streams.cancel();
+        })
         .await
         .context("Streamable HTTP server failed")?;
     Ok(())

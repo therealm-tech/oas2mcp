@@ -22,6 +22,7 @@ tokio = { version = "1", features = [
     "io-std",
     "fs",
     "net",
+    "sync",
     "time",
 ] }
 tokio-stream = "0.1"
@@ -84,3 +85,5 @@ uuid = { version = "1.24.0", features = ["v4"] }
 [dev-dependencies]
 # `ServiceExt::oneshot`, to drive an axum router in a test without a socket.
 tower = { version = "0.5", features = ["util"] }
+# An in-process MCP client, to check what a connected client receives.
+rmcp = { version = "3.1", features = ["client"] }
