@@ -68,13 +68,9 @@ oas2mcp:
         # -- (string) How long a client assertion stays valid (e.g. `30s`, `2m`). Unset → the binary default (`60s`). Maps to `OPENAPI_OAUTH_ASSERTION_LIFETIME`.
         assertionLifetime: ~
 
-  # -- Filter which OpenAPI operations are exposed as tools. An operation is kept if it matches any `include`/`includeRegex`/`includeTags` allowlist (or all allowlists are empty), then dropped if it matches any `exclude`/`excludeRegex`/`excludeTags`. Use it to cut a large API down to a usable tool set.
+  # -- Filter which OpenAPI operations are exposed as tools. An operation is kept if it matches any `includeRegex`/`includeTags` allowlist (or both are empty), then dropped if it matches any `excludeRegex`/`excludeTags`. Use it to cut a large API down to a usable tool set.
   operations:
-    # -- (list) Glob allowlist on the operation name (operationId, or `<method>_<path>`); `*` and `?` supported. Maps to `INCLUDE_OPERATIONS`.
-    include: []
-    # -- (list) Glob denylist on the operation name; takes precedence over the allowlist. Maps to `EXCLUDE_OPERATIONS`.
-    exclude: []
-    # -- (list) Regex allowlist on the operation name (e.g. `^(get|post)ApiV4Projects`). Maps to `INCLUDE_OPERATIONS_REGEX`.
+    # -- (list) Regex allowlist on the operation name (operationId, or `<method>_<path>`; e.g. `^(get|post)ApiV4Projects`). Maps to `INCLUDE_OPERATIONS_REGEX`.
     includeRegex: []
     # -- (list) Regex denylist on the operation name; takes precedence over the allowlist. Maps to `EXCLUDE_OPERATIONS_REGEX`.
     excludeRegex: []

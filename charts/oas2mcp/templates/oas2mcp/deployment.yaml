@@ -219,14 +219,6 @@ spec:
             - name: UPSTREAM_OAUTH_AUDIENCE
               value: {{ . | quote }}
             {{- end }}
-            {{- with .Values.oas2mcp.operations.include }}
-            - name: INCLUDE_OPERATIONS
-              value: {{ join "\n" . | quote }}
-            {{- end }}
-            {{- with .Values.oas2mcp.operations.exclude }}
-            - name: EXCLUDE_OPERATIONS
-              value: {{ join "\n" . | quote }}
-            {{- end }}
             {{- with .Values.oas2mcp.operations.includeRegex }}
             - name: INCLUDE_OPERATIONS_REGEX
               value: {{ join "\n" . | quote }}

@@ -578,8 +578,6 @@ fn build_snapshot(spec: &Spec, cli: &Cli) -> anyhow::Result<Snapshot> {
     let base_url = resolve_base_url(spec, cli)?;
 
     let filter = OperationFilter::new(FilterConfig {
-        include_globs: cli.include_operations.clone(),
-        exclude_globs: cli.exclude_operations.clone(),
         include_regexes: cli.include_operations_regex.clone(),
         exclude_regexes: cli.exclude_operations_regex.clone(),
         include_tags: cli.include_tags.clone(),
