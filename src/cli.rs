@@ -586,22 +586,10 @@ pub struct Cli {
     pub otel_service_name: String,
 
     /// Only expose operations whose name (operationId, or `<method>_<path>`)
-    /// matches this glob. Repeatable; an operation is kept if it matches any
-    /// `--include` or carries any `--tag`. Globs support `*` and `?`. Use it to
-    /// cut a huge API down to a usable tool set. When set via the environment
-    /// variable, separate patterns with newlines.
-    #[arg(long = "include", env = "INCLUDE_OPERATIONS", value_delimiter = '\n')]
-    pub include_operations: Vec<String>,
-
-    /// Drop operations whose name matches this glob. Repeatable; takes
-    /// precedence over `--include`/`--tag`. When set via the environment
-    /// variable, separate patterns with newlines.
-    #[arg(long = "exclude", env = "EXCLUDE_OPERATIONS", value_delimiter = '\n')]
-    pub exclude_operations: Vec<String>,
-
-    /// Only expose operations whose name matches this regex (e.g.
-    /// `^(get|post)ApiV4Projects`). Repeatable; combines with `--include`/`--tag`
-    /// as an allowlist. Invalid patterns are rejected at startup. When set via
+    /// matches this regex (e.g. `^(get|post)ApiV4Projects`). Unanchored unless
+    /// the pattern anchors itself. Repeatable; an operation is kept if it
+    /// matches any `--include-regex` or carries any `--tag`. Use it to cut a
+    /// huge API down to a usable tool set. Invalid patterns are rejected at startup. When set via
     /// the environment variable, separate patterns with newlines.
     #[arg(
         long = "include-regex",
@@ -623,7 +611,7 @@ pub struct Cli {
     pub exclude_operations_regex: Vec<Regex>,
 
     /// Only expose operations carrying this OpenAPI tag (case-insensitive).
-    /// Repeatable; combines with `--include` as an allowlist. When set via the
+    /// Repeatable; combines with `--include-regex` as an allowlist. When set via the
     /// environment variable, separate tags with newlines.
     #[arg(long = "tag", env = "INCLUDE_TAGS", value_delimiter = '\n')]
     pub include_tags: Vec<String>,
@@ -643,7 +631,7 @@ pub struct Cli {
     /// name is taken.
     ///
     /// Renaming happens **after** filtering, which keeps matching the raw
-    /// `operationId`: an existing `--include`/`--exclude` allowlist is unaffected
+    /// `operationId`: an existing `--include-regex`/`--exclude-regex` allowlist is unaffected
     /// by the rules added here. Invalid patterns are rejected at startup. When
     /// set via the environment variable, separate rules with newlines.
     ///
