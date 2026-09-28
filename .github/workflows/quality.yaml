@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: install the Rust toolchain
-        run: rustup component add rustfmt clippy
+        run: rustup toolchain install
 
       - name: cache cargo build artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
@@ -58,9 +58,10 @@ jobs:
             | sudo tar -xz -C /usr/local/bin actionlint
 
       - name: install hadolint
-        env:
-          HADOLINT_VERSION: "2.12.0"
+        # The hook runs the binary on PATH and ignores its own `rev`, so the
+        # version is read from there to keep the one Dependabot bumps in force.
         run: |
+          HADOLINT_VERSION="$(yq '.repos[] | select(.repo == "https://github.com/hadolint/hadolint") | .rev | sub("^v"; "")' .pre-commit-config.yaml)"
           sudo curl -fsSL -o /usr/local/bin/hadolint \
             "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64"
           sudo chmod +x /usr/local/bin/hadolint
@@ -79,7 +80,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: install the Rust toolchain
-        run: rustup component add clippy
+        run: rustup toolchain install
 
       - name: cache cargo build artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
@@ -111,7 +112,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: install the Rust toolchain
-        run: rustup component add clippy
+        run: rustup toolchain install
 
       - name: cache cargo build artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
