@@ -136,8 +136,8 @@ spec:
             - name: OPENAPI_OAUTH_SCOPES
               value: {{ join "\n" . | quote }}
             {{- end }}
-            {{- with .Values.oas2mcp.openapi.oauth.audience }}
-            - name: OPENAPI_OAUTH_AUDIENCE
+            {{- with .Values.oas2mcp.openapi.oauth.tokenAudience }}
+            - name: OPENAPI_OAUTH_TOKEN_AUDIENCE
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.openapi.auth }}
@@ -219,8 +219,8 @@ spec:
             - name: UPSTREAM_OAUTH_SCOPES
               value: {{ join "\n" . | quote }}
             {{- end }}
-            {{- with .Values.oas2mcp.upstream.oauth.audience }}
-            - name: UPSTREAM_OAUTH_AUDIENCE
+            {{- with .Values.oas2mcp.upstream.oauth.tokenAudience }}
+            - name: UPSTREAM_OAUTH_TOKEN_AUDIENCE
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.operations.includeRegex }}

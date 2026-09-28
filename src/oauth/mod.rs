@@ -130,7 +130,7 @@ struct GrantFlags<'a> {
     assertion_audience: Option<&'a String>,
     assertion_lifetime: Option<Duration>,
     scopes: &'a [String],
-    audience: Option<&'a String>,
+    token_audience: Option<&'a String>,
     /// The §2.1 grant, when this endpoint supports one. The document fetch never
     /// does — there is no caller to act on behalf of when loading a document.
     jwt_bearer: Option<JwtBearerFlags<'a>>,
@@ -157,7 +157,7 @@ fn document_flags(cli: &Cli) -> Option<GrantFlags<'_>> {
         assertion_audience: cli.openapi_oauth_assertion_audience.as_ref(),
         assertion_lifetime: cli.openapi_oauth_assertion_lifetime,
         scopes: &cli.openapi_oauth_scopes,
-        audience: cli.openapi_oauth_audience.as_ref(),
+        token_audience: cli.openapi_oauth_token_audience.as_ref(),
         jwt_bearer: None,
     })
 }
@@ -175,7 +175,7 @@ fn upstream_flags(cli: &Cli) -> Option<GrantFlags<'_>> {
         assertion_audience: cli.upstream_oauth_assertion_audience.as_ref(),
         assertion_lifetime: cli.upstream_oauth_assertion_lifetime,
         scopes: &cli.upstream_oauth_scopes,
-        audience: cli.upstream_oauth_audience.as_ref(),
+        token_audience: cli.upstream_oauth_token_audience.as_ref(),
         jwt_bearer: (cli.upstream_oauth_grant != UpstreamGrant::ClientCredentials).then(|| {
             JwtBearerFlags {
                 relay: cli.upstream_oauth_grant == UpstreamGrant::JwtBearerRelay,
@@ -308,7 +308,7 @@ impl TokenConfig {
             client_auth,
             grant,
             scopes: flags.scopes.to_vec(),
-            audience: flags.audience.cloned(),
+            audience: flags.token_audience.cloned(),
         })
     }
 }
@@ -362,7 +362,7 @@ mod tests {
             "secret",
             "--openapi-oauth-scope",
             "read:openapi",
-            "--openapi-oauth-audience",
+            "--openapi-oauth-token-audience",
             "api://target",
         ]);
         let config = TokenConfig::for_document(&cli)

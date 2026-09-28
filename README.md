@@ -132,7 +132,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--openapi-oauth-assertion-audience` | `OPENAPI_OAUTH_ASSERTION_AUDIENCE` | token endpoint | `aud` claim of the client assertion. Override when the provider expects its issuer identifier rather than the token endpoint URL. |
 | `--openapi-oauth-assertion-lifetime` | `OPENAPI_OAUTH_ASSERTION_LIFETIME` | `60s` | How long a client assertion stays valid (e.g. `30s`, `2m`). |
 | `--openapi-oauth-scope` | `OPENAPI_OAUTH_SCOPES` | —          | OAuth2 scope requested (sent space-joined). Repeatable; newline-separated via the env var. |
-| `--openapi-oauth-audience` | `OPENAPI_OAUTH_AUDIENCE` | —    | OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0). |
+| `--openapi-oauth-token-audience` | `OPENAPI_OAUTH_TOKEN_AUDIENCE` | —    | OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0). |
 | `--base-url`      | `BASE_URL`       | spec `servers`   | Upstream API base URL that tool calls are proxied to.              |
 | `--ca-cert`       | `CA_CERT_FILE`   | —                | Path to a PEM file with extra CA certificate(s) to trust for every outbound TLS connection (upstream, document fetch, OAuth, JWKS). Added on top of the built-in roots, so only your private/corporate CA is needed. Repeatable; newline-separated via the env var. |
 | `--header`        | `UPSTREAM_HEADERS` | —              | Extra `Name: Value` header on every upstream request. Repeatable.  |
@@ -146,7 +146,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--upstream-oauth-assertion-audience` | `UPSTREAM_OAUTH_ASSERTION_AUDIENCE` | token endpoint | `aud` claim of the upstream client assertion. |
 | `--upstream-oauth-assertion-lifetime` | `UPSTREAM_OAUTH_ASSERTION_LIFETIME` | `60s` | Upstream client assertion validity window. |
 | `--upstream-oauth-scope` | `UPSTREAM_OAUTH_SCOPES` | —          | OAuth2 scope requested for the upstream token. Repeatable; newline-separated via the env var. |
-| `--upstream-oauth-audience` | `UPSTREAM_OAUTH_AUDIENCE` | —      | OAuth2 `audience` parameter for the upstream token (e.g. Auth0). |
+| `--upstream-oauth-token-audience` | `UPSTREAM_OAUTH_TOKEN_AUDIENCE` | —      | OAuth2 `audience` parameter for the upstream token (e.g. Auth0). |
 | `--upstream-oauth-grant` | `UPSTREAM_OAUTH_GRANT` | `client-credentials` | `client-credentials`; `jwt-bearer` (RFC 7523 §2.1) to obtain the token on behalf of a subject with an assertion oas2mcp signs; or `jwt-bearer-relay` to relay the caller's own JWT as that assertion. |
 | `--upstream-oauth-issuer` | `UPSTREAM_OAUTH_ISSUER` | client id | `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. |
 | `--upstream-oauth-subject` | `UPSTREAM_OAUTH_SUBJECT` | —      | Fixed `sub` for the assertion — a service account. Every caller shares one token. Mutually exclusive with the claim below. |
@@ -359,7 +359,7 @@ oas2mcp \
   --upstream-oauth-client-id "$CLIENT_ID" \
   --upstream-oauth-client-secret "$CLIENT_SECRET" \
   --upstream-oauth-scope read:pets \
-  --upstream-oauth-audience 'https://api.example.com'
+  --upstream-oauth-token-audience 'https://api.example.com'
 ```
 
 This is configured independently of `--openapi-oauth-*`: the document and the
