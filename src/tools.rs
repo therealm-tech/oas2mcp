@@ -607,7 +607,7 @@ paths:
     #[test]
     fn filter_restricts_the_built_tool_set() {
         let only_get = OperationFilter::new(FilterConfig {
-            include_globs: vec!["getPet".into()],
+            include_regexes: vec![regex::Regex::new("^getPet$").unwrap()],
             ..Default::default()
         });
         let tools = build_tools(&spec_from(PETSTORE), &only_get, &ToolRenamer::default());
@@ -628,7 +628,7 @@ paths:
         // The guarantee a curated allowlist of `operationId`s depends on: rename
         // rules never move the target the filter is aiming at.
         let only_get = OperationFilter::new(FilterConfig {
-            include_globs: vec!["getPet".into()],
+            include_regexes: vec![regex::Regex::new("^getPet$").unwrap()],
             ..Default::default()
         });
         let tools = build_tools(
@@ -642,7 +642,7 @@ paths:
         // And the reverse: a filter written against the *renamed* name matches
         // nothing, because renaming happens afterwards.
         let renamed_only = OperationFilter::new(FilterConfig {
-            include_globs: vec!["fetch_animal".into()],
+            include_regexes: vec![regex::Regex::new("^fetch_animal$").unwrap()],
             ..Default::default()
         });
         let tools = build_tools(

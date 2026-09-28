@@ -160,8 +160,6 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--oauth-resource` | `OAUTH_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests (beyond the public tools) get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--oauth-role-mapper` and `--oauth-expected-issuer`. `streamable-http` only. |
 | `--oauth-role-claim` | `OAUTH_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
 | `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs a JWKS. |
-| `--include`       | `INCLUDE_OPERATIONS` | —            | Only expose operations whose name matches this glob (`*`/`?`). Repeatable. |
-| `--exclude`       | `EXCLUDE_OPERATIONS` | —            | Drop operations whose name matches this glob. Repeatable. Wins over `--include`/`--tag`. |
 | `--include-regex` | `INCLUDE_OPERATIONS_REGEX` | —      | Only expose operations whose name matches this regex. Repeatable. |
 | `--exclude-regex` | `EXCLUDE_OPERATIONS_REGEX` | —      | Drop operations whose name matches this regex. Repeatable. Wins over the allowlist. |
 | `--tag`           | `INCLUDE_TAGS`   | —                | Only expose operations carrying this OpenAPI tag (case-insensitive). Repeatable. |
@@ -675,18 +673,17 @@ honours the standard `OTEL_EXPORTER_OTLP_*` environment variables.
 A large API turns into a huge tool set: GitLab's OpenAPI document defines ~1700
 operations, whose `tools/list` payload is on the order of **half a million
 tokens** — it does not fit a model's context, and most MCP clients choke well
-before that. Use `--include`/`--exclude` (name globs),
-`--include-regex`/`--exclude-regex` (name regexes) and `--tag`/`--exclude-tag`
-(OpenAPI tags) to advertise only the operations you actually need.
+before that. Use `--include-regex`/`--exclude-regex` (operation names) and
+`--tag`/`--exclude-tag` (OpenAPI tags) to advertise only the operations you
+actually need.
 
 An operation is kept when it passes **both** tests: it matches the allowlist
-(any `--include` glob, any `--include-regex`, **or** any `--tag`; an empty
-allowlist means "everything") and it does not match the denylist
-(`--exclude` / `--exclude-regex` / `--exclude-tag`, which always win). Name
-patterns match the tool name — the `operationId`, or the `<method>_<path>`
-fallback. Globs support `*` (any run) and `?` (one character); regexes use the
+(any `--include-regex` **or** any `--tag`; an empty allowlist means
+"everything") and it does not match the denylist (`--exclude-regex` /
+`--exclude-tag`, which always win). Name patterns match the operation name —
+the `operationId`, or the `<method>_<path>` fallback — with the
 [`regex`](https://docs.rs/regex) crate syntax (case-insensitive via a leading
-`(?i)`) and are unanchored unless you anchor them with `^`/`$`.
+`(?i)`), unanchored unless you anchor them with `^`/`$`.
 
 ```bash
 # Expose only the Projects and Merge requests endpoints of GitLab:
@@ -696,7 +693,7 @@ oas2mcp \
 # ~1700 operations → 114 tools (a ~9× smaller tools/list)
 
 # Or select by name and drop the deprecated ones:
-oas2mcp --openapi-file api.yaml --include 'getApiV4Projects*' --exclude '*Deprecated'
+oas2mcp --openapi-file api.yaml --include-regex '^getApiV4Projects' --exclude-regex 'Deprecated$'
 
 # Read-only Projects/Groups endpoints, via a regex:
 oas2mcp --openapi-file api.yaml --include-regex '^getApiV4(Projects|Groups)'
@@ -744,7 +741,7 @@ Two things to know about the syntax:
 
 **Filters keep matching the name *before* renaming** — the `operationId`, or the
 `<method>_<path>` fallback. That is deliberate: an existing curated
-`--include`/`--exclude` allowlist goes on working untouched when you add or edit
+`--include-regex`/`--exclude-regex` allowlist goes on working untouched when you add or edit
 rename rules. `--oauth-role-mapper` and `--oauth-public-tool` match that same
 name, so editing a rename rule never changes who may use which tool.
 
