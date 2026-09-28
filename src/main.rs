@@ -160,7 +160,7 @@ async fn main() -> anyhow::Result<()> {
 /// avoid.
 fn check_delegation_is_possible(cli: &Cli, has_authorizer: bool) -> anyhow::Result<()> {
     let delegates = cli.upstream_oauth_token_url.is_some()
-        && cli.upstream_oauth_grant == cli::UpstreamGrant::JwtBearer
+        && cli.upstream_oauth_grant != cli::UpstreamGrant::ClientCredentials
         && cli.upstream_oauth_subject.is_none();
     if !delegates {
         return Ok(());
@@ -168,22 +168,25 @@ fn check_delegation_is_possible(cli: &Cli, has_authorizer: bool) -> anyhow::Resu
 
     if !has_authorizer {
         anyhow::bail!(
-            "--upstream-oauth-grant jwt-bearer acts on behalf of the caller, which needs a \
+            "--upstream-oauth-grant {} acts on behalf of the caller, which needs a \
              verified caller identity: configure --oauth-jwks-url or --oauth-jwks-file, or pin a \
-             fixed identity with --upstream-oauth-subject"
+             fixed identity with --upstream-oauth-subject",
+            cli.upstream_oauth_grant
         );
     }
     if cli.transport != cli::Transport::StreamableHttp {
         anyhow::bail!(
-            "--upstream-oauth-grant jwt-bearer acts on behalf of the caller, but the {} \
+            "--upstream-oauth-grant {} acts on behalf of the caller, but the {} \
              transport exposes no client JWT: use --transport streamable-http, or pin a fixed \
              identity with --upstream-oauth-subject",
+            cli.upstream_oauth_grant,
             cli.transport
         );
     }
     if !cli.oauth_public_tools.is_empty() {
         tracing::warn!(
-            "--oauth-public-tool with per-caller delegation: an anonymous call to a public tool              has no identity to delegate, so it fails with an upstream token error"
+            "--oauth-public-tool with per-caller delegation: an anonymous call to a public tool \
+             has no identity to delegate, so it fails with an upstream token error"
         );
     }
     Ok(())
