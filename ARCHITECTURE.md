@@ -104,8 +104,10 @@ sequenceDiagram
   its JSON-RPC body only to challenge a `tools/call` on a tool that is not
   public. Getting that wrong could at worst skip a challenge: the handler still
   refuses the call.
-- **Roles decide visibility, never authentication.** A verified token with no
-  matching role is accepted and gets the public tools alone.
+- **The JWKS turns authentication on; roles only narrow it.** A verified token
+  gets every tool when no `--oauth-role-mapper` is set, and with one, the tools
+  its roles map to. A verified token with no matching role is still accepted,
+  and gets the public tools alone.
 - **Upstream failures are tool results, not protocol errors.** An upstream
   `4xx`/`5xx` reaches the model as an `isError` result carrying the status, so
   it can reason about it. A failure to obtain the upstream token is an error

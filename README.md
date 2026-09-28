@@ -70,8 +70,9 @@ writing a line of glue code.
   §2.1), obtain a *per-caller* upstream token from the identity in their verified
   JWT, so the upstream API sees who is really acting and applies its own
   authorization, instead of every call arriving as one shared service account.
-- **Role-based tool access** — verify the caller's JWT against a JWKS and gate
-  which tools they can see and call, mapping each `role` to a tool-name regex
+- **Caller authentication and role-based tool access** — verify the caller's
+  JWT against a JWKS, and optionally gate which tools they can see and call by
+  mapping each `role` to a tool-name regex
   (`streamable-http` only). Tools matching `--oauth-public-tool` stay open to
   everyone, token or not.
 - **MCP authorization discovery** — with `--oauth-resource`, `/mcp` behaves as
@@ -149,9 +150,9 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--upstream-oauth-assertion` | `UPSTREAM_OAUTH_ASSERTION` | `self-signed` | Who signs the `jwt-bearer` assertion: `self-signed` (by oas2mcp) or `caller` (relay the caller's own JWT). |
 | `--upstream-oauth-issuer` | `UPSTREAM_OAUTH_ISSUER` | client id | `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. |
 | `--upstream-oauth-subject` | `UPSTREAM_OAUTH_SUBJECT` | —      | Fixed `sub` for the assertion — a service account. Every caller shares one token. Mutually exclusive with the claim below. |
-| `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs `--oauth-role-mapper` and `streamable-http`. |
-| `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:tool_name_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Requires a JWKS source below. `streamable-http` only. |
-| `--oauth-jwks-url` | `OAUTH_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Required with `--oauth-role-mapper` (or use `--oauth-jwks-file`). |
+| `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs a JWKS (`--oauth-jwks-url`/`--oauth-jwks-file`) and `streamable-http`. |
+| `--oauth-role-mapper` | `OAUTH_ROLE_MAPPER` | —          | `role:tool_name_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Unset → any authenticated caller may use every tool. Requires a JWKS source below. |
+| `--oauth-jwks-url` | `OAUTH_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Set (or `--oauth-jwks-file`) → callers are authenticated from their JWT; without a valid one they get the public tools only. `streamable-http` only. |
 | `--oauth-jwks-file` | `OAUTH_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--oauth-jwks-url`. |
 | `--oauth-expected-audience` | `OAUTH_EXPECTED_AUDIENCES` | — | Audience the incoming JWT's `aud` must match. Repeatable. **Set this**: unset, a token your provider minted for another service is accepted here. |
 | `--oauth-expected-issuer` | `OAUTH_EXPECTED_ISSUERS` | —      | Issuer the incoming JWT's `iss` must match. Repeatable. Defence in depth next to the JWKS. |
@@ -159,7 +160,7 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--oauth-public-tool` | `OAUTH_PUBLIC_TOOLS` | —      | Tool-name regex for tools anyone may list and call, without a token. Repeatable; newline-separated via the env var. Authenticated callers get them on top of their roles. Needs `--oauth-role-mapper`. |
 | `--oauth-resource` | `OAUTH_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests (beyond the public tools) get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--oauth-role-mapper` and `--oauth-expected-issuer`. `streamable-http` only. |
 | `--oauth-role-claim` | `OAUTH_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
-| `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs `--oauth-role-mapper`. |
+| `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs a JWKS. |
 | `--include`       | `INCLUDE_OPERATIONS` | —            | Only expose operations whose name matches this glob (`*`/`?`). Repeatable. |
 | `--exclude`       | `EXCLUDE_OPERATIONS` | —            | Drop operations whose name matches this glob. Repeatable. Wins over `--include`/`--tag`. |
 | `--include-regex` | `INCLUDE_OPERATIONS_REGEX` | —      | Only expose operations whose name matches this regex. Repeatable. |
@@ -379,7 +380,6 @@ oas2mcp \
   --openapi-url https://api.example.com/openapi.json \
   --transport streamable-http --bind-addr 0.0.0.0:8000 \
   --oauth-jwks-url https://idp.example.com/.well-known/jwks.json \
-  --oauth-role-mapper 'user:.*' \
   --upstream-oauth-token-url https://idp.example.com/oauth/token \
   --upstream-oauth-client-id "$CLIENT_ID" \
   --upstream-oauth-private-key /etc/oas2mcp/upstream-key.pem \
@@ -441,24 +441,24 @@ RFC 8693 token exchange, which oas2mcp does not implement.
 > Providers that accept an assertion-only grant with no client authentication are
 > not supported.
 
-### Role-based tool access from the caller's JWT
+### Authenticating callers and role-based tool access
 
-The filters above are global: every MCP client sees the same tools. When the
-server is shared by callers with different privileges, gate the tools on the
-**caller's own JWT** instead. Set one or more `--oauth-role-mapper` entries of
-the form `role:tool_name_regex`: a tool is visible (in `tools/list`) and
-callable (in `tools/call`) only when one of the caller's roles maps to a regex
-matching the tool name.
-
-When a mapper is set, the incoming request's `Authorization: Bearer` JWT is
-verified against a JWKS (`--oauth-jwks-url`, fetched once at startup, or
-`--oauth-jwks-file`) and the roles are read from the `--oauth-role-claim` claim
-(default `roles`; an array of strings or a whitespace-separated string). A
-caller with no token, an invalid/expired token, or roles that match no mapping
-sees and can call **no** tools, apart from the [public ones](#public-tools) — or,
-with `--oauth-resource`, a caller without a valid token is refused with a `401`
-that tells it where to log in (see
+The filters above are global: every MCP client sees the same tools. To tie
+access to the **caller's own JWT**, give oas2mcp a JWKS (`--oauth-jwks-url`,
+fetched once at startup, or `--oauth-jwks-file`): the incoming request's
+`Authorization: Bearer` JWT is then verified against it. A verified caller may
+use every tool; a caller with no token or an invalid/expired one gets only the
+[public tools](#public-tools), if any — or, with `--oauth-resource`, is refused
+with a `401` that tells it where to log in (see
 [below](#letting-mcp-clients-find-the-authorization-server)).
+
+When callers have different privileges, add one or more `--oauth-role-mapper`
+entries of the form `role:tool_name_regex`: a tool is then visible (in
+`tools/list`) and callable (in `tools/call`) only when one of the caller's roles
+maps to a regex matching the tool name. The roles are read from the
+`--oauth-role-claim` claim (default `roles`; an array of strings or a
+whitespace-separated string), and a caller whose roles match no mapping gets
+the public tools only.
 
 ```bash
 oas2mcp \
@@ -502,8 +502,7 @@ oas2mcp \
 ```
 
 The claims come from the same verified JWT used for role mapping, so
-`--trace-claim` only takes effect when `--oauth-role-mapper` (and a JWKS) is
-configured. Claims go to the logs only — never to metric labels — so a
+`--trace-claim` only takes effect when a JWKS is configured. Claims go to the logs only — never to metric labels — so a
 high-cardinality claim such as `sub` can't blow up your metrics backend.
 With multiple names set through the environment variable, separate them with
 newlines (e.g. `TRACE_CLAIMS=$'sub\nemail'`).
@@ -558,7 +557,6 @@ server. Set `--oauth-resource` to the URL clients reach the endpoint under:
 oas2mcp \
   --transport streamable-http --bind-addr 0.0.0.0:8000 \
   --oauth-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
-  --oauth-role-mapper 'user:.*' \
   --oauth-expected-issuer https://idp.example.com/realms/main \
   --oauth-expected-audience oas2mcp \
   --oauth-resource https://mcp.example.com/mcp
@@ -612,7 +610,6 @@ names, repeatable:
 oas2mcp \
   --transport streamable-http --bind-addr 0.0.0.0:8000 \
   --oauth-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
-  --oauth-role-mapper 'user:.*' \
   --oauth-expected-issuer https://idp.example.com/realms/main \
   --oauth-public-tool '^get_public_' \
   --oauth-resource https://mcp.example.com/mcp

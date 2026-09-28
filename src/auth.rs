@@ -1,11 +1,12 @@
-//! Per-request, role-based tool authorization.
+//! Per-request JWT authentication and role-based tool authorization.
 //!
-//! When `--oauth-role-mapper` is configured, the incoming MCP request's
-//! `Authorization: Bearer` JWT is verified against a JWKS and decoded. The
+//! When a JWKS is configured, the incoming MCP request's `Authorization: Bearer`
+//! JWT is verified against it and decoded. With `--oauth-role-mapper`, the
 //! caller's roles are read from a configurable claim, and each `role` is mapped
 //! to a regex over tool names: a tool is visible and callable only if one of
-//! the caller's roles maps to a regex matching the tool's name. A caller with
-//! no valid token — or whose roles match nothing — gets an empty tool set.
+//! the caller's roles maps to a regex matching the tool's name. Without a
+//! mapper, any authenticated caller may use every tool. A caller with no valid
+//! token gets the public tools only.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -84,20 +85,10 @@ impl Authorizer {
     /// is not set (no authorization, every tool exposed). Fetches the JWKS from
     /// the configured URL or reads it from disk — this is why it is async.
     pub async fn from_cli(cli: &Cli) -> anyhow::Result<Option<Arc<Self>>> {
-        if cli.oauth_role_mapper.is_empty() {
-            // No mapper means no JWKS is needed even if one was passed; surface
-            // that as a misconfiguration rather than silently ignoring it.
-            if cli.oauth_jwks_url.is_some() || cli.oauth_jwks_file.is_some() {
-                tracing::warn!(
-                    "--oauth-jwks-url/--oauth-jwks-file is set but --oauth-role-mapper is not; \
-                     no JWT authorization is enforced"
-                );
-            }
+        let Some(jwks) = load_jwks(cli).await? else {
             return Ok(None);
-        }
-
+        };
         let rules = parse_rules(&cli.oauth_role_mapper)?;
-        let jwks = load_jwks(cli).await?;
         if cli.oauth_expected_audiences.is_empty() {
             // Not an error: rejecting these tokens outright would break every
             // deployment that predates the flag. But it *is* worth saying, since
@@ -168,10 +159,12 @@ impl Authorizer {
         })
     }
 
-    /// Whether a caller holding `roles` is allowed to use the tool named `tool`.
-    /// A public tool is allowed whatever the roles, including none.
+    /// Whether an authenticated caller holding `roles` may use the tool named
+    /// `tool`. Without role rules, any authenticated caller may use any tool;
+    /// a public tool is allowed whatever the roles.
     pub fn allows(&self, roles: &HashSet<String>, tool: &str) -> bool {
-        self.is_public(tool)
+        self.rules.is_empty()
+            || self.is_public(tool)
             || self
                 .rules
                 .iter()
@@ -222,9 +215,9 @@ fn parse_rules(raw: &[String]) -> anyhow::Result<Vec<RoleRule>> {
         .collect()
 }
 
-/// Load the JWKS from the configured URL (fetched at startup) or file. Exactly
-/// one source must be set when a role mapper is configured.
-async fn load_jwks(cli: &Cli) -> anyhow::Result<JwkSet> {
+/// Load the JWKS from the configured URL (fetched at startup) or file, or
+/// `None` when neither is set.
+async fn load_jwks(cli: &Cli) -> anyhow::Result<Option<JwkSet>> {
     let bytes = match (&cli.oauth_jwks_url, &cli.oauth_jwks_file) {
         (Some(url), _) => {
             tracing::debug!(%url, "fetching JWKS for JWT verification");
@@ -247,13 +240,12 @@ async fn load_jwks(cli: &Cli) -> anyhow::Result<JwkSet> {
                 .await
                 .with_context(|| format!("reading JWKS file {}", path.display()))?
         }
-        (None, None) => bail!(
-            "--oauth-role-mapper is set but no JWKS source was given; \
-             pass --oauth-jwks-url or --oauth-jwks-file"
-        ),
+        (None, None) => return Ok(None),
     };
 
-    serde_json::from_slice(&bytes).context("parsing the JWKS document")
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .context("parsing the JWKS document")
 }
 
 /// The primary verification algorithm for a JWK, picked from its key type.
@@ -463,6 +455,17 @@ pub(crate) mod tests {
                 .collect(),
             ..test_authorizer()
         }
+    }
+
+    #[test]
+    fn without_role_rules_an_authenticated_caller_may_use_every_tool() {
+        let authz = Authorizer {
+            rules: vec![],
+            ..test_authorizer()
+        };
+        assert!(authz.allows(&roles(&[]), "delete_pet"));
+        // Anonymous callers still get the public tools only.
+        assert!(!authz.is_public("delete_pet"));
     }
 
     #[test]
