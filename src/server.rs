@@ -8,10 +8,12 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, bail};
 use arc_swap::ArcSwap;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Icon, Implementation,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
 };
 use rmcp::service::{RequestContext, RoleServer};
@@ -30,12 +32,13 @@ use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
 
 /// The part of the server that an OpenAPI reload replaces: the resolved tools,
 /// their name index, the upstream base URL (which may be derived from the
-/// document's `servers`), and the instructions string. Swapped atomically as a
-/// whole so a reload never exposes a half-updated state.
+/// document's `servers`), the API title and the instructions string. Swapped
+/// atomically as a whole so a reload never exposes a half-updated state.
 struct Snapshot {
     tools: Vec<ToolSpec>,
     index: HashMap<String, usize>,
     base_url: Url,
+    title: Option<String>,
     instructions: String,
 }
 
@@ -266,15 +269,17 @@ impl OpenApiServer {
 impl ServerHandler for OpenApiServer {
     fn get_info(&self) -> ServerConfig {
         // `ServerConfig` is `#[non_exhaustive]`, so build from default and set fields.
-        // Identify as this crate (not rmcp, which `from_build_env` would report).
-        let mut server_info = Implementation::default();
-        server_info.name = env!("CARGO_PKG_NAME").to_string();
-        server_info.version = env!("CARGO_PKG_VERSION").to_string();
+        let state = self.state.load();
+        let mut server_info =
+            Implementation::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+                .with_website_url(env!("CARGO_PKG_REPOSITORY"))
+                .with_icons(vec![logo_icon()]);
+        server_info.title.clone_from(&state.title);
 
         let mut info = ServerConfig::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = server_info;
-        info.instructions = Some(self.state.load().instructions.clone());
+        info.instructions = Some(state.instructions.clone());
         info
     }
 
@@ -628,12 +633,27 @@ fn build_snapshot(spec: &Spec, cli: &Cli) -> anyhow::Result<Snapshot> {
         base_url,
     );
 
+    let title = Some(spec.info().title.trim())
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned);
+
     Ok(Snapshot {
         tools,
         index,
         base_url,
+        title,
         instructions,
     })
+}
+
+/// The project logo as a self-contained `data:` URI, so a client can render it
+/// without reaching the network.
+fn logo_icon() -> Icon {
+    const LOGO: &[u8] = include_bytes!("../logo.svg");
+    let src = format!("data:image/svg+xml;base64,{}", STANDARD.encode(LOGO));
+    Icon::new(src)
+        .with_mime_type("image/svg+xml")
+        .with_sizes(vec!["any".to_owned()])
 }
 
 /// Determine the upstream base URL: the CLI override wins, otherwise the first
@@ -764,6 +784,57 @@ servers: [{ url: "https://api.example.com" }]
 paths:
   /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
 "#;
+
+    fn server_info_for(title: &str) -> Implementation {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        let spec = spec_from(&ONE_GET.replace("title: T", &format!("title: {title:?}")));
+        let server = OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled())
+            .expect("server builds");
+        server.get_info().server_info
+    }
+
+    #[test]
+    fn server_info_identifies_the_crate_and_titles_it_after_the_api() {
+        let info = server_info_for("Pet Store");
+        assert_eq!(info.name, "oas2mcp");
+        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(info.title.as_deref(), Some("Pet Store"));
+        assert_eq!(
+            info.website_url.as_deref(),
+            Some("https://github.com/therealm-tech/oas2mcp")
+        );
+    }
+
+    #[test]
+    fn server_info_omits_a_blank_api_title() {
+        assert_eq!(server_info_for("  ").title, None);
+    }
+
+    #[test]
+    fn server_title_follows_a_reload() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        let server = OpenApiServer::from_spec(&spec_from(ONE_GET), &cli, None, Metrics::disabled())
+            .expect("server builds");
+        let renamed = spec_from(&ONE_GET.replace("title: T", "title: U"));
+        server.reload(&renamed, &cli).expect("reload succeeds");
+        assert_eq!(server.get_info().server_info.title.as_deref(), Some("U"));
+    }
+
+    #[test]
+    fn server_icon_is_the_logo_as_a_data_uri() {
+        let icons = server_info_for("T").icons.expect("an icon is advertised");
+        let [icon] = icons.as_slice() else {
+            panic!("exactly one icon, got {icons:?}");
+        };
+        assert_eq!(icon.mime_type.as_deref(), Some("image/svg+xml"));
+        assert_eq!(icon.sizes, Some(vec!["any".to_owned()]));
+        let encoded = icon
+            .src
+            .strip_prefix("data:image/svg+xml;base64,")
+            .expect("a base64 SVG data URI");
+        let decoded = STANDARD.decode(encoded).expect("valid base64");
+        assert_eq!(decoded, include_bytes!("../logo.svg"));
+    }
 
     #[test]
     fn access_rules_match_the_operation_name_not_the_renamed_one() {

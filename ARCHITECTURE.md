@@ -136,7 +136,7 @@ snapshot.
 
 The process holds no persistent state. In memory:
 
-- the current `Snapshot` (tools, name index, base URL, instructions);
+- the current `Snapshot` (tools, name index, base URL, API title, instructions);
 - the OAuth token caches — one entry for a shared grant, one per caller identity
   (issuer and subject) for `jwt-bearer`, never kept past the caller token's own
   expiry;
@@ -167,6 +167,13 @@ authorization server.
   expected issuers.** Those are the only issuers whose tokens are accepted, so
   advertising any other server would send clients to fetch tokens this server
   then refuses.
+- **The server is titled after the API it serves.** `serverInfo.name` and
+  `version` identify `oas2mcp`, but `title` — the display name a client shows —
+  is the document's `info.title`, since that API is what the user added. The
+  title comes from the snapshot, so a reload changes it for sessions that
+  initialize afterwards; a session keeps the title it was given. The icon is
+  the project logo as a base64 `data:` URI embedded in the binary, so a client
+  renders it without a network fetch and the server stays usable offline.
 - **The runtime image is distroless** (`gcr.io/distroless/cc-debian12:nonroot`).
   With no shell and no package manager, it carries almost no OS packages for a
   scanner to flag, and the binary is all that runs.
