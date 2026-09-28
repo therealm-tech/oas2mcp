@@ -60,7 +60,7 @@ how it is put together.
 - **[`transport`](src/transport.rs)** — serves the handler over `stdio`, the
   legacy [`sse`](src/transport/sse.rs) transport, or Streamable HTTP (`rmcp`'s
   service under `/mcp`). Around Streamable HTTP it adds the
-  [access log](src/transport/access_log.rs) and, when `--oauth-resource` is set,
+  [access log](src/transport/access_log.rs) and, when `--inbound-resource` is set,
   the [protected resource](src/transport/protected_resource.rs) layer.
 - **[`telemetry`](src/telemetry.rs)** — tool-call counters and durations, over
   OTLP and/or a Prometheus endpoint.
@@ -80,7 +80,7 @@ sequenceDiagram
     participant A as Upstream API
 
     C->>PR: POST /mcp (Bearer JWT)
-    alt invalid token, or no token for a tool that is not public (--oauth-resource set)
+    alt invalid token, or no token for a tool that is not public (--inbound-resource set)
         PR-->>C: 401, WWW-Authenticate: resource_metadata
     else
         PR->>S: tools/call
@@ -93,11 +93,11 @@ sequenceDiagram
     end
 ```
 
-- **Authentication happens at two levels.** With `--oauth-resource`, the HTTP
+- **Authentication happens at two levels.** With `--inbound-resource`, the HTTP
   layer refuses a request without a verifiable bearer token before `rmcp` sees
   it, which is what the MCP authorization spec requires and what lets a client
   discover the authorization server. The handler then verifies the token again
-  to read its roles. Without `--oauth-resource`, only the handler checks, and a
+  to read its roles. Without `--inbound-resource`, only the handler checks, and a
   caller without a valid token simply sees the public tools, if any.
 - **The HTTP layer's challenge is a signal, the handler is the gate.** When
   public tools exist, the HTTP layer lets an anonymous request through and reads
@@ -105,7 +105,7 @@ sequenceDiagram
   public. Getting that wrong could at worst skip a challenge: the handler still
   refuses the call.
 - **The JWKS turns authentication on; roles only narrow it.** A verified token
-  gets every tool when no `--oauth-role-mapper` is set, and with one, the tools
+  gets every tool when no `--inbound-role-mapper` is set, and with one, the tools
   its roles map to. A verified token with no matching role is still accepted,
   and gets the public tools alone.
 - **Upstream failures are tool results, not protocol errors.** An upstream

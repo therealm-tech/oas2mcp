@@ -248,27 +248,27 @@ spec:
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.auth.roleMapper }}
-            - name: OAUTH_ROLE_MAPPER
+            - name: INBOUND_ROLE_MAPPER
               value: {{ join "\n" . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.auth.roleClaim }}
-            - name: OAUTH_ROLE_CLAIM
+            - name: INBOUND_ROLE_CLAIM
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.auth.expectedAudiences }}
-            - name: OAUTH_EXPECTED_AUDIENCES
+            - name: INBOUND_EXPECTED_AUDIENCES
               value: {{ join "\n" . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.auth.expectedIssuers }}
-            - name: OAUTH_EXPECTED_ISSUERS
+            - name: INBOUND_EXPECTED_ISSUERS
               value: {{ join "\n" . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.auth.clockSkew }}
-            - name: OAUTH_CLOCK_SKEW
+            - name: INBOUND_CLOCK_SKEW
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.auth.resource }}
-            - name: OAUTH_RESOURCE
+            - name: INBOUND_RESOURCE
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.auth.traceClaims }}
@@ -276,11 +276,11 @@ spec:
               value: {{ join "\n" . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.auth.jwks.url }}
-            - name: OAUTH_JWKS_URL
+            - name: INBOUND_JWKS_URL
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.auth.jwks.file }}
-            - name: OAUTH_JWKS_FILE
+            - name: INBOUND_JWKS_FILE
               value: {{ . | quote }}
             {{- end }}
             {{- with .Values.oas2mcp.metrics.otlp.endpoint }}

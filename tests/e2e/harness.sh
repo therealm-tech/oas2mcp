@@ -106,12 +106,12 @@ echo "== starting oas2mcp"
   --openapi-oauth-private-key tests/fixtures/test_rsa_key.pem \
   --openapi-oauth-signing-alg rs256 \
   --transport streamable-http --bind-addr "127.0.0.1:$MCP_PORT" \
-  --oauth-jwks-file "$logs/oneaccess-jwks.json" \
-  --oauth-role-mapper 'admin:.*' \
-  --oauth-role-mapper 'reader:^(getPets|whoami)$' \
-  --oauth-expected-issuer https://oneaccess.example/ \
-  --oauth-resource "http://127.0.0.1:$MCP_PORT/mcp" \
-  --oauth-role-mapper '*:^whoami$' \
+  --inbound-jwks-file "$logs/oneaccess-jwks.json" \
+  --inbound-role-mapper 'admin:.*' \
+  --inbound-role-mapper 'reader:^(getPets|whoami)$' \
+  --inbound-expected-issuer https://oneaccess.example/ \
+  --inbound-resource "http://127.0.0.1:$MCP_PORT/mcp" \
+  --inbound-role-mapper '*:^whoami$' \
   --trace-claim sub \
   --upstream-oauth-token-url "$KEYCLOAK_URL/realms/$KEYCLOAK_REALM/protocol/openid-connect/token" \
   --upstream-oauth-client-id oas2mcp-upstream \

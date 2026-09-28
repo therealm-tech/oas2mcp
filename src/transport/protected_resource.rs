@@ -50,14 +50,14 @@ impl ProtectedResource {
         authorizer: Arc<Authorizer>,
     ) -> anyhow::Result<Self> {
         if !matches!(resource.scheme(), "http" | "https") {
-            bail!("--oauth-resource `{resource}` is not an http(s) URL");
+            bail!("--inbound-resource `{resource}` is not an http(s) URL");
         }
         if resource.fragment().is_some() {
-            bail!("--oauth-resource `{resource}` must not carry a fragment (RFC 9728 §1.2)");
+            bail!("--inbound-resource `{resource}` must not carry a fragment (RFC 9728 §1.2)");
         }
         if authorization_servers.is_empty() {
             bail!(
-                "--oauth-resource needs at least one --oauth-expected-issuer: those issuers are \
+                "--inbound-resource needs at least one --inbound-expected-issuer: those issuers are \
                  the authorization servers clients are sent to for a token"
             );
         }
