@@ -732,6 +732,20 @@ pub struct InboundArgs {
     )]
     pub inbound_role_mapper: Vec<String>,
 
+    /// List every tool to a caller without a valid token, so a service can
+    /// discover the whole catalogue anonymously. Only `tools/list` is widened:
+    /// an anonymous caller may still call the public tools alone, and a
+    /// verified caller still lists only what its roles grant. With
+    /// `--inbound-resource`, an anonymous caller is let in and only challenged
+    /// when it calls a tool that is not public. Requires `--inbound-jwks-url`
+    /// or `--inbound-jwks-file`.
+    #[arg(
+        long = "inbound-anonymous-discovery",
+        env = "INBOUND_ANONYMOUS_DISCOVERY",
+        requires = "inbound_jwks"
+    )]
+    pub inbound_anonymous_discovery: bool,
+
     /// URL of a JWKS document, fetched at startup, whose keys verify the
     /// incoming JWT signatures. Set (or `--inbound-jwks-file`) → every MCP request
     /// is authenticated from its `Authorization: Bearer` JWT, and a caller with
@@ -809,8 +823,8 @@ pub struct InboundArgs {
     /// `https://mcp.example.com/mcp`). Set → oas2mcp acts as an OAuth protected
     /// resource the way the MCP authorization spec describes: a request to
     /// `/mcp` without a valid bearer token is answered `401` with a
-    /// `WWW-Authenticate` challenge (unless a public tool lets an
-    /// anonymous one through), and the Protected Resource Metadata
+    /// `WWW-Authenticate` challenge (unless public tools or
+    /// `--inbound-anonymous-discovery` let an anonymous one through), and the Protected Resource Metadata
     /// (RFC 9728) is served under `/.well-known/oauth-protected-resource`,
     /// naming the `--inbound-expected-issuer` values as the authorization servers.
     /// That is what lets a client discover where to obtain a token on its own.
@@ -994,6 +1008,19 @@ mod tests {
         ])
         .expect("with a JWKS it parses");
         http(&["--inbound-jwks-file", "jwks.json"]).expect("a JWKS alone is enough");
+    }
+
+    #[test]
+    fn anonymous_discovery_needs_a_jwks() {
+        // Without one every caller is unrestricted already.
+        assert!(http(&["--inbound-anonymous-discovery"]).is_err());
+        let args = http(&[
+            "--inbound-anonymous-discovery",
+            "--inbound-jwks-file",
+            "jwks.json",
+        ])
+        .expect("with a JWKS it parses");
+        assert!(args.inbound.inbound_anonymous_discovery);
     }
 
     #[test]

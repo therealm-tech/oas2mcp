@@ -250,6 +250,10 @@ spec:
             - name: INBOUND_ROLE_MAPPER
               value: {{ join "\n" . | quote }}
             {{- end }}
+            {{- if .Values.oas2mcp.auth.anonymousDiscovery }}
+            - name: INBOUND_ANONYMOUS_DISCOVERY
+              value: "true"
+            {{- end }}
             {{- with .Values.oas2mcp.auth.roleClaim }}
             - name: INBOUND_ROLE_CLAIM
               value: {{ . | quote }}

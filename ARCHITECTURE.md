@@ -105,8 +105,14 @@ sequenceDiagram
 - **The HTTP layer's challenge is a signal, the handler is the gate.** When
   public tools exist, the HTTP layer lets an anonymous request through and reads
   its JSON-RPC body only to challenge a `tools/call` on a tool that is not
-  public. Getting that wrong could at worst skip a challenge: the handler still
+  public. Anonymous discovery lets anonymous requests through the same way.
+  Getting that wrong could at worst skip a challenge: the handler still
   refuses the call.
+- **Listing and calling are separate checks.** A tool a caller cannot list is
+  reported as unknown when called, so the gate does not reveal it exists. With
+  `--inbound-anonymous-discovery`, an anonymous caller lists every tool but
+  still calls only the public ones; a verified token lists and calls exactly
+  what its roles grant.
 - **The JWKS turns authentication on; roles only narrow it.** A verified token
   gets every tool when no `--inbound-role-mapper` is set, and with one, the tools
   its roles map to. A verified token with no matching role is still accepted,

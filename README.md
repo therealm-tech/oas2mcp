@@ -163,6 +163,7 @@ document.
 | `--upstream-oauth-subject` | `UPSTREAM_OAUTH_SUBJECT` | —      | Fixed `sub` for the assertion — a service account. Every caller shares one token. Mutually exclusive with the claim below. |
 | `--upstream-oauth-subject-claim` | `UPSTREAM_OAUTH_SUBJECT_CLAIM` | `sub` | Claim of the **caller's** verified JWT whose value becomes the assertion's `sub`. Needs a JWKS (`--inbound-jwks-url`/`--inbound-jwks-file`) and `http`. |
 | `--inbound-role-mapper` | `INBOUND_ROLE_MAPPER` | —          | `role:operation_regex` mapping that gates tool visibility/invocation on the caller's JWT roles. Repeatable. Unset → any authenticated caller may use every tool. Requires a JWKS source below. |
+| `--inbound-anonymous-discovery` | `INBOUND_ANONYMOUS_DISCOVERY` | `false` | A caller without a valid token lists **every** tool (to let a service discover the catalogue) but still calls the public ones only. Requires a JWKS source below. |
 | `--inbound-jwks-url` | `INBOUND_JWKS_URL` | —              | URL of a JWKS document (fetched at startup) used to verify incoming JWTs. Set (or `--inbound-jwks-file`) → callers are authenticated from their JWT; without a valid one they get the public tools only. `http` only. |
 | `--inbound-jwks-file` | `INBOUND_JWKS_FILE` | —            | Path to a JWKS document on disk. Mutually exclusive with `--inbound-jwks-url`. |
 | `--inbound-expected-audience` | `INBOUND_EXPECTED_AUDIENCES` | — | Audience the incoming JWT's `aud` must match. Repeatable. **Set this**: unset, a token your provider minted for another service is accepted here. |
@@ -472,7 +473,8 @@ access to the **caller's own JWT**, give oas2mcp a JWKS (`--inbound-jwks-url`,
 fetched once at startup, or `--inbound-jwks-file`): the incoming request's
 `Authorization: Bearer` JWT is then verified against it. A verified caller may
 use every tool; a caller with no token or an invalid/expired one gets only the
-[public tools](#public-tools), if any — or, with `--inbound-resource`, is refused
+[public tools](#public-tools), if any (it may list every tool with
+[anonymous discovery](#anonymous-discovery)) — or, with `--inbound-resource`, is refused
 with a `401` that tells it where to log in (see
 [below](#letting-mcp-clients-find-the-authorization-server)).
 
@@ -656,6 +658,21 @@ still challenged on any request, so a client learns its token needs replacing.
   public tool fails with an upstream token error; oas2mcp warns about the
   combination at startup. A shared upstream identity (`client-credentials`, or
   a fixed `--upstream-oauth-subject`) serves anonymous calls fine.
+
+#### Anonymous discovery
+
+A service that catalogues what the server offers — a gateway, a registry —
+needs the whole tool list without holding a user token.
+`--inbound-anonymous-discovery` gives it that: a `tools/list` without a valid
+token returns every tool. Nothing else widens: an anonymous `tools/call` is
+still limited to the public tools (refused with `tool … needs a bearer token`,
+or challenged with a `401` under `--inbound-resource`), and a caller with a
+verified token still lists only what its roles grant.
+
+The trade-offs are the public tools' ones: the tool names, descriptions and
+input schemas are readable by anyone who reaches `/mcp`, and under
+`--inbound-resource` a client that only logs in when its connection is refused
+stays anonymous, listing tools it cannot call.
 
 ### Metrics
 

@@ -289,7 +289,7 @@ impl ServerHandler for OpenApiServer {
             .load()
             .tools
             .iter()
-            .filter(|spec| self.is_allowed(&access, &spec.operation))
+            .filter(|spec| self.is_listed(&access, &spec.operation))
             .map(|spec| {
                 Tool::new(
                     spec.name.clone(),
@@ -321,16 +321,18 @@ impl ServerHandler for OpenApiServer {
         };
         let spec = &state.tools[idx];
 
-        // Enforce JWT role authorization: a caller who cannot see the tool may
-        // not call it either. Reported as an unknown tool so the gate does not
-        // leak which tools exist to an unauthorized caller.
+        // Enforce JWT role authorization. A tool the caller cannot list is
+        // reported as unknown, so the gate does not leak which tools exist; one
+        // it listed through anonymous discovery is plainly refused.
         let caller = self.caller(&context);
         if !self.is_allowed(&caller.access, &spec.operation) {
             tracing::warn!(tool = %spec.name, "denying tool call: caller is not authorized");
-            return Err(ErrorData::invalid_params(
-                Cow::from(format!("unknown tool `{}`", request.name)),
-                None,
-            ));
+            let message = if self.is_listed(&caller.access, &spec.operation) {
+                format!("tool `{}` needs a bearer token", request.name)
+            } else {
+                format!("unknown tool `{}`", request.name)
+            };
+            return Err(ErrorData::invalid_params(Cow::from(message), None));
         }
 
         // Surface the configured JWT claims on the call for observability. Logged
@@ -468,7 +470,11 @@ impl OpenApiServer {
                 }
             },
             None => {
-                if authorizer.has_public_tools() {
+                if authorizer.anonymous_discovery() {
+                    tracing::debug!(
+                        "no bearer token: listing every tool, calling the public ones only"
+                    );
+                } else if authorizer.has_public_tools() {
                     tracing::debug!("no bearer token: serving the public tools only");
                 } else {
                     tracing::warn!(
@@ -491,6 +497,16 @@ impl OpenApiServer {
             (Access::Anonymous, Some(authorizer)) => authorizer.is_public(operation),
             (Access::Authenticated(roles), Some(authorizer)) => authorizer.allows(roles, operation),
         }
+    }
+
+    /// Whether the tool for `operation` appears in `tools/list` for `access`:
+    /// every tool an anonymous caller discovers, otherwise the callable ones.
+    fn is_listed(&self, access: &Access, operation: &str) -> bool {
+        let discovers = matches!(
+            (access, &self.authorizer),
+            (Access::Anonymous, Some(authorizer)) if authorizer.anonymous_discovery()
+        );
+        discovers || self.is_allowed(access, operation)
     }
 
     /// Whether the tool advertised as `name` may be used without a token.
@@ -767,6 +783,42 @@ paths:
         assert!(server.is_public_tool("fetch_a"));
         // The original name is not a tool anyone can call any more.
         assert!(!server.is_public_tool("getA"));
+    }
+
+    #[test]
+    fn anonymous_discovery_lists_every_tool_but_calls_none_beyond_the_public_ones() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        let authorizer = crate::auth::tests::test_authorizer_with_anonymous_discovery();
+        let server = OpenApiServer::from_spec(
+            &spec_from(ONE_GET),
+            &cli,
+            Some(Arc::new(authorizer)),
+            Metrics::disabled(),
+        )
+        .expect("server builds");
+
+        assert!(server.is_listed(&Access::Anonymous, "getA"));
+        assert!(!server.is_allowed(&Access::Anonymous, "getA"));
+        // A verified caller still lists only what its roles grant.
+        let nobody = Access::Authenticated(HashSet::from(["nobody".to_string()]));
+        assert!(!server.is_listed(&nobody, "getA"));
+        let admin = Access::Authenticated(HashSet::from(["admin".to_string()]));
+        assert!(server.is_listed(&admin, "getA"));
+        assert!(server.is_allowed(&admin, "getA"));
+    }
+
+    #[test]
+    fn without_anonymous_discovery_an_anonymous_caller_lists_the_public_tools_only() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        let server = OpenApiServer::from_spec(
+            &spec_from(ONE_GET),
+            &cli,
+            Some(Arc::new(crate::auth::tests::test_authorizer())),
+            Metrics::disabled(),
+        )
+        .expect("server builds");
+
+        assert!(!server.is_listed(&Access::Anonymous, "getA"));
     }
 
     /// Build the request one tool call would send, and hand back its headers.
