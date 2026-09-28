@@ -54,6 +54,8 @@ how it is put together.
 - **[`server`](src/server.rs)** — `OpenApiServer`, the `rmcp` handler. It holds
   the document-derived `Snapshot` behind an `ArcSwap`, applies role-based
   visibility on `tools/list` and `tools/call`, and executes calls.
+- **[`pagination`](src/pagination.rs)** — cuts `tools/list` into pages with
+  `--tools-page-size`, and issues and checks the cursors.
 - **[`auth`](src/auth.rs)** — `Authorizer`: verifies the caller's JWT against a
   JWKS (signature, `exp`, optionally `aud`/`iss`), extracts roles, the delegation
   subject and traced claims, and matches roles to operation-name regexes.
@@ -145,6 +147,23 @@ document, builds a new `Snapshot` and swaps it in with one atomic store. Every
 per-session clone of the server sees the new tool set at once, and a call in
 flight keeps the snapshot it started with. A failed fetch keeps the previous
 snapshot.
+
+### Listing tools in pages
+
+With `--tools-page-size`, `tools/list` returns at most that many tools and a
+`nextCursor` for the rest. Paging runs over the caller's own list, after role
+filtering. A cursor carries an offset and a fingerprint of the exact list it
+was cut from: the snapshot's tools and the names this caller may list. When a
+reload has changed the tool set, or the caller's roles now list other tools,
+the fingerprint no longer matches and the request fails with `-32602` (invalid
+params), so the client lists again from the start instead of silently missing
+or repeating tools. A reload that yields the same tools keeps every cursor
+valid. The cursor holds no server state: any replica of the same build serving
+the same document honours it, which the stateless `http` mode relies on.
+
+Pagination is off by default because many MCP clients read the first page and
+ignore `nextCursor`, so a paginated server would hide most of its tools from
+them.
 
 ## State
 

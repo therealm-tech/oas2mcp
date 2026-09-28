@@ -87,6 +87,8 @@ oas2mcp:
 
   # -- Advertise each tool with the MCP behaviour hints its HTTP method implies (`readOnlyHint` on a `GET`, `destructiveHint` on a `DELETE`, …), so a client can tell a read from a write. Set to `false` when the document's methods do not match what its operations do. Maps to `AUTO_TOOL_ANNOTATIONS`.
   autoToolAnnotations: true
+  # -- (int) Maximum number of tools per `tools/list` reply; the client walks the pages with the MCP cursor. Unset → every tool in one reply, since many MCP clients read only the first page. A reload that changes the tool set invalidates the cursors issued before it. Maps to `TOOLS_PAGE_SIZE`.
+  toolsPageSize: ~
 
   # -- Authenticate callers from their JWT, turned on by `jwks.url` or `jwks.file`, and optionally restrict the tool set per caller by role. Requires `transport: http` (the only transport exposing the client's JWT). A caller with no valid token can call only the public tools (see `roleMapper`), and sees only them unless `anonymousDiscovery` is set.
   auth:
