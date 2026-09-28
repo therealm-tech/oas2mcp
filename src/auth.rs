@@ -3,8 +3,9 @@
 //! When a JWKS is configured, the incoming MCP request's `Authorization: Bearer`
 //! JWT is verified against it and decoded. With `--oauth-role-mapper`, the
 //! caller's roles are read from a configurable claim, and each `role` is mapped
-//! to a regex over tool names: a tool is visible and callable only if one of
-//! the caller's roles maps to a regex matching the tool's name. Without a
+//! to a regex over operation names (the `operationId` before `--rename`): a
+//! tool is visible and callable only if one of the caller's roles maps to a
+//! regex matching its operation. Without a
 //! mapper, any authenticated caller may use every tool. A caller with no valid
 //! token gets the public tools only.
 
@@ -25,8 +26,8 @@ use crate::cli::Cli;
 /// `jsonwebtoken`'s own default, so the flag changes nothing until it is set.
 const DEFAULT_CLOCK_SKEW: Duration = Duration::from_secs(60);
 
-/// One `role:tool_name_regex` mapping: a caller holding `role` may use any tool
-/// whose name matches `pattern`.
+/// One `role:operation_regex` mapping: a caller holding `role` may use the tool
+/// of any operation whose name matches `pattern`.
 struct RoleRule {
     role: String,
     pattern: Regex,
@@ -159,23 +160,23 @@ impl Authorizer {
         })
     }
 
-    /// Whether an authenticated caller holding `roles` may use the tool named
-    /// `tool`. Without role rules, any authenticated caller may use any tool;
-    /// a public tool is allowed whatever the roles.
-    pub fn allows(&self, roles: &HashSet<String>, tool: &str) -> bool {
+    /// Whether an authenticated caller holding `roles` may use the tool of
+    /// `operation`. Without role rules, any authenticated caller may use any
+    /// tool; a public tool is allowed whatever the roles.
+    pub fn allows(&self, roles: &HashSet<String>, operation: &str) -> bool {
         self.rules.is_empty()
-            || self.is_public(tool)
+            || self.is_public(operation)
             || self
                 .rules
                 .iter()
-                .any(|rule| roles.contains(&rule.role) && rule.pattern.is_match(tool))
+                .any(|rule| roles.contains(&rule.role) && rule.pattern.is_match(operation))
     }
 
-    /// Whether the tool named `tool` may be used without a token.
-    pub fn is_public(&self, tool: &str) -> bool {
+    /// Whether the tool of `operation` may be used without a token.
+    pub fn is_public(&self, operation: &str) -> bool {
         self.public_tools
             .iter()
-            .any(|pattern| pattern.is_match(tool))
+            .any(|pattern| pattern.is_match(operation))
     }
 
     pub fn has_public_tools(&self) -> bool {
@@ -194,19 +195,19 @@ pub fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|t| !t.is_empty())
 }
 
-/// Parse `role:tool_name_regex` entries, validating each regex at startup.
+/// Parse `role:operation_regex` entries, validating each regex at startup.
 fn parse_rules(raw: &[String]) -> anyhow::Result<Vec<RoleRule>> {
     raw.iter()
         .map(|entry| {
             let (role, pattern) = entry.split_once(':').with_context(|| {
-                format!("role mapping `{entry}` is not in `role:tool_name_regex` form")
+                format!("role mapping `{entry}` is not in `role:operation_regex` form")
             })?;
             let role = role.trim();
             if role.is_empty() {
                 bail!("role mapping `{entry}` has an empty role");
             }
             let pattern = Regex::new(pattern)
-                .with_context(|| format!("invalid tool-name regex in role mapping `{entry}`"))?;
+                .with_context(|| format!("invalid operation regex in role mapping `{entry}`"))?;
             Ok(RoleRule {
                 role: role.to_string(),
                 pattern,

@@ -286,7 +286,7 @@ impl ServerHandler for OpenApiServer {
             .load()
             .tools
             .iter()
-            .filter(|spec| self.is_allowed(&access, &spec.name))
+            .filter(|spec| self.is_allowed(&access, &spec.operation))
             .map(|spec| {
                 Tool::new(
                     spec.name.clone(),
@@ -322,7 +322,7 @@ impl ServerHandler for OpenApiServer {
         // not call it either. Reported as an unknown tool so the gate does not
         // leak which tools exist to an unauthorized caller.
         let caller = self.caller(&context);
-        if !self.is_allowed(&caller.access, &spec.name) {
+        if !self.is_allowed(&caller.access, &spec.operation) {
             tracing::warn!(tool = %spec.name, "denying tool call: caller is not authorized");
             return Err(ErrorData::invalid_params(
                 Cow::from(format!("unknown tool `{}`", request.name)),
@@ -481,13 +481,22 @@ impl OpenApiServer {
         }
     }
 
-    /// Whether the tool named `name` is visible/callable with `access`.
-    fn is_allowed(&self, access: &Access, name: &str) -> bool {
+    /// Whether the tool for `operation` is visible/callable with `access`.
+    fn is_allowed(&self, access: &Access, operation: &str) -> bool {
         match (access, &self.authorizer) {
             (Access::Unrestricted, _) | (_, None) => true,
-            (Access::Anonymous, Some(authorizer)) => authorizer.is_public(name),
-            (Access::Authenticated(roles), Some(authorizer)) => authorizer.allows(roles, name),
+            (Access::Anonymous, Some(authorizer)) => authorizer.is_public(operation),
+            (Access::Authenticated(roles), Some(authorizer)) => authorizer.allows(roles, operation),
         }
+    }
+
+    /// Whether the tool advertised as `name` may be used without a token.
+    pub fn is_public_tool(&self, name: &str) -> bool {
+        let state = self.state.load();
+        let Some(&idx) = state.index.get(name) else {
+            return false;
+        };
+        self.is_allowed(&Access::Anonymous, &state.tools[idx].operation)
     }
 
     /// Collect the allow-listed incoming-request headers to forward upstream.
@@ -739,10 +748,30 @@ paths:
   /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
 "#;
 
+    #[test]
+    fn access_rules_match_the_operation_name_not_the_renamed_one() {
+        // A rule written against the document keeps meaning the same operation
+        // whatever `--rename` does to the advertised name.
+        let cli =
+            Cli::try_parse_from(["oas2mcp", "--rename", "^getA$=fetch_a"]).expect("CLI parses");
+        let authorizer = crate::auth::tests::test_authorizer_with_public_tools(&["^getA$"]);
+        let server = OpenApiServer::from_spec(
+            &spec_from(ONE_GET),
+            &cli,
+            Some(Arc::new(authorizer)),
+            Metrics::disabled(),
+        )
+        .expect("server builds");
+
+        assert!(server.is_public_tool("fetch_a"));
+        // The original name is not a tool anyone can call any more.
+        assert!(!server.is_public_tool("getA"));
+    }
+
     /// Build the request one tool call would send, and hand back its headers.
     ///
-    /// Goes through the real `build_request` rather than re-deriving the
-    /// precedence rules, so the test fails if the rules change underneath it.
+    /// Goes through the real `build_request`, so the test sees exactly what
+    /// the upstream would receive.
     fn authorization_of(
         args: &[&str],
         forwarded: &[(&str, &str)],
