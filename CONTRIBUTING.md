@@ -197,4 +197,7 @@ git tag chart-0.1.0 && git push origin chart-0.1.0
 - Update the README, this file or [ARCHITECTURE.md](ARCHITECTURE.md) in the same
   pull request as the change that affects them.
 - Label the pull request so it lands in the right section of the release notes
-  ([`.github/release.yaml`](.github/release.yaml)).
+  ([`.github/release.yaml`](.github/release.yaml)): one category label, plus
+  `breaking` when upgrading forces users to change anything (a flag, an
+  environment variable, a chart value, a default). Say in the description what
+  breaks and how to migrate.
