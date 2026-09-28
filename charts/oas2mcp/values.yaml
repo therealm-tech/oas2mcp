@@ -50,8 +50,8 @@ oas2mcp:
         key: OPENAPI_OAUTH_CLIENT_SECRET
       # -- (list) OAuth2 scopes requested for the token.
       scopes: []
-      # -- (string) OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0).
-      audience: ~
+      # -- (string) OAuth2 `audience` parameter of the token request — the audience of the token obtained, not of a client assertion — when the provider requires it (e.g. Auth0). Maps to `OPENAPI_OAUTH_TOKEN_AUDIENCE`.
+      tokenAudience: ~
       # -- Authenticate the client with a JWT assertion it signs per request (`private_key_jwt`, RFC 7523 §2.2) instead of a shared secret — for providers that will not issue one. Register the **public** half of the key with the provider. Mutually exclusive with `clientSecret`/`existingSecret`; setting both fails the render.
       privateKey:
         # -- (string) Inline PKCS#8 PEM private key. Stored in a Secret and mounted read-only at mode `0440` (root-owned, readable via `fsGroup` — `0400` would be unreadable by the non-root container). Ignored when `existingSecret.name` is set.
@@ -158,8 +158,8 @@ oas2mcp:
         key: UPSTREAM_OAUTH_CLIENT_SECRET
       # -- (list) OAuth2 scopes requested for the upstream token.
       scopes: []
-      # -- (string) OAuth2 `audience` parameter, when the provider requires it (e.g. Auth0).
-      audience: ~
+      # -- (string) OAuth2 `audience` parameter of the token request — the audience of the token obtained, not of a client assertion — when the provider requires it (e.g. Auth0). Maps to `UPSTREAM_OAUTH_TOKEN_AUDIENCE`.
+      tokenAudience: ~
       # -- (string) Which grant obtains the token: `client-credentials` (the default) gets one token for the server itself, shared by every caller; `jwt-bearer` (RFC 7523 §2.1) obtains one **per caller**, so the upstream API sees who is really acting, with an assertion oas2mcp signs (needs `privateKey`); `jwt-bearer-relay` does the same by relaying the caller's own verified JWT as the assertion (no key, but their token's `aud` must be the authorization server). Unset → the binary default. Maps to `UPSTREAM_OAUTH_GRANT`.
       grant: ~
       # -- (string) `iss` of the `jwt-bearer` assertion, identifying oas2mcp to the provider. Unset → `clientId`. Maps to `UPSTREAM_OAUTH_ISSUER`.
