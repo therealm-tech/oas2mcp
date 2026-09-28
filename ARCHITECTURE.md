@@ -80,7 +80,7 @@ sequenceDiagram
     participant A as Upstream API
 
     C->>PR: POST /mcp (Bearer JWT)
-    alt no token or invalid token, --oauth-resource set
+    alt invalid token, or no token for a tool that is not public (--oauth-resource set)
         PR-->>C: 401, WWW-Authenticate: resource_metadata
     else
         PR->>S: tools/call
@@ -98,9 +98,14 @@ sequenceDiagram
   it, which is what the MCP authorization spec requires and what lets a client
   discover the authorization server. The handler then verifies the token again
   to read its roles. Without `--oauth-resource`, only the handler checks, and a
-  caller without a valid token simply sees no tools.
+  caller without a valid token simply sees the public tools, if any.
+- **The HTTP layer's challenge is a signal, the handler is the gate.** When
+  public tools exist, the HTTP layer lets an anonymous request through and reads
+  its JSON-RPC body only to challenge a `tools/call` on a tool that is not
+  public. Getting that wrong could at worst skip a challenge: the handler still
+  refuses the call.
 - **Roles decide visibility, never authentication.** A verified token with no
-  matching role is accepted and gets an empty tool list.
+  matching role is accepted and gets the public tools alone.
 - **Upstream failures are tool results, not protocol errors.** An upstream
   `4xx`/`5xx` reaches the model as an `isError` result carrying the status, so
   it can reason about it. A failure to obtain the upstream token is an error
@@ -166,7 +171,7 @@ authorization server.
   reports the MCP session id only as present or absent; traced JWT claims go to
   logs only, never to metric labels.
 - **A caller's JWT is only available on Streamable HTTP.** `stdio` and `sse`
-  expose no client headers, so role mapping hides every tool there and
+  expose no client headers, so role mapping leaves only the public tools there and
   delegation is refused at startup.
 - **Accepted JWT algorithms follow the JWK's key family**, so a token cannot
   downgrade to an HMAC keyed with a public key.

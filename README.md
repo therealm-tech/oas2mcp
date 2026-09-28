@@ -72,7 +72,8 @@ writing a line of glue code.
   authorization, instead of every call arriving as one shared service account.
 - **Role-based tool access** — verify the caller's JWT against a JWKS and gate
   which tools they can see and call, mapping each `role` to a tool-name regex
-  (`streamable-http` only).
+  (`streamable-http` only). Tools matching `--oauth-public-tool` stay open to
+  everyone, token or not.
 - **MCP authorization discovery** — with `--oauth-resource`, `/mcp` behaves as
   the OAuth protected resource the MCP authorization spec describes: a request
   without a valid token is answered `401` with a `WWW-Authenticate` challenge,
@@ -155,7 +156,8 @@ The OpenAPI source is required: pass exactly one of `--openapi-file` or
 | `--oauth-expected-audience` | `OAUTH_EXPECTED_AUDIENCES` | — | Audience the incoming JWT's `aud` must match. Repeatable. **Set this**: unset, a token your provider minted for another service is accepted here. |
 | `--oauth-expected-issuer` | `OAUTH_EXPECTED_ISSUERS` | —      | Issuer the incoming JWT's `iss` must match. Repeatable. Defence in depth next to the JWKS. |
 | `--oauth-clock-skew` | `OAUTH_CLOCK_SKEW` | `60s`            | Skew tolerated on the incoming JWT's `exp`/`nbf` (e.g. `30s`, `2m`). |
-| `--oauth-resource` | `OAUTH_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--oauth-role-mapper` and `--oauth-expected-issuer`. `streamable-http` only. |
+| `--oauth-public-tool` | `OAUTH_PUBLIC_TOOLS` | —      | Tool-name regex for tools anyone may list and call, without a token. Repeatable; newline-separated via the env var. Authenticated callers get them on top of their roles. Needs `--oauth-role-mapper`. |
+| `--oauth-resource` | `OAUTH_RESOURCE` | —              | Canonical URL clients reach `/mcp` under. Set → unauthenticated requests (beyond the public tools) get a `401` challenge pointing at the Protected Resource Metadata (RFC 9728), so MCP clients discover the authorization server themselves. Needs `--oauth-role-mapper` and `--oauth-expected-issuer`. `streamable-http` only. |
 | `--oauth-role-claim` | `OAUTH_ROLE_CLAIM` | `roles`    | JWT claim listing the caller's roles (array of strings, or a whitespace-separated string). |
 | `--trace-claim`   | `TRACE_CLAIMS`   | —                | JWT claim name to log on each tool call as a `jwt.claims` field (e.g. `sub`, `email`, `tenant_id`). Repeatable; newline-separated via the env var. Logged only, never a metric label. Needs `--oauth-role-mapper`. |
 | `--include`       | `INCLUDE_OPERATIONS` | —            | Only expose operations whose name matches this glob (`*`/`?`). Repeatable. |
@@ -458,8 +460,9 @@ verified against a JWKS (`--oauth-jwks-url`, fetched once at startup, or
 `--oauth-jwks-file`) and the roles are read from the `--oauth-role-claim` claim
 (default `roles`; an array of strings or a whitespace-separated string). A
 caller with no token, an invalid/expired token, or roles that match no mapping
-sees and can call **no** tools — or, with `--oauth-resource`, a caller without a
-valid token is refused outright with a `401` that tells it where to log in (see
+sees and can call **no** tools, apart from the [public ones](#public-tools) — or,
+with `--oauth-resource`, a caller without a valid token is refused with a `401`
+that tells it where to log in (see
 [below](#letting-mcp-clients-find-the-authorization-server)).
 
 ```bash
@@ -475,8 +478,8 @@ oas2mcp \
 ```
 
 This needs the caller's JWT, which only the `streamable-http` transport
-exposes — under `stdio`/`sse` no token is available, so every tool stays
-hidden. The signature is verified with the key family advertised by the JWK
+exposes — under `stdio`/`sse` no token is available, so only the public tools
+are exposed. The signature is verified with the key family advertised by the JWK
 (an algorithm-substitution downgrade such as `HS256` against a public key is
 rejected), and the token's `exp` is enforced. Invalid regexes are rejected at
 startup. With multiple entries set through the environment variable, separate
@@ -603,6 +606,38 @@ OAuth flow, and retries with the token. An invalid or expired token gets the sam
   gets a client ID (dynamic registration, a pre-registered public client, …) is
   settled between the client and the authorization server; oas2mcp takes no
   part in it.
+
+#### Public tools
+
+Some tools can be open to anyone — a catalogue lookup, a status check — while
+the rest needs a login. Name them with `--oauth-public-tool`, a regex over tool
+names, repeatable:
+
+```bash
+oas2mcp \
+  --transport streamable-http --bind-addr 0.0.0.0:8000 \
+  --oauth-jwks-url https://idp.example.com/realms/main/protocol/openid-connect/certs \
+  --oauth-role-mapper 'user:.*' \
+  --oauth-expected-issuer https://idp.example.com/realms/main \
+  --oauth-public-tool '^get_public_' \
+  --oauth-resource https://mcp.example.com/mcp
+```
+
+A caller without a token sees and can call the public tools only; an
+authenticated caller gets them on top of what its roles grant. With
+`--oauth-resource`, an anonymous client is no longer turned away on connection:
+`initialize`, `tools/list` and calls to public tools go through, and the `401`
+challenge comes when it calls a tool that is not public. An *invalid* token is
+still challenged on any request, so a client learns its token needs replacing.
+
+- **Some clients only log in when the connection itself is refused.** Against
+  such a client, public tools mean it stays anonymous and sees the public tools
+  alone. Leave `--oauth-public-tool` unset when every client must log in.
+- **A public tool has no caller identity to delegate.** With
+  `--upstream-oauth-grant jwt-bearer` acting per caller, an anonymous call to a
+  public tool fails with an upstream token error; oas2mcp warns about the
+  combination at startup. A shared upstream identity (`client-credentials`, or
+  a fixed `--upstream-oauth-subject`) serves anonymous calls fine.
 
 ### Metrics
 

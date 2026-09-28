@@ -474,7 +474,13 @@ impl OpenApiServer {
                 }
             },
             None => {
-                tracing::warn!("rejecting request: no bearer token on a role-restricted server");
+                if authorizer.has_public_tools() {
+                    tracing::debug!("no bearer token: serving the public tools only");
+                } else {
+                    tracing::warn!(
+                        "rejecting request: no bearer token on a role-restricted server"
+                    );
+                }
                 Caller {
                     roles: Some(HashSet::new()),
                     traced_claims: Map::new(),

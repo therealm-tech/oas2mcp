@@ -53,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(
             transport = %cli.transport,
             "--oauth-role-mapper only takes effect on the streamable-http transport; \
-             on this transport no client JWT is available, so every tool stays hidden"
+             on this transport no client JWT is available, so only the public tools are exposed"
         );
     }
 
@@ -179,6 +179,11 @@ fn check_delegation_is_possible(cli: &Cli, has_authorizer: bool) -> anyhow::Resu
              transport exposes no client JWT: use --transport streamable-http, or pin a fixed \
              identity with --upstream-oauth-subject",
             cli.transport
+        );
+    }
+    if !cli.oauth_public_tools.is_empty() {
+        tracing::warn!(
+            "--oauth-public-tool with per-caller delegation: an anonymous call to a public tool              has no identity to delegate, so it fails with an upstream token error"
         );
     }
     Ok(())
