@@ -35,6 +35,9 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct ToolSpec {
     pub name: String,
+    /// The operation name before renaming: the `operationId`, or the
+    /// `<method>_<path>` fallback. Filters and access rules match this one.
+    pub operation: String,
     pub description: Option<String>,
     pub method: Method,
     /// Path template relative to the base URL, e.g. `/pets/{petId}`.
@@ -199,6 +202,7 @@ fn build_tool(
     }
 
     ToolSpec {
+        operation: name.clone(),
         name,
         description,
         method,

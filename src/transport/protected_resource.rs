@@ -23,6 +23,10 @@ use url::Url;
 use super::MAX_REQUEST_BODY_BYTES;
 use crate::auth::{Authorizer, bearer_token};
 
+/// Whether the tool advertised under a name is public. The access rules match
+/// operation names, which only the server can map a tool name back to.
+pub type IsPublic = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
 /// RFC 9728 §3's well-known URI suffix.
 const WELL_KNOWN: &str = "/.well-known/oauth-protected-resource";
 
@@ -84,19 +88,23 @@ impl ProtectedResource {
 
     /// Wrap `mcp` so every request to it needs a valid bearer token, and add
     /// the metadata routes beside it, which stay public.
-    pub fn protect(self, mcp: Router) -> Router {
-        let this = Arc::new(self);
-        let metadata = axum::Json(this.metadata.clone());
+    pub fn protect(self, mcp: Router, is_public: IsPublic) -> Router {
+        let metadata = axum::Json(self.metadata.clone());
+        let metadata_paths = self.metadata_paths.clone();
+        let this = Arc::new(Gate {
+            resource: self,
+            is_public,
+        });
         let mut router = mcp.layer(axum::middleware::from_fn_with_state(
             this.clone(),
             require_bearer,
         ));
-        for path in &this.metadata_paths {
+        for path in &metadata_paths {
             let metadata = metadata.clone();
             router = router.route(path, get(move || async move { metadata }));
         }
         tracing::info!(
-            metadata = this.metadata_url,
+            metadata = this.resource.metadata_url,
             "serving OAuth protected resource metadata; unauthenticated MCP requests get a 401 challenge"
         );
         router
@@ -118,14 +126,17 @@ impl ProtectedResource {
     }
 }
 
-async fn require_bearer(
-    State(resource): State<Arc<ProtectedResource>>,
-    request: Request,
-    next: Next,
-) -> Response {
+/// The middleware's state: the resource, and how to tell a public tool.
+struct Gate {
+    resource: ProtectedResource,
+    is_public: IsPublic,
+}
+
+async fn require_bearer(State(gate): State<Arc<Gate>>, request: Request, next: Next) -> Response {
+    let resource = &gate.resource;
     let Some(token) = bearer_token(request.headers()) else {
         if resource.authorizer.has_public_tools() {
-            return admit_anonymous(&resource, request, next).await;
+            return admit_anonymous(&gate, request, next).await;
         }
         tracing::debug!("challenging an MCP request that carries no bearer token");
         return resource.challenge(false, "Unauthorized: missing bearer token".into());
@@ -139,7 +150,7 @@ async fn require_bearer(
 
 /// Let an anonymous request through unless it calls a tool that is not public.
 /// The body has to be read for that, and is handed on intact.
-async fn admit_anonymous(resource: &ProtectedResource, request: Request, next: Next) -> Response {
+async fn admit_anonymous(gate: &Gate, request: Request, next: Next) -> Response {
     let (parts, body) = request.into_parts();
     let Ok(body) = axum::body::to_bytes(body, MAX_REQUEST_BODY_BYTES).await else {
         return (
@@ -148,12 +159,12 @@ async fn admit_anonymous(resource: &ProtectedResource, request: Request, next: N
         )
             .into_response();
     };
-    if let Some(tool) = called_tool(&body).filter(|tool| !resource.authorizer.is_public(tool)) {
+    if let Some(tool) = called_tool(&body).filter(|tool| !(gate.is_public)(tool)) {
         tracing::debug!(
             tool,
             "challenging an anonymous call to a tool that is not public"
         );
-        return resource.challenge(
+        return gate.resource.challenge(
             false,
             format!("Unauthorized: tool `{tool}` needs a bearer token"),
         );
@@ -194,19 +205,24 @@ mod tests {
 
     fn app(url: &str) -> Router {
         let mcp = Router::new().route("/mcp", axum::routing::post(|| async { "reached" }));
-        resource(url).expect("valid resource").protect(mcp)
+        let authorizer = Arc::new(test_authorizer());
+        resource(url)
+            .expect("valid resource")
+            .protect(mcp, Arc::new(move |tool: &str| authorizer.is_public(tool)))
     }
 
     /// An app with public tools, whose endpoint echoes the body it received.
     fn app_with_public_tools(patterns: &[&str]) -> Router {
         let mcp = Router::new().route("/mcp", axum::routing::post(|body: Bytes| async { body }));
+        let authorizer = Arc::new(test_authorizer_with_public_tools(patterns));
+        let is_public = authorizer.clone();
         ProtectedResource::new(
             &Url::parse("https://mcp.example.com/mcp").expect("valid URL"),
             &[ISSUER.to_string()],
-            Arc::new(test_authorizer_with_public_tools(patterns)),
+            authorizer,
         )
         .expect("valid resource")
-        .protect(mcp)
+        .protect(mcp, Arc::new(move |tool: &str| is_public.is_public(tool)))
     }
 
     async fn send(app: &Router, method: &str, path: &str, token: Option<&str>) -> Response {
