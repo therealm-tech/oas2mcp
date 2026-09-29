@@ -48,8 +48,9 @@ how it is put together.
 - **[`filter`](src/filter.rs)**, **[`rename`](src/rename.rs)**,
   **[`tools`](src/tools.rs)** — turn operations into tools: filtering on the
   original operation name and tags, then renaming, then building each tool's
-  input schema with local `$ref`s inlined. `tools` also builds the upstream
-  request for a call and shapes the tool result.
+  input schema with local `$ref`s inlined and its annotations derived from the
+  HTTP method. `tools` also builds the upstream request for a call and shapes
+  the tool result.
 - **[`server`](src/server.rs)** — `OpenApiServer`, the `rmcp` handler. It holds
   the document-derived `Snapshot` behind an `ArcSwap`, applies role-based
   visibility on `tools/list` and `tools/call`, and executes calls.
@@ -166,6 +167,11 @@ authorization server.
 - **Filtering runs on the original operation name, renaming after it.** Filters
   stay stable when the rename rules change, and a user writes them against the
   names in the document they are reading.
+- **Tool annotations come from the HTTP method alone.** The method is the one
+  signal every document carries about an operation's effect, and RFC 9110
+  defines what it promises. Where it promises nothing — `destructiveHint` on a
+  `POST` — the hint is left out so clients assume the worst, as the MCP
+  specification's default does.
 - **Role mapping is on tool names, not on data.** It controls which operations
   a caller may use. What data those operations return is the upstream API's
   decision, which is why delegation (`jwt-bearer`) exists: it makes the upstream

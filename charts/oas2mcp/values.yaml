@@ -85,6 +85,9 @@ oas2mcp:
     # -- (int) Maximum length of a tool name; a longer one is truncated and given a short hash of the full name. Unset → the binary default (`64`, the limit Anthropic and OpenAI enforce). Lower it when a gateway prefixes the tools it aggregates. Maps to `MAX_NAME_LEN`.
     maxNameLen: ~
 
+  # -- Advertise each tool with the MCP behaviour hints its HTTP method implies (`readOnlyHint` on a `GET`, `destructiveHint` on a `DELETE`, …), so a client can tell a read from a write. Set to `false` when the document's methods do not match what its operations do. Maps to `AUTO_TOOL_ANNOTATIONS`.
+  autoToolAnnotations: true
+
   # -- Authenticate callers from their JWT, turned on by `jwks.url` or `jwks.file`, and optionally restrict the tool set per caller by role. Requires `transport: http` (the only transport exposing the client's JWT). A caller with no valid token can call only the public tools (see `roleMapper`), and sees only them unless `anonymousDiscovery` is set.
   auth:
     # -- (list) Role→tool mappings as `role:operation_regex` (e.g. `admin:.*`, `reader:^get`). A tool is visible if any of the caller's roles maps to a regex matching its operation name (the `operationId` before `rename`, like the filters). The reserved role `*` makes its tools public: usable by anyone, token or not. Without entries other than `*` ones, any authenticated caller may use every tool. Requires `jwks.url` or `jwks.file`. Maps to `INBOUND_ROLE_MAPPER`.

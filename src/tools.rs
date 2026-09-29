@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use reqwest::Method;
+use rmcp::model::ToolAnnotations;
 use serde_json::{Map, Value, json};
 
 #[cfg(test)]
@@ -50,6 +51,23 @@ pub struct ToolSpec {
     pub has_body: bool,
     /// The JSON Schema advertised to MCP clients as the tool input schema.
     pub input_schema: Arc<Map<String, Value>>,
+}
+
+impl ToolSpec {
+    /// The MCP behaviour hints implied by the HTTP method's semantics
+    /// (RFC 9110 §9.2). A `POST` leaves `destructiveHint` unset: the method
+    /// says nothing about it, and the spec default (`true`) is the safe reading.
+    pub fn annotations(&self) -> ToolAnnotations {
+        let hints = ToolAnnotations::new().open_world(true);
+        match self.method.as_str() {
+            "GET" | "HEAD" | "OPTIONS" | "TRACE" => {
+                hints.read_only(true).destructive(false).idempotent(true)
+            }
+            "PUT" | "DELETE" => hints.read_only(false).destructive(true).idempotent(true),
+            "PATCH" => hints.read_only(false).destructive(true).idempotent(false),
+            _ => hints.read_only(false).idempotent(false),
+        }
+    }
 }
 
 /// Build one [`ToolSpec`] per operation defined in the document, keeping only
@@ -917,5 +935,46 @@ paths:
         let tools = tools_from(SPEC);
         let names: Vec<_> = tools[0].params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["q"]);
+    }
+
+    #[test]
+    fn annotations_follow_the_http_method() {
+        const SPEC: &str = r##"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+paths:
+  /a:
+    get: { operationId: get }
+    head: { operationId: head }
+    options: { operationId: options }
+    post: { operationId: post }
+    put: { operationId: put }
+    patch: { operationId: patch }
+    delete: { operationId: delete }
+"##;
+        // (read-only, destructive, idempotent); `None` is the spec default.
+        let expected = [
+            ("get", Some(true), Some(false), Some(true)),
+            ("head", Some(true), Some(false), Some(true)),
+            ("options", Some(true), Some(false), Some(true)),
+            ("post", Some(false), None, Some(false)),
+            ("put", Some(false), Some(true), Some(true)),
+            ("patch", Some(false), Some(true), Some(false)),
+            ("delete", Some(false), Some(true), Some(true)),
+        ];
+        let tools = tools_from(SPEC);
+        assert_eq!(tools.len(), expected.len());
+        for (name, read_only, destructive, idempotent) in expected {
+            let tool = tools.iter().find(|t| t.name == name).expect(name);
+            let hints = tool.annotations();
+            assert_eq!(hints.read_only_hint, read_only, "{name}");
+            assert_eq!(hints.destructive_hint, destructive, "{name}");
+            assert_eq!(hints.idempotent_hint, idempotent, "{name}");
+            assert_eq!(hints.open_world_hint, Some(true), "{name}");
+            assert_eq!(hints.title, None, "{name}");
+        }
+        // A POST is taken as destructive, as the spec says of an unset hint.
+        let post = tools.iter().find(|t| t.name == "post").expect("post");
+        assert!(post.annotations().is_destructive());
     }
 }

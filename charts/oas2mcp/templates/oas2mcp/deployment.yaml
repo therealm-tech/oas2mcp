@@ -246,6 +246,8 @@ spec:
             - name: MAX_NAME_LEN
               value: {{ . | quote }}
             {{- end }}
+            - name: AUTO_TOOL_ANNOTATIONS
+              value: {{ .Values.oas2mcp.autoToolAnnotations | quote }}
             {{- with .Values.oas2mcp.auth.roleMapper }}
             - name: INBOUND_ROLE_MAPPER
               value: {{ join "\n" . | quote }}
