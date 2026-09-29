@@ -148,6 +148,22 @@ per-session clone of the server sees the new tool set at once, and a call in
 flight keeps the snapshot it started with. A failed fetch keeps the previous
 snapshot.
 
+When the new tools differ from the old ones as a client sees them — any field
+of their `tools/list` entry, or the operation name the access rules match —
+connected clients receive `notifications/tools/list_changed`. A reload that
+changes only the document version or the operation order sends nothing. Two
+paths carry it, both fed by one `ListChanged` shared by every server clone:
+
+- a session opened with `initialize` registers its `rmcp` peer in
+  `on_initialized`; the notification goes to every registered peer whose
+  transport is still open, and closed ones are dropped;
+- a `2026-07-28` client, which has no session, holds a `subscriptions/listen`
+  request open; its handler waits on a `watch` channel bumped by each change.
+
+Stateless `http` gives a pre-`2026-07-28` client no stream to receive the
+notification on. On `http`, shutdown closes the open session and subscription
+streams, which would otherwise hold the graceful drain open.
+
 ### Listing tools in pages
 
 With `--tools-page-size`, `tools/list` returns at most that many tools and a
@@ -174,7 +190,9 @@ The process holds no persistent state. In memory:
   (issuer and subject) for `jwt-bearer`, never kept past the caller token's own
   expiry;
 - the JWKS, loaded once at startup;
-- `rmcp`'s session table, only with `--stream-responses`.
+- `rmcp`'s session table, only with `--stream-responses`;
+- with a reload interval, the peers of the open sessions, to notify them of a
+  tool-list change.
 
 A restart loses nothing that cannot be rebuilt from the document and the
 authorization server.

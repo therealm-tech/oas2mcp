@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, bail};
@@ -16,11 +16,12 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, Header
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Icon, Implementation,
     ListToolsResult, PaginatedRequestParams, ResourceContents, ServerCapabilities, ServerConfig,
-    Tool,
+    SubscriptionFilter, Tool,
 };
-use rmcp::service::{RequestContext, RoleServer};
+use rmcp::service::{NotificationContext, Peer, RequestContext, RoleServer, SubscriptionContext};
 use rmcp::{ErrorData, ServerHandler};
 use serde_json::{Map, Value};
+use tokio::sync::watch;
 use url::Url;
 
 use crate::auth::{Authorizer, bearer_token};
@@ -71,6 +72,58 @@ pub struct OpenApiServer {
     annotate_tools: bool,
     /// `tools/list` page size. `None` lists every tool in one reply.
     tools_page_size: Option<NonZeroUsize>,
+    /// Tells connected clients the tool list changed. `None` when the document
+    /// is never reloaded, so the list cannot change.
+    list_changed: Option<ListChanged>,
+}
+
+/// Fans a tool-list change out to every connected client. A session opened
+/// with `initialize` (protocol before 2026-07-28) is notified through its peer;
+/// a 2026-07-28 client only receives it on a `subscriptions/listen` stream,
+/// which waits on `generation`.
+#[derive(Clone)]
+struct ListChanged {
+    generation: Arc<watch::Sender<u64>>,
+    peers: Arc<Mutex<Vec<Peer<RoleServer>>>>,
+}
+
+impl ListChanged {
+    fn new() -> Self {
+        Self {
+            generation: Arc::new(watch::Sender::new(0)),
+            peers: Arc::default(),
+        }
+    }
+
+    /// Remember a session's peer, forgetting the ones whose session is over.
+    fn register(&self, peer: Peer<RoleServer>) {
+        let mut peers = self.peers.lock().expect("peers mutex");
+        peers.retain(|peer| !peer.is_transport_closed());
+        peers.push(peer);
+        tracing::debug!(
+            sessions = peers.len(),
+            "session registered for tools/list_changed"
+        );
+    }
+
+    fn notify(&self) {
+        self.generation.send_modify(|generation| *generation += 1);
+        let mut peers = self.peers.lock().expect("peers mutex");
+        peers.retain(|peer| !peer.is_transport_closed());
+        tracing::debug!(
+            sessions = peers.len(),
+            subscriptions = self.generation.receiver_count(),
+            "notifying clients that the tool list changed"
+        );
+        for peer in peers.iter() {
+            let peer = peer.clone();
+            tokio::spawn(async move {
+                if let Err(err) = peer.notify_tool_list_changed().await {
+                    tracing::debug!(error = %err, "could not send tools/list_changed to a session");
+                }
+            });
+        }
+    }
 }
 
 /// The authenticated caller of a request: their JWT roles (when authorization
@@ -136,6 +189,8 @@ impl OpenApiServer {
             auto_tool_annotations = cli.auto_tool_annotations,
             "configured tool annotations"
         );
+        // Mirrors the condition under which `main` spawns the reload loop.
+        let reloads = cli.reload_every.is_some() && cli.openapi_url.is_some();
 
         Ok(Self {
             state: Arc::new(ArcSwap::from_pointee(snapshot)),
@@ -147,18 +202,24 @@ impl OpenApiServer {
             metrics,
             annotate_tools: cli.auto_tool_annotations,
             tools_page_size: cli.tools_page_size,
+            list_changed: reloads.then(ListChanged::new),
         })
     }
 
     /// Rebuild the tool set from a freshly fetched document and swap it in
     /// atomically. The static config (auth headers, forwarded header names, the
     /// HTTP client) is untouched. If the new document yields no usable tools,
-    /// the swap still happens — that is what the document now says.
+    /// the swap still happens — that is what the document now says. Connected
+    /// clients are told when the advertised tools differ from the previous set.
     pub fn reload(&self, spec: &Spec, cli: &Cli) -> anyhow::Result<()> {
         let snapshot = build_snapshot(spec, cli)?;
         let tools = snapshot.tools.len();
-        self.state.store(Arc::new(snapshot));
-        tracing::info!(tools, "reloaded the OpenAPI document");
+        let previous = self.state.swap(Arc::new(snapshot));
+        let changed = !advertise_the_same(&previous.tools, &self.state.load().tools);
+        tracing::info!(tools, changed, "reloaded the OpenAPI document");
+        if changed && let Some(list_changed) = &self.list_changed {
+            list_changed.notify();
+        }
         Ok(())
     }
 
@@ -307,10 +368,60 @@ impl ServerHandler for OpenApiServer {
         server_info.title.clone_from(&state.title);
 
         let mut info = ServerConfig::default();
-        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info.capabilities = if self.list_changed.is_some() {
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build()
+        } else {
+            ServerCapabilities::builder().enable_tools().build()
+        };
         info.server_info = server_info;
         info.instructions = Some(state.instructions.clone());
         info
+    }
+
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        tracing::info!("client initialized");
+        // `initialize` always negotiates a version before 2026-07-28, so this
+        // session takes unsolicited notifications.
+        if let Some(list_changed) = &self.list_changed {
+            list_changed.register(context.peer);
+        }
+    }
+
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        self.list_changed
+            .as_ref()
+            .map(|_| requested.supported_by(&self.get_info().capabilities))
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
+        let Some(list_changed) = &self.list_changed else {
+            context.cancelled().await;
+            return Ok(());
+        };
+        let mut generation = list_changed.generation.subscribe();
+        tracing::debug!("subscription opened for tools/list_changed");
+        loop {
+            tokio::select! {
+                () = context.cancelled() => break,
+                changed = generation.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    if let Err(err) = context.sink().notify_tool_list_changed().await {
+                        tracing::debug!(error = %err, "could not send tools/list_changed to a subscription");
+                        break;
+                    }
+                }
+            }
+        }
+        tracing::debug!("subscription closed");
+        Ok(())
     }
 
     async fn list_tools(
@@ -720,6 +831,21 @@ fn filter_forwarded(allow: &[HeaderName], src: &HeaderMap) -> HeaderMap {
     out
 }
 
+/// Whether two tool sets look the same to a client: the same `tools/list`
+/// entries, in any order. The operation name counts too, since the access rules
+/// match it and so decide who sees the tool.
+fn advertise_the_same(before: &[ToolSpec], after: &[ToolSpec]) -> bool {
+    fn listing(tools: &[ToolSpec]) -> Vec<(&str, Tool)> {
+        let mut listing: Vec<_> = tools
+            .iter()
+            .map(|spec| (spec.operation.as_str(), advertised(spec, true)))
+            .collect();
+        listing.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        listing
+    }
+    listing(before) == listing(after)
+}
+
 /// Build the document-derived [`Snapshot`]: resolve the base URL, apply the
 /// operation filter, build the tools and their (renamed) name index, and render
 /// the instructions. Shared by the initial build and every reload.
@@ -1112,6 +1238,194 @@ paths:
         assert_eq!(a.title.as_deref(), Some("Get an A"));
         assert_eq!(a.description.as_deref(), Some("Get an A\n\nReturns the A."));
         assert_eq!(tool("getB").title, None);
+    }
+
+    const TWO_GETS: &str = r#"
+openapi: 3.0.0
+info: { title: T, version: "2" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
+  /b: { get: { operationId: getB, responses: { "200": { description: ok } } } }
+"#;
+
+    fn tools_of(yaml: &str) -> Vec<ToolSpec> {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        build_snapshot(&spec_from(yaml), &cli)
+            .expect("snapshot builds")
+            .tools
+    }
+
+    #[test]
+    fn a_new_document_that_advertises_the_same_tools_is_no_change() {
+        // Only `info.version` and the path order differ.
+        let reordered = r#"
+openapi: 3.0.0
+info: { title: T, version: "3" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /b: { get: { operationId: getB, responses: { "200": { description: ok } } } }
+  /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
+"#;
+        assert!(advertise_the_same(
+            &tools_of(TWO_GETS),
+            &tools_of(reordered)
+        ));
+    }
+
+    #[test]
+    fn a_tool_added_described_or_reshaped_is_a_change() {
+        let described = r#"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a: { get: { operationId: getA, summary: Fetch A, responses: { "200": { description: ok } } } }
+"#;
+        let with_param = r#"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a:
+    get:
+      operationId: getA
+      parameters: [{ name: q, in: query, schema: { type: string } }]
+      responses: { "200": { description: ok } }
+"#;
+        let before = tools_of(ONE_GET);
+        assert!(!advertise_the_same(&before, &tools_of(TWO_GETS)));
+        assert!(!advertise_the_same(&before, &tools_of(described)));
+        assert!(!advertise_the_same(&before, &tools_of(with_param)));
+    }
+
+    /// A server that reloads, as `--reload-every` with a document URL sets up.
+    fn reloading_server() -> (OpenApiServer, Cli) {
+        let cli = Cli::try_parse_from([
+            "oas2mcp",
+            "--openapi-url",
+            "https://api.example.com/openapi.yaml",
+            "--reload-every",
+            "1m",
+        ])
+        .expect("CLI parses");
+        let server = OpenApiServer::from_spec(&spec_from(ONE_GET), &cli, None, Metrics::disabled())
+            .expect("server builds");
+        (server, cli)
+    }
+
+    #[test]
+    fn list_changed_is_advertised_only_when_the_document_reloads() {
+        let list_changed = |server: &OpenApiServer| {
+            server
+                .get_info()
+                .capabilities
+                .tools
+                .and_then(|tools| tools.list_changed)
+        };
+        let (server, _) = reloading_server();
+        assert_eq!(list_changed(&server), Some(true));
+
+        // `--reload-every` without a URL reloads nothing.
+        let cli = Cli::try_parse_from(["oas2mcp", "--reload-every", "1m"]).expect("CLI parses");
+        let server = OpenApiServer::from_spec(&spec_from(ONE_GET), &cli, None, Metrics::disabled())
+            .expect("server builds");
+        assert_eq!(list_changed(&server), None);
+    }
+
+    /// Counts the `notifications/tools/list_changed` a legacy client receives.
+    #[derive(Clone)]
+    struct Counting(tokio::sync::mpsc::UnboundedSender<()>);
+
+    impl rmcp::ClientHandler for Counting {
+        async fn on_tool_list_changed(&self, _context: NotificationContext<rmcp::RoleClient>) {
+            let _ = self.0.send(());
+        }
+    }
+
+    const NOTIFICATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    #[tokio::test]
+    async fn an_initialized_session_is_told_when_the_tools_change() {
+        use rmcp::ServiceExt as _;
+
+        let (server, cli) = reloading_server();
+        let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+        let running = server.clone();
+        tokio::spawn(async move {
+            if let Ok(service) = running.serve(server_io).await {
+                let _ = service.waiting().await;
+            }
+        });
+        let (tx, mut notifications) = tokio::sync::mpsc::unbounded_channel();
+        let client = Counting(tx)
+            .serve(client_io)
+            .await
+            .expect("client connects");
+
+        // `notifications/initialized` is handled asynchronously.
+        let registered = server.list_changed.clone().expect("the server reloads");
+        tokio::time::timeout(NOTIFICATION_TIMEOUT, async {
+            while registered.peers.lock().expect("peers mutex").is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the session registers");
+
+        server.reload(&spec_from(ONE_GET), &cli).expect("reload");
+        server.reload(&spec_from(TWO_GETS), &cli).expect("reload");
+        tokio::time::timeout(NOTIFICATION_TIMEOUT, notifications.recv())
+            .await
+            .expect("a notification arrives")
+            .expect("the channel is open");
+        // A round trip flushes anything the unchanged reload could have sent.
+        client.list_tools(None).await.expect("tools/list");
+        assert!(
+            notifications.try_recv().is_err(),
+            "one change, one notification"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_subscription_is_told_when_the_tools_change() {
+        use rmcp::model::{ProtocolVersion, ServerNotification};
+        use rmcp::{ClientLifecycleMode, ClientServiceExt as _, ServiceExt as _};
+
+        let (server, cli) = reloading_server();
+        let (server_io, client_io) = tokio::io::duplex(64 * 1024);
+        let running = server.clone();
+        tokio::spawn(async move {
+            if let Ok(service) = running.serve(server_io).await {
+                let _ = service.waiting().await;
+            }
+        });
+        let client = ()
+            .serve_with_lifecycle(
+                client_io,
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                },
+            )
+            .await
+            .expect("client connects");
+
+        let wanted = SubscriptionFilter::builder().tools_list_changed().build();
+        let mut subscription = client.listen(wanted.clone()).await.expect("listen");
+        assert_eq!(subscription.acknowledged(), &wanted);
+
+        server.reload(&spec_from(TWO_GETS), &cli).expect("reload");
+        let notification = tokio::time::timeout(NOTIFICATION_TIMEOUT, subscription.next())
+            .await
+            .expect("a notification arrives")
+            .expect("the subscription is healthy");
+        assert!(
+            matches!(
+                notification,
+                Some(ServerNotification::ToolListChangedNotification(_))
+            ),
+            "{notification:?}"
+        );
     }
 
     #[test]
