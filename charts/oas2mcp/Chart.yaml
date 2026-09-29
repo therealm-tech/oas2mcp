@@ -5,8 +5,8 @@ description: >-
   Expose an OpenAPI document as a Model Context Protocol (MCP) server over the
   Streamable HTTP or legacy SSE transport.
 type: application
-version: 1.0.0
-appVersion: "1.0.0"
+version: 1.0.1
+appVersion: "1.0.1"
 icon: https://raw.githubusercontent.com/therealm-tech/oas2mcp/main/logo.svg
 home: https://github.com/therealm-tech/oas2mcp
 sources:
