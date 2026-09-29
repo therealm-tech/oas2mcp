@@ -30,9 +30,9 @@ COPY --from=builder \
      /usr/local/src/oas2mcp/target/release/oas2mcp /usr/local/bin/oas2mcp
 
 USER 65532:65532
-# Default to the remote transport; override TRANSPORT/BIND_ADDR as needed.
-ENV TRANSPORT=streamable-http \
-    BIND_ADDR=0.0.0.0:8000
+# The transport is a subcommand (`http`, `sse`), `stdio` when none is given;
+# a remote one listens on every interface so a published port reaches it.
+ENV BIND_ADDR=0.0.0.0:8000
 EXPOSE 8000
 HEALTHCHECK CMD ["/usr/local/bin/oas2mcp", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/oas2mcp"]

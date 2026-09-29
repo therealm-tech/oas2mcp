@@ -34,11 +34,20 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how it is put together.
 
 ### Prerequisites
 
-[`rustup`](https://rustup.rs): the toolchain version is pinned in
-`rust-toolchain.toml` and installed on the first `cargo` invocation. Or Docker,
-to build the image instead.
+Docker, to run the published image; or [`rustup`](https://rustup.rs), to build
+from source — the toolchain version is pinned in `rust-toolchain.toml` and
+installed on the first `cargo` invocation.
 
 ### Installation
+
+The image is published on GHCR for `amd64` and `arm64`; its entrypoint is the
+`oas2mcp` binary:
+
+```bash
+docker run --rm -i ghcr.io/therealm-tech/oas2mcp --openapi-url https://petstore3.swagger.io/api/v3/openapi.json
+```
+
+Or build from source:
 
 ```bash
 git clone https://github.com/therealm-tech/oas2mcp.git
@@ -52,11 +61,7 @@ cd oas2mcp
 cargo build --release
 ```
 
-The binary is `target/release/oas2mcp`. Or with Docker:
-
-```bash
-docker build -t oas2mcp .
-```
+The binary is `target/release/oas2mcp`.
 
 ### Usage
 
