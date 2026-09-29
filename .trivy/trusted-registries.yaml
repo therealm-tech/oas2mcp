@@ -1,0 +1,5 @@
+# Registries KSV-0125 accepts container images from. Replaces Trivy's default
+# list (the cloud providers' registries), which does not include ghcr.io.
+ksv0125:
+  trusted_registries:
+    - ghcr.io

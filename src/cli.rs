@@ -650,7 +650,7 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
-/// The transport to serve the MCP server over.
+/// The transport to serve the MCP server over, or a probe of one that is.
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Standard input/output, for a local subprocess MCP client. The default.
@@ -663,6 +663,10 @@ pub enum Command {
     /// The only transport that sees the client's HTTP headers, hence its
     /// caller authentication and header forwarding flags.
     Http(Box<HttpArgs>),
+    /// Exit 0 when something accepts TCP connections on `--bind-addr`, 1
+    /// otherwise. For a container `HEALTHCHECK`, which has no shell or `curl`
+    /// to probe with; it serves nothing.
+    Healthcheck(ListenArgs),
 }
 
 impl Command {
@@ -671,6 +675,7 @@ impl Command {
             Self::Stdio => "stdio",
             Self::Sse(_) => "sse",
             Self::Http(_) => "http",
+            Self::Healthcheck(_) => "healthcheck",
         }
     }
 }
@@ -1023,6 +1028,16 @@ mod tests {
         let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
         assert!(matches!(cli.command(), Command::Stdio));
         assert!(cli.http().is_none());
+    }
+
+    #[test]
+    fn the_healthcheck_probes_the_bind_address() {
+        let cli = Cli::try_parse_from(["oas2mcp", "healthcheck", "--bind-addr", "0.0.0.0:9000"])
+            .expect("the healthcheck parses");
+        let Command::Healthcheck(listen) = cli.command() else {
+            panic!("expected the healthcheck subcommand");
+        };
+        assert_eq!(listen.bind_addr, "0.0.0.0:9000".parse().unwrap());
     }
 
     #[test]

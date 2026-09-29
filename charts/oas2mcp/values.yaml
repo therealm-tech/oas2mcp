@@ -263,11 +263,11 @@ oas2mcp:
     # -- Forbid running as root.
     runAsNonRoot: true
     # -- UID to run every container as.
-    runAsUser: 1000
+    runAsUser: 65532
     # -- GID to run every container as.
-    runAsGroup: 1000
+    runAsGroup: 65532
     # -- Owning group for mounted volumes.
-    fsGroup: 1000
+    fsGroup: 65532
     seccompProfile:
       # -- Seccomp profile applied to the pod.
       type: RuntimeDefault

@@ -144,13 +144,15 @@ CRITICAL. Advisories with no released fix are excluded from both.
 
 Trivy renders the chart itself, but only when handed the values its templates
 require (`TRIVY_HELM_VALUES`). Without them it logs a render error, scans no
-chart at all, and still reports success — so keep that variable set.
+chart at all, and still reports success — so keep that variable set. The
+misconfiguration checks also read their parameters from [`.trivy/`](.trivy)
+(`TRIVY_CONFIG_DATA`), such as the registries images may come from.
 
 Reproduce either scan locally:
 
 ```bash
 # What the quality workflow gates on:
-TRIVY_HELM_VALUES=charts/oas2mcp/values-lint.yaml \
+TRIVY_HELM_VALUES=charts/oas2mcp/values-lint.yaml TRIVY_CONFIG_DATA=.trivy \
   trivy fs . --scanners vuln,secret,misconfig \
     --severity HIGH,CRITICAL --ignore-unfixed \
     --skip-files tests/fixtures/test_rsa_key.pem

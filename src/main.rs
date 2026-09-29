@@ -8,6 +8,7 @@
 mod auth;
 mod cli;
 mod filter;
+mod healthcheck;
 mod http;
 mod oauth;
 mod openapi;
@@ -39,6 +40,10 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .init();
+
+    if let cli::Command::Healthcheck(listen) = cli.command() {
+        return healthcheck::probe(listen.bind_addr).await;
+    }
 
     let doc_auth =
         openapi::DocAuth::from_cli(&cli).context("configuring OpenAPI document authentication")?;

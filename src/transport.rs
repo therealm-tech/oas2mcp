@@ -50,6 +50,7 @@ pub async fn serve(
             )
             .await
         }
+        Command::Healthcheck(_) => unreachable!("the healthcheck exits before a server is built"),
     }
 }
 
