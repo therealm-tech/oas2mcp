@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -27,6 +28,7 @@ use crate::cli::Cli;
 use crate::filter::{FilterConfig, OperationFilter};
 use crate::oauth::{Delegation, TokenProvider};
 use crate::openapi::Spec;
+use crate::pagination;
 use crate::rename::{RenameConfig, ToolRenamer};
 use crate::telemetry::{Metrics, Outcome};
 use crate::tools::{Param, ParamLocation, ToolSpec, build_tools};
@@ -41,6 +43,9 @@ struct Snapshot {
     base_url: Url,
     title: Option<String>,
     instructions: String,
+    /// Identifies the tool set, so a `tools/list` cursor cut from an earlier
+    /// snapshot is recognised as stale.
+    fingerprint: u64,
 }
 
 /// MCP server backed by an OpenAPI document. Cheap to clone (everything shared
@@ -64,6 +69,8 @@ pub struct OpenApiServer {
     metrics: Metrics,
     /// Advertise each tool with the behaviour hints of its HTTP method.
     annotate_tools: bool,
+    /// `tools/list` page size. `None` lists every tool in one reply.
+    tools_page_size: Option<NonZeroUsize>,
 }
 
 /// The authenticated caller of a request: their JWT roles (when authorization
@@ -139,6 +146,7 @@ impl OpenApiServer {
             upstream_token,
             metrics,
             annotate_tools: cli.auto_tool_annotations,
+            tools_page_size: cli.tools_page_size,
         })
     }
 
@@ -305,23 +313,12 @@ impl ServerHandler for OpenApiServer {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let access = self.caller(&context).access;
-        let tools = self
-            .state
-            .load()
-            .tools
-            .iter()
-            .filter(|spec| self.is_listed(&access, &spec.operation))
-            .map(|spec| advertised(spec, self.annotate_tools))
-            .collect();
-        Ok(ListToolsResult {
-            tools,
-            next_cursor: None,
-            ..Default::default()
-        })
+        let cursor = request.as_ref().and_then(|params| params.cursor.as_deref());
+        self.list_page(&access, cursor)
     }
 
     async fn call_tool(
@@ -499,6 +496,49 @@ impl OpenApiServer {
 }
 
 impl OpenApiServer {
+    /// The page of `tools/list` that `cursor` points to, among the tools
+    /// `access` may list.
+    ///
+    /// The cursor is bound to that exact list: a reload that changed the tool
+    /// set, or a caller whose roles changed, turns it stale, and the client is
+    /// told to start over rather than silently missing or repeating tools.
+    fn list_page(
+        &self,
+        access: &Access,
+        cursor: Option<&str>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        let state = self.state.load();
+        let listed: Vec<&ToolSpec> = state
+            .tools
+            .iter()
+            .filter(|spec| self.is_listed(access, &spec.operation))
+            .collect();
+        let names: Vec<&str> = listed.iter().map(|spec| spec.name.as_str()).collect();
+        let fingerprint = pagination::fingerprint((state.fingerprint, names));
+        let (page, next_cursor) =
+            pagination::page(&listed, fingerprint, self.tools_page_size, cursor).map_err(
+                |err| {
+                    tracing::debug!(cursor, error = %err, "refusing a tools/list cursor");
+                    ErrorData::invalid_params(Cow::from(err.to_string()), None)
+                },
+            )?;
+        tracing::debug!(
+            listed = listed.len(),
+            page = page.len(),
+            more = next_cursor.is_some(),
+            "listing tools"
+        );
+        let tools = page
+            .iter()
+            .map(|spec| advertised(spec, self.annotate_tools))
+            .collect();
+        Ok(ListToolsResult {
+            tools,
+            next_cursor,
+            ..Default::default()
+        })
+    }
+
     /// Resolve the caller's identity for this request: their access and `sub`.
     ///
     /// A request without a bearer token (always the case on `stdio`/`sse`, which
@@ -717,12 +757,28 @@ fn build_snapshot(spec: &Spec, cli: &Cli) -> anyhow::Result<Snapshot> {
         .filter(|t| !t.is_empty())
         .map(str::to_owned);
 
+    let fingerprint = pagination::fingerprint(
+        tools
+            .iter()
+            .map(|tool| {
+                (
+                    &tool.name,
+                    &tool.operation,
+                    &tool.title,
+                    &tool.description,
+                    serde_json::to_string(&tool.input_schema).unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
+
     Ok(Snapshot {
         tools,
         index,
         base_url,
         title,
         instructions,
+        fingerprint,
     })
 }
 
@@ -918,6 +974,7 @@ fn collect_query(param: &Param, value: Option<&Value>, out: &mut Vec<(String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::auth::Authorizer;
     use clap::Parser as _;
 
     fn spec_from(yaml: &str) -> Spec {
@@ -1119,6 +1176,139 @@ paths:
         .expect("server builds");
 
         assert!(!server.is_listed(&Access::Anonymous, "getA"));
+    }
+
+    const FIVE_GETS: &str = r#"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
+  /b: { get: { operationId: getPublicB, responses: { "200": { description: ok } } } }
+  /c: { get: { operationId: getC, responses: { "200": { description: ok } } } }
+  /d: { get: { operationId: getPublicD, responses: { "200": { description: ok } } } }
+  /e: { get: { operationId: getPublicE, responses: { "200": { description: ok } } } }
+"#;
+
+    fn paginated_server(page_size: &str, authorizer: Option<Authorizer>) -> OpenApiServer {
+        let cli =
+            Cli::try_parse_from(["oas2mcp", "--tools-page-size", page_size]).expect("CLI parses");
+        OpenApiServer::from_spec(
+            &spec_from(FIVE_GETS),
+            &cli,
+            authorizer.map(Arc::new),
+            Metrics::disabled(),
+        )
+        .expect("server builds")
+    }
+
+    /// Walk every page, returning the tool names and the number of pages.
+    fn list_all(server: &OpenApiServer, access: &Access) -> (Vec<String>, usize) {
+        let mut names = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0;
+        loop {
+            let page = server
+                .list_page(access, cursor.as_deref())
+                .expect("valid cursor");
+            names.extend(page.tools.iter().map(|tool| tool.name.to_string()));
+            pages += 1;
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => return (names, pages),
+            }
+        }
+    }
+
+    #[test]
+    fn pages_concatenate_to_the_full_tool_list() {
+        let server = paginated_server("2", None);
+        let (names, pages) = list_all(&server, &Access::Unrestricted);
+        assert_eq!(
+            names,
+            ["getA", "getPublicB", "getC", "getPublicD", "getPublicE"]
+        );
+        assert_eq!(pages, 3);
+    }
+
+    #[test]
+    fn without_a_page_size_every_tool_comes_in_one_reply() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("CLI parses");
+        let server =
+            OpenApiServer::from_spec(&spec_from(FIVE_GETS), &cli, None, Metrics::disabled())
+                .expect("server builds");
+        let page = server
+            .list_page(&Access::Unrestricted, None)
+            .expect("lists");
+        assert_eq!(page.tools.len(), 5);
+        assert_eq!(page.next_cursor, None);
+    }
+
+    #[test]
+    fn pagination_runs_over_the_callers_own_list() {
+        let authorizer = crate::auth::tests::test_authorizer_with_public_tools(&["^getPublic"]);
+        let server = paginated_server("2", Some(authorizer));
+
+        let (names, pages) = list_all(&server, &Access::Anonymous);
+        assert_eq!(names, ["getPublicB", "getPublicD", "getPublicE"]);
+        assert_eq!(pages, 2);
+
+        let admin = Access::Authenticated(HashSet::from(["admin".to_string()]));
+        assert_eq!(list_all(&server, &admin).0.len(), 5);
+
+        // A cursor cut from one caller's list does not walk another's.
+        let first = server
+            .list_page(&admin, None)
+            .expect("lists")
+            .next_cursor
+            .expect("more pages");
+        let err = server
+            .list_page(&Access::Anonymous, Some(&first))
+            .expect_err("another list");
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn a_garbage_cursor_is_an_invalid_params_error() {
+        let server = paginated_server("2", None);
+        for cursor in ["", "garbage", "0000000000000000.2"] {
+            let err = server
+                .list_page(&Access::Unrestricted, Some(cursor))
+                .expect_err("not a cursor we issued");
+            assert_eq!(
+                err.code,
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "{cursor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reload_that_changes_the_tools_turns_a_cursor_stale() {
+        let server = paginated_server("2", None);
+        let cli = Cli::try_parse_from(["oas2mcp", "--tools-page-size", "2"]).expect("CLI parses");
+        let next = server
+            .list_page(&Access::Unrestricted, None)
+            .expect("lists")
+            .next_cursor
+            .expect("more pages");
+
+        // Reloading the same document keeps the cursor good.
+        server
+            .reload(&spec_from(FIVE_GETS), &cli)
+            .expect("reload succeeds");
+        server
+            .list_page(&Access::Unrestricted, Some(&next))
+            .expect("same tool set, same cursor");
+
+        server
+            .reload(&spec_from(&FIVE_GETS.replace("getC", "getZ")), &cli)
+            .expect("reload succeeds");
+        let err = server
+            .list_page(&Access::Unrestricted, Some(&next))
+            .expect_err("the tool set changed");
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("stale"), "{}", err.message);
     }
 
     /// Build the request one tool call would send, and hand back its headers.

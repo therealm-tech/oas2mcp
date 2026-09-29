@@ -11,6 +11,7 @@ mod filter;
 mod http;
 mod oauth;
 mod openapi;
+mod pagination;
 mod rename;
 mod server;
 mod telemetry;

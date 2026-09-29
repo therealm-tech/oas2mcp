@@ -182,6 +182,7 @@ document.
 | `--rename`        | `RENAME_OPERATIONS` | —             | Rewrite tool names, as `<regex>=<replacement>` (split on the first `=`). Repeatable; rules chain in order. Applied **after** filtering. |
 | `--max-name-len`  | `MAX_NAME_LEN`   | `64`             | Maximum tool name length. A longer name is truncated and given a short hash of the full name, and the rewrite is logged. |
 | `--auto-tool-annotations` | `AUTO_TOOL_ANNOTATIONS` | `true` | Advertise each tool with the MCP behaviour hints its HTTP method implies — see [Tool annotations](#tool-annotations). Turn off with `--auto-tool-annotations=false`. |
+| `--tools-page-size` | `TOOLS_PAGE_SIZE` | —            | Maximum number of tools per `tools/list` reply, walked with the MCP cursor. Unset → every tool in one reply, since many clients read only the first page. A cursor issued before a reload that changed the tool set is refused (`-32602`); the client lists again from the start. |
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Base OTLP endpoint to push tool-call metrics to over HTTP (e.g. `http://localhost:4318`); `/v1/metrics` is appended. Set → OTLP export on. |
 | `--metrics-addr`  | `METRICS_ADDR`   | —                | Address to serve a Prometheus `/metrics` endpoint on (e.g. `0.0.0.0:9090`). Set → scrape endpoint on. Independent of `--otlp-endpoint`. |
 | `--otel-service-name` | `OTEL_SERVICE_NAME` | `oas2mcp`   | `service.name` reported on exported metrics.                       |

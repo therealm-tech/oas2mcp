@@ -248,6 +248,10 @@ spec:
             {{- end }}
             - name: AUTO_TOOL_ANNOTATIONS
               value: {{ .Values.oas2mcp.autoToolAnnotations | quote }}
+            {{- with .Values.oas2mcp.toolsPageSize }}
+            - name: TOOLS_PAGE_SIZE
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.oas2mcp.auth.roleMapper }}
             - name: INBOUND_ROLE_MAPPER
               value: {{ join "\n" . | quote }}

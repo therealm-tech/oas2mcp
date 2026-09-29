@@ -2,6 +2,7 @@
 //! variables → defaults, and every option carries an `env = "..."`.
 
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -591,6 +592,14 @@ pub struct Cli {
         default_missing_value = "true"
     )]
     pub auto_tool_annotations: bool,
+    /// Maximum number of tools per `tools/list` reply. Set → the list is split
+    /// into pages the client walks with the MCP `cursor`, for documents with
+    /// thousands of operations. Unset → every tool in one reply, since many MCP
+    /// clients read only the first page. A cursor outlives neither a reload that
+    /// changes the tool set nor a change of the caller's roles: the client then
+    /// gets an invalid-params error and must list again from the start.
+    #[arg(global = true, long = "tools-page-size", env = "TOOLS_PAGE_SIZE")]
+    pub tools_page_size: Option<NonZeroUsize>,
 
     /// Path to a PEM file holding one or more extra CA certificates to trust
     /// when verifying TLS for every outbound connection (upstream API, OpenAPI
@@ -959,6 +968,30 @@ mod tests {
         assert!(!parse(&["--auto-tool-annotations=false"]).expect("parses"));
         assert!(!parse(&["http", "--auto-tool-annotations=false"]).expect("parses"));
         assert!(parse(&["--auto-tool-annotations=maybe"]).is_err());
+    }
+
+    #[test]
+    fn the_tools_page_size_is_unset_by_default_and_at_least_one() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
+        assert_eq!(cli.tools_page_size, None);
+
+        for args in [
+            &["oas2mcp", "--tools-page-size", "50"][..],
+            &["oas2mcp", "http", "--tools-page-size", "50"],
+        ] {
+            let cli = Cli::try_parse_from(args).expect("the flag parses on any transport");
+            assert_eq!(cli.tools_page_size.map(NonZeroUsize::get), Some(50));
+        }
+
+        for value in ["0", "many"] {
+            let err = Cli::try_parse_from(["oas2mcp", "--tools-page-size", value])
+                .expect_err("a page size below one must be refused");
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::ValueValidation,
+                "{value}"
+            );
+        }
     }
 
     fn http(args: &[&str]) -> Result<HttpArgs, clap::Error> {
