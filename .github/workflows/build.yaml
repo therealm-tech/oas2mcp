@@ -198,7 +198,7 @@ jobs:
           images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
-            type=raw,value=latest,enable=${{ inputs.version != '' }}
+            type=raw,value=latest,enable=${{ inputs.version != '' && !contains(inputs.version, '-') }}
             type=sha,enable=${{ inputs.version == '' }}
 
       - name: log in to GHCR

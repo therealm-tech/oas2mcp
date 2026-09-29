@@ -40,13 +40,26 @@ jobs:
       - name: resolve the chart version
         id: v
         # From the `chart-X.Y.Z` tag, or the workflow_dispatch input.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          version="${{ inputs.version }}"
+          version="$INPUT_VERSION"
           if [ -z "$version" ]; then
             version="${GITHUB_REF_NAME#chart-}"
             version="${version#v}"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: check Chart.yaml matches the tag
+        if: ${{ github.event_name == 'push' }}
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          committed="$(sed -n 's/^version:[[:space:]]*//p' "$CHART_DIR/Chart.yaml" | tr -d "\"'")"
+          if [ "$committed" != "$VERSION" ]; then
+            echo "::error::Chart.yaml version is $committed but the tag says $VERSION. Cut chart releases with scripts/release.sh --chart so the two stay in step."
+            exit 1
+          fi
 
       - name: lint the chart
         run: helm lint "$CHART_DIR" -f "$CHART_DIR/values-lint.yaml"

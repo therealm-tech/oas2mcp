@@ -102,8 +102,8 @@ and say why.
 | --- | --- | --- | --- |
 | [`quality`](.github/workflows/quality.yaml) | pull requests, pushes to `main` | pre-commit, `cargo test`, the end-to-end suite, Trivy filesystem scan | `pre-commit run --all-files`, `cargo test`, [e2e](tests/e2e/README.md), the Trivy command below |
 | [`build`](.github/workflows/build.yaml) | pull requests and pushes to `main` touching the build inputs, manual | multi-arch image build and Trivy image scan; pushes only on manual dispatch or a release | `docker build .` and the Trivy command below |
-| [`chart`](.github/workflows/chart.yaml) | `chart-X.Y.Z` tag, manual | publishes the chart to `ghcr.io/therealm-tech/charts` | — (publish only) |
-| [`release`](.github/workflows/release.yaml) | `vX.Y.Z` tag | checks the tag matches `Cargo.toml`, builds and pushes the image, creates the GitHub Release | — (publish only) |
+| [`chart`](.github/workflows/chart.yaml) | `chart-X.Y.Z` tag, manual | on a tag, checks it matches `Chart.yaml`; publishes the chart to `ghcr.io/therealm-tech/charts` | — (publish only) |
+| [`release`](.github/workflows/release.yaml) | `vX.Y.Z` tag | checks the tag matches `Cargo.toml`, builds and pushes the image, creates the GitHub Release (not for a pre-release) | — (publish only) |
 
 The publishing jobs use the workflow's `GITHUB_TOKEN` for the registry; nothing
 else is needed.
@@ -111,7 +111,14 @@ else is needed.
 The chart is versioned and released independently of the app. A `vX.Y.Z` tag
 whose version differs from `Cargo.toml` fails `release` before anything is
 published: the tag names the image, but `Cargo.toml` is what
-`oas2mcp --version` reports.
+`oas2mcp --version` reports. A `chart-X.Y.Z` tag that differs from the
+`version` in `Chart.yaml` fails `chart` the same way.
+
+A pre-release tag — any version with a `-`, such as `v0.9.0-rc1` — publishes
+the image under that version and stops there: it does not move `latest` and
+creates no GitHub Release, since an rc exists to be tested. The notes of a
+stable release start from the previous stable tag, so they cover everything
+since that release, rc tags included.
 
 ### Security scanning
 
@@ -180,8 +187,9 @@ quietly lagging behind it. The script refuses to run on a dirty tree, off
 flags: `--skip-tests`, `--no-push` (commit and tag locally only), `-y` (no
 confirmation prompt). Bumping the chart needs `helm` and `helm-docs` on `PATH`.
 
-Doing it by hand works too, as long as `Cargo.toml` already carries the same
-version — otherwise the `release` workflow fails the version check:
+Doing it by hand works too, as long as `Cargo.toml` (for the app) or
+`Chart.yaml` (for the chart) already carries the same version — otherwise the
+workflow fails its version check:
 
 ```bash
 # Release the application (image + GitHub Release):
