@@ -23,7 +23,7 @@ nothing else, so metric cardinality stays bounded. `outcome` is one of:
 | `cancelled` | The client cancelled the call or disconnected before it completed; the upstream request in flight was aborted and no result was sent. |
 
 To break activity down by caller, log the relevant JWT claims with
-`--trace-claim` (see [Tracing the caller's JWT claims](/oas2mcp/guides/caller-auth/#tracing-the-callers-jwt-claims)) and aggregate them in your logging backend, rather
+`--trace-claim` (see [Tracing the caller's JWT claims](/guides/caller-auth/#tracing-the-callers-jwt-claims)) and aggregate them in your logging backend, rather
 than turning a per-user identifier into a metric label.
 
 Enable either exporter, both, or neither — they are independent:

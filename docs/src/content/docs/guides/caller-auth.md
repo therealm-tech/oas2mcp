@@ -5,7 +5,7 @@ sidebar:
   order: 3
 ---
 
-The [operation filters](/oas2mcp/guides/operations/) are global: every MCP client sees the same tools. To tie
+The [operation filters](/guides/operations/) are global: every MCP client sees the same tools. To tie
 access to the **caller's own JWT**, give oas2mcp a JWKS (`--inbound-jwks-url`,
 fetched once at startup, or `--inbound-jwks-file`): the incoming request's
 `Authorization: Bearer` JWT is then verified against it. A verified caller may

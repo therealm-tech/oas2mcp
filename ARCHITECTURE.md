@@ -32,7 +32,7 @@ flowchart LR
 ```
 
 How to run and configure it is in the
-[documentation](https://therealm-tech.github.io/oas2mcp/); this file explains
+[documentation](https://oas2mcp.therealm.tech/); this file explains
 how it is put together.
 
 ## Components

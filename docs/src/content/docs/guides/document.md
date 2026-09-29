@@ -81,7 +81,7 @@ oas2mcp http \
 Client authentication uses HTTP Basic against the token endpoint (RFC 6749).
 The OAuth bearer takes precedence over any static `Authorization` set via
 `--openapi-header`. This auth covers the **document fetch only**; upstream API
-calls are configured separately (see [Authenticating to the upstream API](/oas2mcp/guides/upstream-auth/#oauth2-client-credentials)).
+calls are configured separately (see [Authenticating to the upstream API](/guides/upstream-auth/#oauth2-client-credentials)).
 
 ### Authenticating with a signed assertion instead of a secret
 
