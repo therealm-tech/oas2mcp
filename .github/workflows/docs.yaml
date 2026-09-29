@@ -13,6 +13,8 @@ on:
       - docs/**
       - logo.svg
       - .github/workflows/docs.yaml
+  # Dispatched on `main` by `release`: a new release changes which version the
+  # root serves.
   workflow_dispatch:
 
 concurrency:
@@ -33,6 +35,9 @@ jobs:
     steps:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Every release tag, whose content each version is built from.
+          fetch-depth: 0
 
       - name: set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
@@ -42,9 +47,9 @@ jobs:
       - name: install the dependencies
         run: npm ci
 
-      # Also fails on a broken internal link or anchor.
-      - name: build the site
-        run: npm run build
+      # Also fails on a broken internal link or anchor, in any version.
+      - name: build every version of the site
+        run: npm run build:versions
 
       - name: upload the site
         if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}

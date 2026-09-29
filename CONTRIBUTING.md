@@ -76,8 +76,16 @@ The user documentation is a [Starlight](https://starlight.astro.build) site in
 [`docs/`](docs), published to <https://oas2mcp.therealm.tech/>. Pages
 are Markdown under [`docs/src/content/docs/`](docs/src/content/docs); a new page
 under `guides/` or `reference/` joins the sidebar by itself, placed by the
-`sidebar.order` in its frontmatter. Link another page by its absolute path:
-`/guides/metrics/`.
+`sidebar.order` in its frontmatter. Link another page by its absolute path,
+`/guides/metrics/`: the build prefixes it with the version it is under, and a
+relative link fails the build.
+
+The site is versioned. The latest release is served at the root, `main` under
+`/next/`, and each older minor release, at its last patch, under `/vX.Y/`. Every
+version is built from the current site — configuration, theme, components —
+around the pages of its tag, so a fix to the site reaches every version while
+the pages of a release stay as they were released. A change to the pages
+therefore shows under `/next/` until the next release.
 
 Preview it with live reload on <http://localhost:4321/>:
 
@@ -85,10 +93,27 @@ Preview it with live reload on <http://localhost:4321/>:
 npm --prefix docs run dev
 ```
 
-Build it as CI does, which also fails on a broken internal link or anchor:
+Build a single version, the working tree at the root, which also fails on a
+broken internal link or anchor:
 
 ```bash
 npm --prefix docs run build
+```
+
+Build every version as CI does, from the release tags you have fetched:
+
+```bash
+git fetch --tags
+```
+
+```bash
+npm --prefix docs run build:versions
+```
+
+Run the site's own tests, for the version planning and the link rewriting:
+
+```bash
+npm --prefix docs test
 ```
 
 ## Pre-commit hooks
@@ -133,11 +158,11 @@ and say why.
 
 | Workflow | Triggers on | What it does | Reproduce locally |
 | --- | --- | --- | --- |
-| [`quality`](.github/workflows/quality.yaml) | pull requests, pushes to `main` | pre-commit, `cargo test`, the end-to-end suite, Trivy filesystem scan | `pre-commit run --all-files`, `cargo test`, [e2e](tests/e2e/README.md), the Trivy command below |
+| [`quality`](.github/workflows/quality.yaml) | pull requests, pushes to `main` | pre-commit, `cargo test`, the docs site tests, the end-to-end suite, Trivy filesystem scan | `pre-commit run --all-files`, `cargo test`, `npm --prefix docs test`, [e2e](tests/e2e/README.md), the Trivy command below |
 | [`build`](.github/workflows/build.yaml) | pull requests and pushes to `main` touching the build inputs, manual | multi-arch image build and Trivy image scan; pushes only on manual dispatch or a release | `docker build .` and the Trivy command below |
-| [`docs`](.github/workflows/docs.yaml) | pull requests and pushes to `main` touching `docs/` or the logo, manual | builds the documentation site, checking its internal links; on `main`, deploys it to GitHub Pages | `npm --prefix docs run build` |
+| [`docs`](.github/workflows/docs.yaml) | pull requests and pushes to `main` touching `docs/` or the logo, a stable release, manual | builds every version of the documentation site, checking its internal links; on `main`, deploys it to GitHub Pages | `npm --prefix docs run build:versions` |
 | [`chart`](.github/workflows/chart.yaml) | `chart-X.Y.Z` tag, manual | on a tag, checks it matches `Chart.yaml`; publishes the chart to `ghcr.io/therealm-tech/charts` | — (publish only) |
-| [`release`](.github/workflows/release.yaml) | `vX.Y.Z` tag | checks the tag matches `Cargo.toml`, builds and pushes the image, creates the GitHub Release (not for a pre-release) | — (publish only) |
+| [`release`](.github/workflows/release.yaml) | `vX.Y.Z` tag | checks the tag matches `Cargo.toml`, builds and pushes the image, creates the GitHub Release and rebuilds the documentation (not for a pre-release) | — (publish only) |
 
 The publishing jobs use the workflow's `GITHUB_TOKEN` for the registry; nothing
 else is needed.

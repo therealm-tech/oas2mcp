@@ -1,0 +1,34 @@
+---
+import Default from "@astrojs/starlight/components/Banner.astro";
+import { buildTarget } from "../build-target.ts";
+
+const latest = buildTarget?.versions.find((version) => version.latest);
+const current = buildTarget?.current;
+---
+
+{
+	current && latest && !current.latest && (
+		<div class="version-banner" data-pagefind-ignore>
+			{current.label === "next"
+				? "This is the documentation of the unreleased development version."
+				: `This is the documentation of ${current.label}, an older release.`}{" "}
+			<a href={latest.path}>Read the latest release, {latest.label}.</a>
+		</div>
+	)
+}
+<Default />
+
+<style>
+	.version-banner {
+		padding: var(--sl-nav-pad-y) var(--sl-nav-pad-x);
+		background-color: var(--sl-color-bg-accent);
+		color: var(--sl-color-text-invert);
+		line-height: var(--sl-line-height-headings);
+		text-align: center;
+		text-wrap: balance;
+	}
+
+	.version-banner a {
+		color: inherit;
+	}
+</style>

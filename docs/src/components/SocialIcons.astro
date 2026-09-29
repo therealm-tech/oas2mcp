@@ -1,0 +1,47 @@
+---
+import Default from "@astrojs/starlight/components/SocialIcons.astro";
+import { buildTarget } from "../build-target.ts";
+
+const versions = buildTarget && buildTarget.versions.length > 1 ? buildTarget.versions : [];
+const current = buildTarget?.current;
+---
+
+{
+	current && versions.length > 0 && (
+		<label class="version-picker">
+			<span class="sr-only">Documentation version</span>
+			<select data-current-path={current.path}>
+				{versions.map((version) => (
+					<option value={version.path} selected={version.label === current.label}>
+						{version.latest ? `${version.label} (latest)` : version.label}
+					</option>
+				))}
+			</select>
+		</label>
+	)
+}
+<Default />
+
+<script>
+	import { switchVersionPath } from "../version-path.ts";
+
+	for (const select of document.querySelectorAll<HTMLSelectElement>(".version-picker select")) {
+		select.addEventListener("change", () => {
+			const from = select.dataset["currentPath"];
+			if (from === undefined) return;
+			window.location.assign(switchVersionPath(window.location.pathname, from, select.value));
+		});
+	}
+</script>
+
+<style>
+	.version-picker select {
+		background: var(--sl-color-bg-nav);
+		color: var(--sl-color-text-accent);
+		border: 1px solid var(--sl-color-gray-5);
+		border-radius: 0.25rem;
+		padding: 0.25rem 0.5rem;
+		font-size: var(--sl-text-sm);
+		cursor: pointer;
+	}
+</style>

@@ -96,6 +96,24 @@ jobs:
       - name: run the test suite
         run: cargo test --all --locked
 
+  docs-test:
+    name: docs-test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version-file: docs/.nvmrc
+
+      - name: install the docs site dependencies
+        run: npm ci --prefix docs
+
+      - name: run the docs site tests
+        run: npm --prefix docs test
+
   # What the unit tests cannot answer is whether a real authorization server
   # accepts what we send. This drives the RFC 7523 paths against Keycloak:
   # `private_key_jwt` client authentication (§2.2) for the document fetch, and the

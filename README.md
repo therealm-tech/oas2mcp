@@ -10,6 +10,7 @@ every operation it describes as a tool of a
 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server.
 
 **Documentation: <https://oas2mcp.therealm.tech/>**
+— also for LLMs, at <https://oas2mcp.therealm.tech/llms.txt>.
 
 ## Description
 

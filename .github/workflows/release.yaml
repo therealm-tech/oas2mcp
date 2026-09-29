@@ -96,3 +96,19 @@ jobs:
             args+=(--notes-start-tag "$PREVIOUS")
           fi
           gh release create "$GITHUB_REF_NAME" "${args[@]}"
+
+  # The documentation serves the latest release at its root, so a new one
+  # rebuilds it. Dispatched on `main`, the only ref the `github-pages`
+  # environment deploys from; skipped with `github-release` for a pre-release.
+  docs:
+    name: docs
+    needs:
+      - github-release
+    permissions:
+      actions: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: rebuild the documentation site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docs.yaml --repo "$GITHUB_REPOSITORY" --ref main
