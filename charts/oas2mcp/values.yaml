@@ -36,6 +36,8 @@ oas2mcp:
     auth: ~
     # -- (string) Re-fetch `url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Unset → load once at startup. Ignored with `inline`.
     reloadEvery: ~
+    # -- Expose the document as the MCP resource `openapi://document`, cut down per caller to the operations it can list. Its metadata (`info`, `servers`) and the schemas visible operations share with hidden ones still show. Maps to `OPENAPI_RESOURCE`.
+    resource: false
     oauth:
       # -- (string) OAuth2 `client_credentials` token endpoint. Set → the document fetch authenticates with an auto-refreshed bearer token (best paired with `reloadEvery`). Ignored with `inline`.
       tokenUrl: ~

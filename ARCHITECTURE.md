@@ -22,7 +22,7 @@ flowchart LR
     api["Upstream API"]
 
     client -->|"JSON-RPC over stdio / HTTP"| transport
-    transport -->|"tools/list, tools/call"| server
+    transport -->|"tools/list, tools/call, resources/read"| server
     server -->|"verify caller JWT"| auth
     server -->|"get upstream token"| oauth
     oauth -->|"token request, HTTPS"| idp
@@ -44,7 +44,8 @@ how it is put together.
 - **[`openapi`](src/openapi.rs)** — fetches or reads the document and exposes a
   version-agnostic [`Spec`](src/openapi/spec.rs) over OpenAPI 3.0 and 3.1.
   Schemas stay raw JSON, never a Rust model (see
-  [Design decisions](#design-decisions)).
+  [Design decisions](#design-decisions)). [`prune`](src/openapi/prune.rs)
+  cuts the document down to a set of operations for `--openapi-resource`.
 - **[`filter`](src/filter.rs)**, **[`rename`](src/rename.rs)**,
   **[`tools`](src/tools.rs)** — turn operations into tools: filtering on the
   original operation name and tags, then renaming, then building each tool's
@@ -53,7 +54,8 @@ how it is put together.
   upstream request for a call and shapes the tool result.
 - **[`server`](src/server.rs)** — `OpenApiServer`, the `rmcp` handler. It holds
   the document-derived `Snapshot` behind an `ArcSwap`, applies role-based
-  visibility on `tools/list` and `tools/call`, and executes calls.
+  visibility on `tools/list`, `tools/call` and the document resource, and
+  executes calls.
 - **[`pagination`](src/pagination.rs)** — cuts `tools/list` into pages with
   `--tools-page-size`, and issues and checks the cursors.
 - **[`auth`](src/auth.rs)** — `Authorizer`: verifies the caller's JWT against a
@@ -185,7 +187,8 @@ them.
 
 The process holds no persistent state. In memory:
 
-- the current `Snapshot` (tools, name index, base URL, API title, instructions);
+- the current `Snapshot` (tools, name index, base URL, API title, instructions
+  and, with `--openapi-resource`, the parsed document);
 - the OAuth token caches — one entry for a shared grant, one per caller identity
   (issuer and subject) for `jwt-bearer`, never kept past the caller token's own
   expiry;
@@ -221,6 +224,12 @@ authorization server.
   defines what it promises. Where it promises nothing — `destructiveHint` on a
   `POST` — the hint is left out so clients assume the worst, as the MCP
   specification's default does.
+- **The document resource shows what `tools/list` shows.** The raw document
+  names every operation, so serving it whole would undo the filters and the
+  role mapping. It is cut down per read to the operations the caller lists,
+  with the components they reach; its metadata and the schemas a visible
+  operation shares with a hidden one still show, which is why the resource is
+  opt-in.
 - **Role mapping is on tool names, not on data.** It controls which operations
   a caller may use. What data those operations return is the upstream API's
   decision, which is why delegation (`jwt-bearer`) exists: it makes the upstream
