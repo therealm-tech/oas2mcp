@@ -9,7 +9,7 @@ Load an [OpenAPI](https://www.openapis.org/) document at startup and expose
 every operation it describes as a tool of a
 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server.
 
-**Documentation: <https://therealm-tech.github.io/oas2mcp/>**
+**Documentation: <https://oas2mcp.therealm.tech/>**
 
 ## Description
 
@@ -24,7 +24,7 @@ interval; serves MCP over `stdio`, Streamable HTTP or the legacy SSE transport;
 authenticates to the upstream API with static, forwarded or OAuth2 credentials,
 including per-caller delegation; and verifies callers' JWTs to decide which
 tools each one may use. The
-[feature list](https://therealm-tech.github.io/oas2mcp/#features) has the
+[feature list](https://oas2mcp.therealm.tech/#features) has the
 details.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it is put together.
@@ -72,9 +72,9 @@ target/release/oas2mcp http --openapi-url https://api.example.com/openapi.json -
 ```
 
 Every option is also an environment variable; the
-[configuration reference](https://therealm-tech.github.io/oas2mcp/reference/configuration/)
+[configuration reference](https://oas2mcp.therealm.tech/reference/configuration/)
 lists them all, and the
-[guides](https://therealm-tech.github.io/oas2mcp/getting-started/) cover
+[guides](https://oas2mcp.therealm.tech/getting-started/) cover
 authentication, filtering, metrics and connecting an MCP client.
 
 ### Deployment
@@ -85,7 +85,7 @@ A Helm chart lives in [charts/oas2mcp](charts/oas2mcp):
 helm install petstore charts/oas2mcp --set oas2mcp.openapi.url=https://petstore3.swagger.io/api/v3/openapi.json
 ```
 
-See [Deploying on Kubernetes](https://therealm-tech.github.io/oas2mcp/guides/kubernetes/)
+See [Deploying on Kubernetes](https://oas2mcp.therealm.tech/guides/kubernetes/)
 and the chart's [README](charts/oas2mcp/README.md) for every value.
 
 ## Contributing

@@ -17,7 +17,7 @@ document.
 | `--openapi-header`| `OPENAPI_HEADERS`| —                | `Name: Value` header sent when fetching `--openapi-url` (e.g. for a private document). Repeatable. |
 | `--openapi-auth`  | `OPENAPI_AUTH`   | `own`            | Credentials for the document fetch: `own` (`--openapi-header`, `--openapi-oauth-*`) or `upstream` (`--header` and the `--upstream-oauth-*` token). |
 | `--reload-every`  | `RELOAD_EVERY`   | —                | Re-fetch `--openapi-url` on this interval and rebuild the tool set (e.g. `30s`, `5m`, `1h`). Off by default; ignored for a file source. |
-| `--openapi-resource` | `OPENAPI_RESOURCE` | `false`       | Expose the OpenAPI document as the MCP resource `openapi://document`, cut down per caller to the operations it can list — see [Reading the API contract](/oas2mcp/guides/openapi-resource/). |
+| `--openapi-resource` | `OPENAPI_RESOURCE` | `false`       | Expose the OpenAPI document as the MCP resource `openapi://document`, cut down per caller to the operations it can list — see [Reading the API contract](/guides/openapi-resource/). |
 | `--openapi-oauth-token-url` | `OPENAPI_OAUTH_TOKEN_URL` | — | OAuth2 `client_credentials` token endpoint. Set → the document fetch uses an auto-refreshed bearer token. Requires `--openapi-oauth-client-id` plus one of the two credentials below. |
 | `--openapi-oauth-client-id` | `OPENAPI_OAUTH_CLIENT_ID` | — | OAuth2 client ID for the document-fetch token.                     |
 | `--openapi-oauth-client-secret` | `OPENAPI_OAUTH_CLIENT_SECRET` | — | OAuth2 client secret, sent over HTTP Basic. Prefer the env var so it stays out of the process list. Mutually exclusive with `--openapi-oauth-private-key`. |
@@ -62,14 +62,14 @@ document.
 | `--exclude-tag`   | `EXCLUDE_TAGS`   | —                | Drop operations carrying this OpenAPI tag (case-insensitive). Repeatable. Wins over the allowlist. |
 | `--rename`        | `RENAME_OPERATIONS` | —             | Rewrite tool names, as `<regex>=<replacement>` (split on the first `=`). Repeatable; rules chain in order. Applied **after** filtering. |
 | `--max-name-len`  | `MAX_NAME_LEN`   | `64`             | Maximum tool name length. A longer name is truncated and given a short hash of the full name, and the rewrite is logged. |
-| `--auto-tool-annotations` | `AUTO_TOOL_ANNOTATIONS` | `true` | Advertise each tool with the MCP behaviour hints its HTTP method implies — see [Tool annotations](/oas2mcp/reference/tools/#tool-annotations). Turn off with `--auto-tool-annotations=false`. |
+| `--auto-tool-annotations` | `AUTO_TOOL_ANNOTATIONS` | `true` | Advertise each tool with the MCP behaviour hints its HTTP method implies — see [Tool annotations](/reference/tools/#tool-annotations). Turn off with `--auto-tool-annotations=false`. |
 | `--tools-page-size` | `TOOLS_PAGE_SIZE` | —            | Maximum number of tools per `tools/list` reply, walked with the MCP cursor. Unset → every tool in one reply, since many clients read only the first page. A cursor issued before a reload that changed the tool set is refused (`-32602`); the client lists again from the start. |
-| `--tool-output-schema` | `TOOL_OUTPUT_SCHEMA` | `false`   | Declare an MCP `outputSchema` on each tool whose success response has a JSON object body. See [Output schemas](/oas2mcp/reference/tools/#output-schemas) for the trade-off. |
+| `--tool-output-schema` | `TOOL_OUTPUT_SCHEMA` | `false`   | Declare an MCP `outputSchema` on each tool whose success response has a JSON object body. See [Output schemas](/reference/tools/#output-schemas) for the trade-off. |
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Base OTLP endpoint to push tool-call metrics to over HTTP (e.g. `http://localhost:4318`); `/v1/metrics` is appended. Set → OTLP export on. |
 | `--metrics-addr`  | `METRICS_ADDR`   | —                | Address to serve a Prometheus `/metrics` endpoint on (e.g. `0.0.0.0:9090`). Set → scrape endpoint on. Independent of `--otlp-endpoint`. |
 | `--otel-service-name` | `OTEL_SERVICE_NAME` | `oas2mcp`   | `service.name` reported on exported metrics.                       |
 | `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address of the `sse` and `http` subcommands, and the one `healthcheck` probes. |
-| `--allowed-host`  | `ALLOWED_HOSTS`  | follows `--bind-addr` | Hostname, or `host:port`, accepted in the inbound `Host` header; `*` accepts any. Repeatable; newline-separated via the env var. `http` only — see [Host header validation](/oas2mcp/guides/http-transport/#host-header-validation). |
+| `--allowed-host`  | `ALLOWED_HOSTS`  | follows `--bind-addr` | Hostname, or `host:port`, accepted in the inbound `Host` header; `*` accepts any. Repeatable; newline-separated via the env var. `http` only — see [Host header validation](/guides/http-transport/#host-header-validation). |
 | `--stream-responses` | `STREAM_RESPONSES` | `false`      | Reply on `http` with an SSE flow and stateful sessions instead of the default single `application/json` body. `http` only. |
 | `--log-filter`    | `LOG_FILTER`     | `info`           | `tracing` filter directive (e.g. `oas2mcp=debug,rmcp=warn`).       |
 

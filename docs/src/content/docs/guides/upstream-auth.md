@@ -46,7 +46,7 @@ oas2mcp \
 This is configured independently of `--openapi-oauth-*`: the document and the
 API may live behind different providers, with different credentials. Both
 support the same two client-authentication modes, so
-`--upstream-oauth-private-key` gives you [`private_key_jwt`](/oas2mcp/guides/document/#authenticating-with-a-signed-assertion-instead-of-a-secret) here too.
+`--upstream-oauth-private-key` gives you [`private_key_jwt`](/guides/document/#authenticating-with-a-signed-assertion-instead-of-a-secret) here too.
 
 ## One source per header
 

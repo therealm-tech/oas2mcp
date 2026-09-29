@@ -3,8 +3,7 @@ import { defineConfig } from "astro/config";
 import starlightLinksValidator from "starlight-links-validator";
 
 export default defineConfig({
-	site: "https://therealm-tech.github.io",
-	base: "/oas2mcp",
+	site: "https://oas2mcp.therealm.tech",
 	integrations: [
 		starlight({
 			title: "oas2mcp",

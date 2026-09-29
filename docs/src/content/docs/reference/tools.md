@@ -25,7 +25,7 @@ The name goes through, in this order: the raw name (`operationId`, or a
 `<method>_<path>` fallback) → the operation filters, which match that raw name →
 the `--rename` rules → sanitisation to `[A-Za-z0-9_-]` → the `--max-name-len`
 cap → deduplication against the tools already registered. See
-[Renaming the exposed tools](/oas2mcp/guides/operations/#renaming-the-exposed-tools).
+[Renaming the exposed tools](/guides/operations/#renaming-the-exposed-tools).
 
 The operation's `summary`, folded onto one line, is the tool's `title`, the
 display name MCP clients show to people. The tool's `description` is the

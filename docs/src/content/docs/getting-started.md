@@ -22,7 +22,7 @@ Or with Docker:
 docker build -t oas2mcp .
 ```
 
-To run it on a cluster, see [Deploying on Kubernetes](/oas2mcp/guides/kubernetes/).
+To run it on a cluster, see [Deploying on Kubernetes](/guides/kubernetes/).
 
 ## Usage
 
@@ -43,7 +43,7 @@ the container image's `HEALTHCHECK`.
 
 The OpenAPI source is required to serve: pass exactly one of `--openapi-file` or
 `--openapi-url`. Every option is listed in the
-[configuration reference](/oas2mcp/reference/configuration/).
+[configuration reference](/reference/configuration/).
 
 ## Examples
 

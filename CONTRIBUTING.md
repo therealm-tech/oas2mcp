@@ -2,7 +2,7 @@
 
 Issues and pull requests are welcome on
 [GitHub](https://github.com/therealm-tech/oas2mcp). For running and configuring
-`oas2mcp` itself, see the [documentation](https://therealm-tech.github.io/oas2mcp/);
+`oas2mcp` itself, see the [documentation](https://oas2mcp.therealm.tech/);
 for how it is built, see
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -73,13 +73,13 @@ A new behaviour comes with tests, and a fix with a test that fails without it.
 ## Writing the documentation
 
 The user documentation is a [Starlight](https://starlight.astro.build) site in
-[`docs/`](docs), published to <https://therealm-tech.github.io/oas2mcp/>. Pages
+[`docs/`](docs), published to <https://oas2mcp.therealm.tech/>. Pages
 are Markdown under [`docs/src/content/docs/`](docs/src/content/docs); a new page
 under `guides/` or `reference/` joins the sidebar by itself, placed by the
-`sidebar.order` in its frontmatter. Link another page by its absolute path,
-base included: `/oas2mcp/guides/metrics/`.
+`sidebar.order` in its frontmatter. Link another page by its absolute path:
+`/guides/metrics/`.
 
-Preview it with live reload on <http://localhost:4321/oas2mcp/>:
+Preview it with live reload on <http://localhost:4321/>:
 
 ```bash
 npm --prefix docs run dev
