@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- chef: cargo-chef base ---------------------------------------------------
-FROM rust:1-bookworm AS chef
+FROM rust:1-trixie AS chef
 WORKDIR /usr/local/src/oas2mcp
 # Before `cook`: otherwise the dependencies are built with the image's rustc and
 # rebuilt from scratch by the pinned one once the sources are copied in.
@@ -22,13 +22,10 @@ COPY . .
 RUN cargo build --release --locked
 
 # --- runtime: distroless -----------------------------------------------------
-# `cc` (not `static`) because the binary links glibc + libssl-style C deps
-# (aws-lc-sys). Distroless ships no shell, no package manager and no OS package
-# layer, so an image scanner finds essentially nothing to flag — unlike
-# debian:bookworm-slim, whose ~20 unfixed HIGH/CRITICAL advisories we used to
-# carry. TLS roots (ca-certificates) and a nonroot user (65532:65532) are baked
-# into the image.
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+# `cc` (not `static`) because the binary links glibc (aws-lc-sys). Same Debian
+# release as the builder, so the binary never needs a newer glibc than the
+# runtime has. TLS roots and a nonroot user (65532:65532) are baked in.
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime
 COPY --from=builder \
      /usr/local/src/oas2mcp/target/release/oas2mcp /usr/local/bin/oas2mcp
 
@@ -37,4 +34,5 @@ USER 65532:65532
 ENV TRANSPORT=streamable-http \
     BIND_ADDR=0.0.0.0:8000
 EXPOSE 8000
+HEALTHCHECK CMD ["/usr/local/bin/oas2mcp", "healthcheck"]
 ENTRYPOINT ["/usr/local/bin/oas2mcp"]

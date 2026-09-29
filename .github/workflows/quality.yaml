@@ -146,6 +146,8 @@ jobs:
       # templates require. Without this it logs a render error and scans no
       # chart at all — while still reporting success.
       TRIVY_HELM_VALUES: charts/oas2mcp/values-lint.yaml
+      # Declares ghcr.io a trusted registry for KSV-0125.
+      TRIVY_CONFIG_DATA: .trivy
     steps:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

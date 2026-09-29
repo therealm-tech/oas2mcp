@@ -114,6 +114,7 @@ docker build -t oas2mcp .
 
 ```text
 oas2mcp [OPTIONS] [stdio | sse | http] [TRANSPORT OPTIONS]
+oas2mcp healthcheck [--bind-addr ADDR]
 ```
 
 The subcommand picks the transport, `stdio` when none is given. Options for
@@ -122,7 +123,11 @@ one transport only exist under its subcommand: `--bind-addr` under `sse` and
 `--inbound-*` flag under `http` alone. Every other option may come before or
 after the subcommand.
 
-The OpenAPI source is required: pass exactly one of `--openapi-file` or
+`healthcheck` serves nothing: it exits 0 when something accepts TCP connections
+on `--bind-addr` (a wildcard address is probed on loopback), 1 otherwise. It is
+the container image's `HEALTHCHECK`.
+
+The OpenAPI source is required to serve: pass exactly one of `--openapi-file` or
 `--openapi-url`.
 
 Three families of flags configure three directions of authentication:
@@ -188,7 +193,7 @@ document.
 | `--otlp-endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | Base OTLP endpoint to push tool-call metrics to over HTTP (e.g. `http://localhost:4318`); `/v1/metrics` is appended. Set → OTLP export on. |
 | `--metrics-addr`  | `METRICS_ADDR`   | —                | Address to serve a Prometheus `/metrics` endpoint on (e.g. `0.0.0.0:9090`). Set → scrape endpoint on. Independent of `--otlp-endpoint`. |
 | `--otel-service-name` | `OTEL_SERVICE_NAME` | `oas2mcp`   | `service.name` reported on exported metrics.                       |
-| `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address of the `sse` and `http` subcommands.        |
+| `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address of the `sse` and `http` subcommands, and the one `healthcheck` probes. |
 | `--allowed-host`  | `ALLOWED_HOSTS`  | follows `--bind-addr` | Hostname, or `host:port`, accepted in the inbound `Host` header; `*` accepts any. Repeatable; newline-separated via the env var. `http` only — see [Host header validation](#host-header-validation). |
 | `--stream-responses` | `STREAM_RESPONSES` | `false`      | Reply on `http` with an SSE flow and stateful sessions instead of the default single `application/json` body. `http` only. |
 | `--log-filter`    | `LOG_FILTER`     | `info`           | `tracing` filter directive (e.g. `oas2mcp=debug,rmcp=warn`).       |
