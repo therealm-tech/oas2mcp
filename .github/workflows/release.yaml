@@ -61,14 +61,38 @@ jobs:
     name: github-release
     needs:
       - build
+    # A pre-release tag (`v1.2.0-rc1`) publishes the image and stops there: an
+    # rc exists to be tested, and a release page for it would carry the notes
+    # the final release then repeats.
+    if: ${{ !contains(github.ref_name, '-') }}
     permissions:
       contents: write
     runs-on: ubuntu-24.04
     steps:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: find the previous stable release
+        id: previous
+        # The greatest `vX.Y.Z` below this one, ignoring pre-releases, so the
+        # notes cover everything since the last stable release whatever rc
+        # tags sit in between. Empty for the first release.
+        run: |
+          previous="$(git tag --list 'v*' | grep -v -e '-' | sort -uV | grep -x -B1 -e "$GITHUB_REF_NAME" | head -n1)"
+          if [ "$previous" = "$GITHUB_REF_NAME" ]; then
+            previous=""
+          fi
+          echo "tag=${previous}" >> "$GITHUB_OUTPUT"
 
       - name: create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          PREVIOUS: ${{ steps.previous.outputs.tag }}
+        run: |
+          args=(--generate-notes --verify-tag)
+          if [ -n "$PREVIOUS" ]; then
+            args+=(--notes-start-tag "$PREVIOUS")
+          fi
+          gh release create "$GITHUB_REF_NAME" "${args[@]}"
