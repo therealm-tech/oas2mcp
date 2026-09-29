@@ -1,12 +1,12 @@
 //! A version-agnostic view of an OpenAPI document, covering 3.0 and 3.1.
 //!
 //! `oas2mcp` needs only a narrow slice of an OpenAPI document: the API title
-//! and version, the server list and, per operation, its identity, parameters
-//! and request body. OpenAPI 3.0 and 3.1 describe that slice with the same
-//! shapes; where they genuinely diverge is the *schema* dialect — 3.0 uses a
-//! modified JSON Schema draft-04 (`nullable`, boolean `exclusiveMinimum`), 3.1
-//! uses JSON Schema 2020-12 verbatim (`type` arrays, `const`, `prefixItems`,
-//! numeric `exclusiveMinimum`, boolean schemas).
+//! and version, the server list and, per operation, its identity, parameters,
+//! request body and response bodies. OpenAPI 3.0 and 3.1 describe that slice
+//! with the same shapes; where they genuinely diverge is the *schema* dialect —
+//! 3.0 uses a modified JSON Schema draft-04 (`nullable`, boolean
+//! `exclusiveMinimum`), 3.1 uses JSON Schema 2020-12 verbatim (`type` arrays,
+//! `const`, `prefixItems`, numeric `exclusiveMinimum`, boolean schemas).
 //!
 //! So schemas are deliberately *not* modelled in Rust: a typed model forces a
 //! choice of dialect and silently drops every keyword it does not know, which
@@ -111,6 +111,9 @@ pub struct Operation {
     #[serde(default)]
     pub parameters: Vec<RefOr<Parameter>>,
     pub request_body: Option<RefOr<RequestBody>>,
+    /// Keyed by status code (`200`), range (`2XX`) or `default`.
+    #[serde(default)]
+    pub responses: IndexMap<String, RefOr<Response>>,
 }
 
 /// A path, query, header or cookie parameter.
@@ -136,6 +139,13 @@ pub struct Parameter {
 pub struct RequestBody {
     #[serde(default)]
     pub required: bool,
+    #[serde(default)]
+    pub content: IndexMap<String, MediaType>,
+}
+
+/// A response, reduced to its body: the headers and links are not used.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Response {
     #[serde(default)]
     pub content: IndexMap<String, MediaType>,
 }

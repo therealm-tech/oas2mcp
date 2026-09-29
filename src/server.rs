@@ -182,7 +182,7 @@ impl OpenApiServer {
         };
 
         tracing::debug!(tool = %spec.name, method = %spec.method, "proxying upstream request");
-        match request.send().await {
+        let result = match request.send().await {
             Ok(response) => {
                 let status = response.status();
                 let mime = response
@@ -194,16 +194,18 @@ impl OpenApiServer {
                 tracing::debug!(tool = %spec.name, %status, mime = ?mime, ?kind, "shaping upstream response");
                 if kind == BodyKind::Text {
                     let body = response.text().await.unwrap_or_default();
-                    return shape_response(status, &body);
+                    shape_response(status, &body)
+                } else {
+                    let uri = response.url().to_string();
+                    let body = response.bytes().await.unwrap_or_default();
+                    shape_bytes_response(status, kind, mime.as_deref(), &body, &uri)
                 }
-                let uri = response.url().to_string();
-                let body = response.bytes().await.unwrap_or_default();
-                shape_bytes_response(status, kind, mime.as_deref(), &body, &uri)
             }
             Err(err) => CallToolResult::error(vec![ContentBlock::text(format!(
                 "upstream request failed: {err}"
             ))]),
-        }
+        };
+        fit_output_schema(result, spec.output_schema.is_some())
     }
 
     /// Assemble the `reqwest` request: resolve the path template, collect query
@@ -653,6 +655,9 @@ fn advertised(spec: &ToolSpec, annotate: bool) -> Tool {
     if let Some(title) = &spec.title {
         tool = tool.with_title(title.clone());
     }
+    if let Some(schema) = &spec.output_schema {
+        tool = tool.with_raw_output_schema(schema.clone());
+    }
     if annotate {
         tool = tool.with_annotations(spec.annotations());
     }
@@ -733,7 +738,7 @@ fn build_snapshot(spec: &Spec, cli: &Cli) -> anyhow::Result<Snapshot> {
         rules: cli.rename_operations.clone(),
         max_len: cli.max_name_len,
     });
-    let tools = build_tools(spec, &filter, &renamer);
+    let tools = build_tools(spec, &filter, &renamer, cli.tool_output_schema);
     if tools.is_empty() {
         tracing::warn!("the OpenAPI document defines no usable operations");
     }
@@ -863,6 +868,17 @@ fn shape_response(status: reqwest::StatusCode, body: &str) -> CallToolResult {
             Value::Object(_) => value,
             other => serde_json::json!({ "result": other }),
         });
+    result
+}
+
+/// Drop the `structuredContent` of an error result when the tool declares an
+/// output schema: MCP requires it to conform to that schema, which describes
+/// the success body, and the specification exempts no result from that. The
+/// error body stays in the text block.
+fn fit_output_schema(mut result: CallToolResult, has_output_schema: bool) -> CallToolResult {
+    if has_output_schema && result.is_error == Some(true) {
+        result.structured_content = None;
+    }
     result
 }
 
@@ -1859,5 +1875,54 @@ paths:
         );
         assert_eq!(text_of(&result), "HTTP 204 No Content\n\n");
         assert_eq!(result.content.len(), 1);
+    }
+
+    #[test]
+    fn a_tool_with_an_output_schema_drops_the_structured_error_body() {
+        let body = r#"{"error":"not found"}"#;
+        let result = fit_output_schema(shape_response(reqwest::StatusCode::NOT_FOUND, body), true);
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(result.structured_content, None);
+        assert_eq!(text_of(&result), format!("HTTP 404 Not Found\n\n{body}"));
+
+        // A success keeps it: that is what the schema describes.
+        let result =
+            fit_output_schema(shape_response(reqwest::StatusCode::OK, r#"{"id":1}"#), true);
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::json!({"id": 1}))
+        );
+    }
+
+    const WITH_OUTPUT: &str = r#"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a:
+    get:
+      operationId: getA
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { type: object, properties: { id: { type: integer } } }
+"#;
+
+    fn output_schema_of(args: &[&str]) -> Option<Arc<Map<String, Value>>> {
+        let cli = Cli::try_parse_from(std::iter::once("oas2mcp").chain(args.iter().copied()))
+            .expect("CLI parses");
+        let server =
+            OpenApiServer::from_spec(&spec_from(WITH_OUTPUT), &cli, None, Metrics::disabled())
+                .expect("server builds");
+        server.state.load().tools[0].output_schema.clone()
+    }
+
+    #[test]
+    fn output_schemas_are_declared_only_with_the_flag() {
+        assert!(output_schema_of(&[]).is_none());
+        let schema = output_schema_of(&["--tool-output-schema"]).expect("the flag declares one");
+        assert_eq!(schema["properties"]["id"]["type"], "integer");
     }
 }

@@ -48,9 +48,9 @@ how it is put together.
 - **[`filter`](src/filter.rs)**, **[`rename`](src/rename.rs)**,
   **[`tools`](src/tools.rs)** — turn operations into tools: filtering on the
   original operation name and tags, then renaming, then building each tool's
-  input schema with local `$ref`s inlined and its annotations derived from the
-  HTTP method. `tools` also builds the upstream request for a call and shapes
-  the tool result.
+  input schema, and optionally its output schema, with local `$ref`s inlined,
+  and its annotations derived from the HTTP method. `tools` also builds the
+  upstream request for a call and shapes the tool result.
 - **[`server`](src/server.rs)** — `OpenApiServer`, the `rmcp` handler. It holds
   the document-derived `Snapshot` behind an `ArcSwap`, applies role-based
   visibility on `tools/list` and `tools/call`, and executes calls.
@@ -189,6 +189,12 @@ authorization server.
   priming event with an empty `data:` line that strict proxies reject; a single
   `application/json` reply per request works everywhere. `rmcp` only honours
   JSON replies in stateless mode, so sessions are opt-in with streaming.
+- **Output schemas are opt-in.** A declared `outputSchema` turns the upstream's
+  OpenAPI document into a contract MCP clients may enforce, so an upstream that
+  strays from its document fails calls that would otherwise have gone through.
+  When one is declared, it is only for an operation whose every success
+  response has the same object body, and error results carry no
+  `structuredContent`, since nothing guarantees they conform.
 - **Filtering runs on the original operation name, renaming after it.** Filters
   stay stable when the rename rules change, and a user writes them against the
   names in the document they are reading.

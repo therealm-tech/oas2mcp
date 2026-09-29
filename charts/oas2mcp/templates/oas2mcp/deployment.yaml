@@ -252,6 +252,10 @@ spec:
             - name: TOOLS_PAGE_SIZE
               value: {{ . | quote }}
             {{- end }}
+            {{- if .Values.oas2mcp.toolOutputSchema }}
+            - name: TOOL_OUTPUT_SCHEMA
+              value: "true"
+            {{- end }}
             {{- with .Values.oas2mcp.auth.roleMapper }}
             - name: INBOUND_ROLE_MAPPER
               value: {{ join "\n" . | quote }}

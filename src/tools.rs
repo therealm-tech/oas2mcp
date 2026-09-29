@@ -51,6 +51,9 @@ pub struct ToolSpec {
     pub has_body: bool,
     /// The JSON Schema advertised to MCP clients as the tool input schema.
     pub input_schema: Arc<Map<String, Value>>,
+    /// The JSON Schema advertised as the tool output schema, when
+    /// `--tool-output-schema` is on and the operation has one to give.
+    pub output_schema: Option<Arc<Map<String, Value>>>,
 }
 
 impl ToolSpec {
@@ -72,14 +75,20 @@ impl ToolSpec {
 
 /// Build one [`ToolSpec`] per operation defined in the document, keeping only
 /// the operations the [`OperationFilter`] selects and naming each one through
-/// the [`ToolRenamer`].
+/// the [`ToolRenamer`]. `with_output_schema` derives each tool's output schema
+/// from its success responses.
 ///
 /// Order of operations, which the tests pin down: the raw name is derived from
 /// the `operationId` (or the `<method>_<path>` fallback), **the filter matches
 /// that raw name**, and only then is the name rewritten. Filtering before
 /// renaming is deliberate — a deployment's curated allowlist of `operationId`s
 /// keeps working unchanged when rename rules are added or edited.
-pub fn build_tools(spec: &Spec, filter: &OperationFilter, renamer: &ToolRenamer) -> Vec<ToolSpec> {
+pub fn build_tools(
+    spec: &Spec,
+    filter: &OperationFilter,
+    renamer: &ToolRenamer,
+    with_output_schema: bool,
+) -> Vec<ToolSpec> {
     let mut tools = Vec::new();
     // Final name → the raw operation name that claimed it, so a collision can
     // name both sides rather than being resolved silently.
@@ -95,6 +104,15 @@ pub fn build_tools(spec: &Spec, filter: &OperationFilter, renamer: &ToolRenamer)
             }
 
             let mut tool = build_tool(spec, &item, path, method.clone(), operation, raw.clone());
+            if with_output_schema {
+                tool.output_schema = match output_schema(spec, operation) {
+                    Ok(schema) => Some(Arc::new(schema)),
+                    Err(reason) => {
+                        tracing::debug!(operation = %raw, reason, "declaring no output schema");
+                        None
+                    }
+                };
+            }
             rename(&mut tool, &raw, operation, renamer);
 
             // MCP tool names must be unique; disambiguate collisions.
@@ -241,6 +259,7 @@ fn build_tool(
         params,
         has_body,
         input_schema: Arc::new(input_schema),
+        output_schema: None,
     }
 }
 
@@ -325,11 +344,17 @@ fn add_request_body(
     true
 }
 
-/// Pick the `content` entry describing the request body: an exact
-/// `application/json`, else any type with the `+json` structured suffix
-/// (`application/merge-patch+json`, `application/vnd.api+json`, …), else
-/// whatever comes first — the body is sent as JSON either way.
+/// Pick the `content` entry describing the request body: the JSON one (see
+/// [`json_media_type`]), else whatever comes first — the body is sent as JSON
+/// either way.
 fn json_content(content: &IndexMap<String, MediaType>) -> Option<(&str, &MediaType)> {
+    json_media_type(content).or_else(|| content.first().map(|(name, media)| (name.as_str(), media)))
+}
+
+/// The JSON entry of a `content` map: an exact `application/json`, else any
+/// type with the `+json` structured suffix (`application/merge-patch+json`,
+/// `application/vnd.api+json`, …).
+fn json_media_type(content: &IndexMap<String, MediaType>) -> Option<(&str, &MediaType)> {
     // Media types may carry parameters (`application/json; charset=utf-8`) and
     // are case-insensitive.
     let essence = |raw: &str| {
@@ -350,8 +375,44 @@ fn json_content(content: &IndexMap<String, MediaType>) -> Option<(&str, &MediaTy
     };
     exact
         .or_else(suffixed)
-        .or_else(|| content.first())
         .map(|(name, media)| (name.as_str(), media))
+}
+
+/// The JSON Schema of the operation's successful reply, to advertise as the
+/// tool's `outputSchema`, or why none can be declared.
+///
+/// Every success response the operation documents — each `2xx` code and the
+/// `2XX` range — must carry the same JSON body schema, and that schema must be
+/// `type: object`, the only root MCP accepts. Otherwise a reply that honours
+/// the document could still carry no conforming `structuredContent` (a `204`
+/// next to a `200`, an array body). `default` is not a success response: it
+/// conventionally describes errors.
+fn output_schema(spec: &Spec, operation: &Operation) -> Result<Map<String, Value>, &'static str> {
+    let mut schemas = Vec::new();
+    for (code, response) in &operation.responses {
+        let is_success = code.eq_ignore_ascii_case("2XX")
+            || (code.len() == 3 && code.starts_with('2') && code.parse::<u16>().is_ok());
+        if !is_success {
+            continue;
+        }
+        let schema = spec.resolve(response).and_then(|response| {
+            json_media_type(&response.content)
+                .and_then(|(_, media)| media.schema.as_ref())
+                .map(|schema| inlined(spec, schema))
+        });
+        schemas.push(schema.ok_or("a success response has no JSON body schema")?);
+    }
+
+    let (first, others) = schemas
+        .split_first()
+        .ok_or("no success response is documented")?;
+    if others.iter().any(|schema| schema != first) {
+        return Err("the success responses disagree on the body schema");
+    }
+    match first {
+        Value::Object(schema) if schema.get("type") == Some(&json!("object")) => Ok(schema.clone()),
+        _ => Err("the success body is not an object schema"),
+    }
 }
 
 /// Copy a schema out of the document with its local `$ref`s inlined, so MCP
@@ -447,6 +508,7 @@ mod tests {
             &spec_from(yaml),
             &OperationFilter::default(),
             &ToolRenamer::default(),
+            false,
         )
     }
 
@@ -681,7 +743,12 @@ paths:
             include_regexes: vec![regex::Regex::new("^getPet$").unwrap()],
             ..Default::default()
         });
-        let tools = build_tools(&spec_from(PETSTORE), &only_get, &ToolRenamer::default());
+        let tools = build_tools(
+            &spec_from(PETSTORE),
+            &only_get,
+            &ToolRenamer::default(),
+            false,
+        );
         let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["getPet"]);
     }
@@ -706,6 +773,7 @@ paths:
             &spec_from(PETSTORE),
             &only_get,
             &renamer(&["^get=fetch_", "Pet=animal"]),
+            false,
         );
         let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["fetch_animal"]);
@@ -720,6 +788,7 @@ paths:
             &spec_from(PETSTORE),
             &renamed_only,
             &renamer(&["^get=fetch_", "Pet=animal"]),
+            false,
         );
         assert!(tools.is_empty());
     }
@@ -730,6 +799,7 @@ paths:
             &spec_from(PETSTORE),
             &OperationFilter::default(),
             &renamer(&["^create=new_"]),
+            false,
         );
         let create = tools.iter().find(|t| t.name == "new_Pet").unwrap();
         assert_eq!(
@@ -757,6 +827,7 @@ paths:
             &spec_from(SPEC),
             &OperationFilter::default(),
             &renamer(&["^getApiV4(Projects|Groups)Id=get_"]),
+            false,
         );
         let names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["get_Issues", "get_Issues_2"]);
@@ -976,5 +1047,184 @@ paths:
         // A POST is taken as destructive, as the spec says of an unset hint.
         let post = tools.iter().find(|t| t.name == "post").expect("post");
         assert!(post.annotations().is_destructive());
+    }
+
+    /// The output schema of the single operation `/a` declares, whose
+    /// `responses` map is `responses` (YAML, indented for the slot).
+    fn output_schema_for(responses: &str) -> Option<Arc<Map<String, Value>>> {
+        let spec = spec_from(&format!(
+            r##"
+openapi: 3.1.0
+info: {{ title: T, version: "1" }}
+paths:
+  /a:
+    get:
+      operationId: getA
+      responses:
+{responses}
+components:
+  schemas:
+    Pet: {{ type: object, properties: {{ name: {{ type: string }} }} }}
+    Pets: {{ type: array, items: {{ $ref: "#/components/schemas/Pet" }} }}
+  responses:
+    PetReply:
+      description: ok
+      content:
+        application/json:
+          schema: {{ $ref: "#/components/schemas/Pet" }}
+"##
+        ));
+        let tools = build_tools(
+            &spec,
+            &OperationFilter::default(),
+            &ToolRenamer::default(),
+            true,
+        );
+        tools[0].output_schema.clone()
+    }
+
+    #[test]
+    fn the_output_schema_is_the_object_body_of_the_success_response() {
+        let schema = output_schema_for(
+            r##"
+        "200":
+          description: ok
+          content:
+            application/json; charset=utf-8:
+              schema: { type: object, properties: { id: { type: integer } } }
+        "404":
+          description: missing
+          content:
+            application/json:
+              schema: { type: object, properties: { error: { type: string } } }
+        default:
+          description: error
+          content:
+            application/json:
+              schema: { type: string }
+"##,
+        )
+        .expect("an object body is declared");
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["properties"]["id"]["type"], "integer");
+    }
+
+    #[test]
+    fn the_output_schema_resolves_refs_like_the_input_schema() {
+        // A `$ref`'d response whose schema is itself a `$ref`.
+        let schema = output_schema_for(
+            r##"
+        "200": { $ref: "#/components/responses/PetReply" }
+"##,
+        )
+        .expect("the referenced object body is declared");
+        assert!(schema.get("$ref").is_none());
+        assert_eq!(schema["properties"]["name"]["type"], "string");
+
+        // A `+json` media type and the `2XX` range count too.
+        let schema = output_schema_for(
+            r##"
+        2XX:
+          description: ok
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Pet" }
+"##,
+        );
+        assert!(schema.is_some());
+    }
+
+    #[test]
+    fn no_output_schema_without_an_object_json_success_body() {
+        for responses in [
+            // A non-object body: MCP only accepts an object root.
+            r##"
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pets" }
+"##,
+            // No success response at all; `default` does not count.
+            r##"
+        "404": { description: missing }
+        default:
+          description: error
+          content:
+            application/json:
+              schema: { type: object }
+"##,
+            // A body that is not JSON.
+            r##"
+        "200":
+          description: ok
+          content:
+            text/csv:
+              schema: { type: object }
+"##,
+            // A second success reply without a body could not conform.
+            r##"
+        "200": { $ref: "#/components/responses/PetReply" }
+        "204": { description: no content }
+"##,
+            // Two success replies with different bodies.
+            r##"
+        "200": { $ref: "#/components/responses/PetReply" }
+        "201":
+          description: created
+          content:
+            application/json:
+              schema: { type: object, properties: { id: { type: integer } } }
+"##,
+        ] {
+            assert!(output_schema_for(responses).is_none(), "{responses}");
+        }
+    }
+
+    #[test]
+    fn agreeing_success_responses_share_the_output_schema() {
+        let schema = output_schema_for(
+            r##"
+        "200": { $ref: "#/components/responses/PetReply" }
+        "201": { $ref: "#/components/responses/PetReply" }
+"##,
+        );
+        assert!(schema.is_some());
+    }
+
+    #[test]
+    fn no_output_schema_without_the_option() {
+        let tools = tools_from(
+            r##"
+openapi: 3.1.0
+info: { title: T, version: "1" }
+paths:
+  /a:
+    get:
+      operationId: getA
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { type: object }
+"##,
+        );
+        assert!(tools[0].output_schema.is_none());
+    }
+
+    #[test]
+    fn unquoted_status_codes_are_read_as_well() {
+        // YAML reads a bare `200:` key as an integer.
+        let schema = output_schema_for(
+            r##"
+        200:
+          description: ok
+          content:
+            application/json:
+              schema: { type: object }
+"##,
+        );
+        assert!(schema.is_some());
     }
 }

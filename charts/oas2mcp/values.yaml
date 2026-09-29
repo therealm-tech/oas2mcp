@@ -128,6 +128,9 @@ oas2mcp:
       # -- Key in the resource holding the PEM bundle (also the mounted file name).
       key: ca-certificates.crt
 
+  # -- Declare an MCP `outputSchema` on each tool whose success response has a JSON object body. Off by default: clients may then validate `structuredContent` against it, so an upstream that strays from its own OpenAPI document fails calls on the client side. Maps to `TOOL_OUTPUT_SCHEMA`.
+  toolOutputSchema: false
+
   # -- (string) Upstream API base URL the tool calls are proxied to. Unset → taken from the document `servers`.
   baseUrl: ~
 
