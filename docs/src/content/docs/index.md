@@ -7,13 +7,9 @@ hero:
   image:
     file: ../../../../logo.svg
   actions:
-    - text: Get started
-      link: /getting-started/
-      icon: right-arrow
     - text: View on GitHub
       link: https://github.com/therealm-tech/oas2mcp
       icon: external
-      variant: minimal
 ---
 
 Each [OpenAPI](https://www.openapis.org/) operation becomes one
@@ -21,6 +17,8 @@ Each [OpenAPI](https://www.openapis.org/) operation becomes one
 `oas2mcp` builds and sends the corresponding HTTP request to the upstream API
 and returns the response. In other words, it turns any HTTP API that ships an
 OpenAPI description into something an MCP-capable agent can drive.
+
+**[Get started →](/getting-started/)**
 
 ## Features
 
