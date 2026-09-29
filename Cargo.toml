@@ -78,7 +78,7 @@ opentelemetry-otlp = { version = "0.32.0", default-features = false, features = 
     "reqwest-blocking-client",
     "reqwest-rustls",
 ] }
-opentelemetry-prometheus = "0.32.0"
+opentelemetry-prometheus = "0.33.0"
 prometheus = { version = "0.14.0", default-features = false }
 uuid = { version = "1.24.0", features = ["v4"] }
 
