@@ -980,7 +980,8 @@ deletes on a `GET` gets a tool marked read-only. For such an API, pass
 
 ### The shape of a tool result
 
-A result carries the upstream response twice, in two fields with two audiences:
+A result carries a text upstream response twice, in two fields with two
+audiences (a binary one is covered [below](#binary-responses)):
 
 | Field               | Content                                       | Read it if you are |
 | ------------------- | --------------------------------------------- | ------------------ |
@@ -1006,6 +1007,24 @@ itself JSON.
 informative rather than contractual — clients should not validate against a
 declared schema that isn't there.
 
+#### Binary responses
+
+The response `Content-Type` decides how the body is read. Text — `text/*`, JSON
+and `+json`, XML and `+xml`, YAML, `application/x-www-form-urlencoded` — gets
+the shape above. Any other body is passed on base64-encoded, after a text block
+such as `HTTP 200 OK, image/png, 12345 bytes` that a client ignoring binary
+content still shows:
+
+| `Content-Type`                                 | Second content block                                      |
+| ---------------------------------------------- | --------------------------------------------------------- |
+| `image/*`                                      | an `image` block                                          |
+| `audio/*`                                      | an `audio` block                                          |
+| anything else (`application/pdf`, `…/zip`, …)  | an embedded resource, its `blob` named by the request URL |
+
+A body without a `Content-Type` is text when it is valid UTF-8, and an
+`application/octet-stream` resource otherwise. A binary result never carries
+`structuredContent`; `isError` follows the status as for text.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, the tests and
@@ -1024,6 +1043,8 @@ the CI, and [ARCHITECTURE.md](ARCHITECTURE.md) for how the code fits together.
 - OpenAPI 3.1 `webhooks` are not exposed as tools: a webhook is a callback the
   upstream API sends *to* the server, not an operation the server can call.
 - Cookie parameters are ignored.
+- An upstream response body is read whole into memory, with no size limit; a
+  binary body reaches the client base64-encoded in full.
 - Templated `servers` URLs (`https://{region}.example.com`) are not expanded;
   pass `--base-url` for those.
 - The legacy `sse` transport is kept for compatibility but is deprecated by the

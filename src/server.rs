@@ -11,10 +11,11 @@ use arc_swap::ArcSwap;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Icon, Implementation,
-    ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
+    ListToolsResult, PaginatedRequestParams, ResourceContents, ServerCapabilities, ServerConfig,
+    Tool,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ErrorData, ServerHandler};
@@ -176,8 +177,20 @@ impl OpenApiServer {
         match request.send().await {
             Ok(response) => {
                 let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                shape_response(status, &body)
+                let mime = response
+                    .headers()
+                    .get(CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .map(mime_essence);
+                let kind = body_kind(mime.as_deref());
+                tracing::debug!(tool = %spec.name, %status, mime = ?mime, ?kind, "shaping upstream response");
+                if kind == BodyKind::Text {
+                    let body = response.text().await.unwrap_or_default();
+                    return shape_response(status, &body);
+                }
+                let uri = response.url().to_string();
+                let body = response.bytes().await.unwrap_or_default();
+                shape_bytes_response(status, kind, mime.as_deref(), &body, &uri)
             }
             Err(err) => CallToolResult::error(vec![ContentBlock::text(format!(
                 "upstream request failed: {err}"
@@ -783,12 +796,10 @@ fn value_to_string(value: &Value) -> String {
 /// Protocol versions up to 2025-11-25 type `structuredContent` as a JSON
 /// object, so an array or scalar body is wrapped as `{"result": <body>}`.
 fn shape_response(status: reqwest::StatusCode, body: &str) -> CallToolResult {
-    let content = vec![ContentBlock::text(format!("HTTP {status}\n\n{body}"))];
-    let mut result = if status.is_client_error() || status.is_server_error() {
-        CallToolResult::error(content)
-    } else {
-        CallToolResult::success(content)
-    };
+    let mut result = result_for(
+        status,
+        vec![ContentBlock::text(format!("HTTP {status}\n\n{body}"))],
+    );
     // `CallToolResult` is `#[non_exhaustive]`, hence the build-then-assign.
     result.structured_content = serde_json::from_str::<Value>(body)
         .ok()
@@ -797,6 +808,98 @@ fn shape_response(status: reqwest::StatusCode, body: &str) -> CallToolResult {
             other => serde_json::json!({ "result": other }),
         });
     result
+}
+
+fn result_for(status: reqwest::StatusCode, content: Vec<ContentBlock>) -> CallToolResult {
+    if status.is_client_error() || status.is_server_error() {
+        CallToolResult::error(content)
+    } else {
+        CallToolResult::success(content)
+    }
+}
+
+/// How an upstream body reaches the model, decided by its media type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyKind {
+    /// Read as text: [`shape_response`].
+    Text,
+    /// An MCP `image` block.
+    Image,
+    /// An MCP `audio` block.
+    Audio,
+    /// An embedded resource carrying the bytes as a base64 `blob`.
+    Blob,
+    /// No `Content-Type`: text when the body is valid UTF-8, a blob otherwise.
+    Unknown,
+}
+
+/// The `type/subtype` of a `Content-Type` value, lowercased, parameters dropped.
+fn mime_essence(content_type: &str) -> String {
+    content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn body_kind(mime: Option<&str>) -> BodyKind {
+    let Some(mime) = mime.filter(|mime| !mime.is_empty()) else {
+        return BodyKind::Unknown;
+    };
+    let (kind, subtype) = mime.split_once('/').unwrap_or((mime, ""));
+    // Checked before `image/`, so `image/svg+xml` stays readable text.
+    let textual = kind == "text"
+        || subtype.ends_with("+json")
+        || subtype.ends_with("+xml")
+        || subtype.ends_with("+yaml")
+        || (kind == "application"
+            && matches!(
+                subtype,
+                "json"
+                    | "xml"
+                    | "yaml"
+                    | "x-yaml"
+                    | "javascript"
+                    | "x-ndjson"
+                    | "x-www-form-urlencoded"
+            ));
+    match kind {
+        _ if textual => BodyKind::Text,
+        "image" => BodyKind::Image,
+        "audio" => BodyKind::Audio,
+        _ => BodyKind::Blob,
+    }
+}
+
+/// Shape a body that is not read as text. The leading text block keeps the
+/// status visible to a client that ignores images, audio and resources.
+fn shape_bytes_response(
+    status: reqwest::StatusCode,
+    kind: BodyKind,
+    mime: Option<&str>,
+    body: &[u8],
+    uri: &str,
+) -> CallToolResult {
+    if body.is_empty() {
+        return shape_response(status, "");
+    }
+    if kind == BodyKind::Unknown
+        && let Ok(text) = std::str::from_utf8(body)
+    {
+        return shape_response(status, text.strip_prefix('\u{feff}').unwrap_or(text));
+    }
+    let mime = mime
+        .filter(|mime| !mime.is_empty())
+        .unwrap_or("application/octet-stream");
+    let data = STANDARD.encode(body);
+    let block = match kind {
+        BodyKind::Image => ContentBlock::image(data, mime),
+        BodyKind::Audio => ContentBlock::audio(data, mime),
+        _ => ContentBlock::resource(ResourceContents::blob(data, uri).with_mime_type(mime)),
+    };
+    let summary = ContentBlock::text(format!("HTTP {status}, {mime}, {} bytes", body.len()));
+    result_for(status, vec![summary, block])
 }
 
 /// Append a query parameter, expanding arrays into repeated entries.
@@ -1392,5 +1495,179 @@ paths:
             .await
             .expect("an uncancelled call completes");
         assert_eq!(result.is_error, Some(true));
+    }
+
+    #[test]
+    fn the_media_type_decides_how_a_body_is_read() {
+        for (mime, kind) in [
+            ("text/plain", BodyKind::Text),
+            ("text/html", BodyKind::Text),
+            ("application/json", BodyKind::Text),
+            ("application/problem+json", BodyKind::Text),
+            ("application/xml", BodyKind::Text),
+            ("application/atom+xml", BodyKind::Text),
+            ("application/x-www-form-urlencoded", BodyKind::Text),
+            ("application/yaml", BodyKind::Text),
+            ("image/svg+xml", BodyKind::Text),
+            ("image/png", BodyKind::Image),
+            ("image/jpeg", BodyKind::Image),
+            ("audio/mpeg", BodyKind::Audio),
+            ("application/octet-stream", BodyKind::Blob),
+            ("application/pdf", BodyKind::Blob),
+            ("application/zip", BodyKind::Blob),
+            ("video/mp4", BodyKind::Blob),
+        ] {
+            assert_eq!(body_kind(Some(mime)), kind, "{mime}");
+        }
+        assert_eq!(body_kind(None), BodyKind::Unknown);
+        assert_eq!(body_kind(Some("")), BodyKind::Unknown);
+    }
+
+    #[test]
+    fn the_media_type_is_read_without_its_parameters_or_case() {
+        assert_eq!(
+            mime_essence("Application/JSON; charset=utf-8"),
+            "application/json"
+        );
+        assert_eq!(mime_essence("image/png"), "image/png");
+    }
+
+    /// A PNG signature followed by bytes that are not valid UTF-8.
+    const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff];
+
+    #[test]
+    fn an_image_body_becomes_an_image_block_after_a_summary() {
+        let result = shape_bytes_response(
+            reqwest::StatusCode::OK,
+            BodyKind::Image,
+            Some("image/png"),
+            PNG,
+            "https://api.example.com/a.png",
+        );
+
+        assert_eq!(text_of(&result), "HTTP 200 OK, image/png, 10 bytes");
+        let image = result.content[1].as_image().expect("an image block");
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(STANDARD.decode(&image.data).expect("base64"), PNG);
+        assert_eq!(result.structured_content, None);
+        assert_eq!(result.is_error, Some(false));
+    }
+
+    #[test]
+    fn an_audio_body_becomes_an_audio_block() {
+        let result = shape_bytes_response(
+            reqwest::StatusCode::OK,
+            BodyKind::Audio,
+            Some("audio/mpeg"),
+            PNG,
+            "https://api.example.com/a.mp3",
+        );
+
+        assert_eq!(text_of(&result), "HTTP 200 OK, audio/mpeg, 10 bytes");
+        let audio = result.content[1].as_audio().expect("an audio block");
+        assert_eq!(audio.mime_type, "audio/mpeg");
+        assert_eq!(STANDARD.decode(&audio.data).expect("base64"), PNG);
+    }
+
+    /// The `(uri, mimeType, bytes)` of a result's embedded blob resource.
+    fn blob_of(result: &CallToolResult) -> (String, Option<String>, Vec<u8>) {
+        let resource = result.content[1].as_resource().expect("a resource block");
+        let ResourceContents::BlobResourceContents {
+            uri,
+            mime_type,
+            blob,
+            ..
+        } = &resource.resource
+        else {
+            panic!("expected a blob resource, got {resource:?}");
+        };
+        let bytes = STANDARD.decode(blob).expect("base64");
+        (uri.clone(), mime_type.clone(), bytes)
+    }
+
+    #[test]
+    fn another_binary_body_becomes_an_embedded_blob_named_by_the_request_url() {
+        let result = shape_bytes_response(
+            reqwest::StatusCode::OK,
+            BodyKind::Blob,
+            Some("application/pdf"),
+            b"%PDF-1.7\n\xe2\xe3",
+            "https://api.example.com/report.pdf",
+        );
+
+        assert_eq!(text_of(&result), "HTTP 200 OK, application/pdf, 11 bytes");
+        assert_eq!(
+            blob_of(&result),
+            (
+                "https://api.example.com/report.pdf".to_string(),
+                Some("application/pdf".to_string()),
+                b"%PDF-1.7\n\xe2\xe3".to_vec()
+            )
+        );
+    }
+
+    #[test]
+    fn a_binary_error_body_keeps_is_error() {
+        let result = shape_bytes_response(
+            reqwest::StatusCode::BAD_GATEWAY,
+            BodyKind::Blob,
+            Some("application/octet-stream"),
+            PNG,
+            "https://api.example.com/a",
+        );
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            text_of(&result),
+            "HTTP 502 Bad Gateway, application/octet-stream, 10 bytes"
+        );
+    }
+
+    #[test]
+    fn an_untyped_body_is_text_when_it_is_utf8() {
+        let result = shape_bytes_response(
+            reqwest::StatusCode::OK,
+            BodyKind::Unknown,
+            None,
+            br#"{"ok":true}"#,
+            "https://api.example.com/a",
+        );
+        assert_eq!(text_of(&result), "HTTP 200 OK\n\n{\"ok\":true}");
+        assert_eq!(result.content.len(), 1);
+        assert_eq!(
+            result.structured_content,
+            Some(serde_json::json!({"ok": true}))
+        );
+    }
+
+    #[test]
+    fn an_untyped_body_that_is_not_utf8_is_an_octet_stream_blob() {
+        let result = shape_bytes_response(
+            reqwest::StatusCode::OK,
+            BodyKind::Unknown,
+            None,
+            PNG,
+            "https://api.example.com/a",
+        );
+        assert_eq!(
+            text_of(&result),
+            "HTTP 200 OK, application/octet-stream, 10 bytes"
+        );
+        assert_eq!(
+            blob_of(&result).1.as_deref(),
+            Some("application/octet-stream")
+        );
+    }
+
+    #[test]
+    fn an_empty_binary_body_is_just_the_status() {
+        let result = shape_bytes_response(
+            reqwest::StatusCode::NO_CONTENT,
+            BodyKind::Image,
+            Some("image/png"),
+            b"",
+            "https://api.example.com/a",
+        );
+        assert_eq!(text_of(&result), "HTTP 204 No Content\n\n");
+        assert_eq!(result.content.len(), 1);
     }
 }
