@@ -70,7 +70,7 @@ base64 = "0.23.1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-opentelemetry = "0.32.0"
+opentelemetry = "0.33.0"
 opentelemetry_sdk = { version = "0.32.1", features = ["metrics"] }
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = [
     "metrics",
