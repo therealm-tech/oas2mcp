@@ -65,7 +65,9 @@ jobs:
         run: helm lint "$CHART_DIR" -f "$CHART_DIR/values-lint.yaml"
 
       - name: log in to GHCR
-        run: helm registry login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$REGISTRY_PASSWORD"
 
       - name: package and push the chart
         env:

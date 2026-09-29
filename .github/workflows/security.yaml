@@ -1,0 +1,148 @@
+name: security
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  # A new CVE lands against code nobody touched. Scheduled workflows only run
+  # from `main`, and GitHub disables them after 60 days without activity on the
+  # repository: re-enable from the Actions tab if the repository goes quiet.
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/therealm-tech/oas2mcp
+
+jobs:
+  fs:
+    name: fs
+    permissions:
+      contents: read
+      # Publishing the SARIF report to the Security tab.
+      security-events: write
+    runs-on: ubuntu-24.04
+    env:
+      # Trivy renders the chart itself, but only once it has the values the
+      # templates require. Without this it logs a render error and scans no
+      # chart at all — while still reporting success.
+      TRIVY_HELM_VALUES: charts/oas2mcp/values-lint.yaml
+      # Declares ghcr.io a trusted registry for KSV-0125.
+      TRIVY_CONFIG_DATA: .trivy
+    steps:
+      - name: check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # Two passes on purpose. The Security tab gets everything actionable at
+      # every severity, misconfigurations included; the gate below only trips on
+      # HIGH/CRITICAL. One pass cannot do both: `limit-severities-for-sarif`
+      # defaults to false, so a SARIF run ignores `severity` and would fail the
+      # build on a LOW.
+      - name: scan the repository
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          # A throwaway RSA key used only by the auth unit tests, never a real
+          # credential — `detect-private-key` skips it for the same reason.
+          skip-files: tests/fixtures/test_rsa_key.pem
+          cache: true
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: "0"
+
+      - name: publish the findings
+        # Only a fork or Dependabot pull request lacks the token to upload, and
+        # both arrive as `pull_request`. Reporting happens from the other events.
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      # Misconfigurations are gated at commit time by the `trivy-config`
+      # pre-commit hook; this gate covers what changes without a commit.
+      - name: fail on high and critical findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          # An advisory without a released fix is reported above, but nobody
+          # can action it: blocking on it would teach everyone red is normal.
+          ignore-unfixed: true
+          skip-files: tests/fixtures/test_rsa_key.pem
+          cache: true
+          format: table
+          exit-code: "1"
+
+  # The image users actually run, pulled by its release tag. Rebuilding `main`
+  # instead would pick up patched base layers and report an image nobody runs.
+  image:
+    name: image (${{ matrix.arch }})
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+      security-events: write
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - amd64
+          - arm64
+    env:
+      # Selects the manifest-list entry; the scan itself needs no native runner.
+      TRIVY_PLATFORM: linux/${{ matrix.arch }}
+    steps:
+      - name: find the latest stable release
+        id: release
+        # Only stable tags get a GitHub Release, so the latest one is the
+        # latest stable version. Empty before the first release.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: scan the released image
+        if: ${{ steps.release.outputs.version != '' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.release.outputs.version }}
+          scanners: vuln,secret
+          cache: true
+          format: sarif
+          output: trivy-release.sarif
+          exit-code: "0"
+
+      - name: publish the released image findings
+        if: ${{ steps.release.outputs.version != '' }}
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
+        with:
+          sarif_file: trivy-release.sarif
+          # Distinct from `build`'s `trivy-image-<arch>`, which scans `main` on
+          # the same ref: a shared category would close each other's alerts.
+          category: trivy-release-${{ matrix.arch }}
+
+      - name: fail on high and critical findings
+        if: ${{ steps.release.outputs.version != '' }}
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.release.outputs.version }}
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          cache: true
+          format: table
+          exit-code: "1"

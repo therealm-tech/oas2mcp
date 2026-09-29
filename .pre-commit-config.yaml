@@ -64,6 +64,20 @@ repos:
         files: ^charts/.*/(values\.yaml|Chart\.yaml|README\.md(\.gotmpl)?)$
         pass_filenames: false
 
+      # Named targets rather than `.`, which would also scan the Dockerfiles
+      # npm packages ship under `docs/node_modules`. The chart is only checked
+      # once rendered with `values-lint.yaml`; `.trivy/` holds the parameters.
+      - id: trivy-config
+        name: trivy config
+        entry: >-
+          bash -c 'for target in Dockerfile charts/oas2mcp; do
+          trivy config --quiet --exit-code 1 --severity HIGH,CRITICAL
+          --helm-values charts/oas2mcp/values-lint.yaml --config-data .trivy "$target" || exit 1;
+          done'
+        language: system
+        files: ^(Dockerfile|charts/oas2mcp/|\.trivy/)
+        pass_filenames: false
+
       # Biome from the docs site's own lockfile rather than biomejs/pre-commit,
       # whose `additional_dependencies` pin would be a second Biome version to
       # keep in step. Both hooks need `npm ci --prefix docs` first.
