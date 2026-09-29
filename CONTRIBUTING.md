@@ -2,7 +2,8 @@
 
 Issues and pull requests are welcome on
 [GitHub](https://github.com/therealm-tech/oas2mcp). For running and configuring
-`oas2mcp` itself, see the [README](README.md); for how it is built, see
+`oas2mcp` itself, see the [documentation](https://therealm-tech.github.io/oas2mcp/);
+for how it is built, see
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Development setup
@@ -13,6 +14,8 @@ Issues and pull requests are welcome on
 - **[pre-commit](https://pre-commit.com)** and the binaries its hooks call:
   `hadolint`, `actionlint`, `shellcheck`, `helm` and `helm-docs`.
 - **Docker and Python 3**, only for the end-to-end suite.
+- **Node.js**, at the version in [`docs/.nvmrc`](docs/.nvmrc), for the
+  documentation site and the pre-commit hooks that check it.
 
 **macOS**
 
@@ -33,6 +36,13 @@ and the other binaries from their release pages:
 [helm](https://helm.sh/docs/intro/install/),
 [helm-docs](https://github.com/norwoodj/helm-docs/releases) — the `pre-commit`
 job in [`quality.yaml`](.github/workflows/quality.yaml) installs exactly these.
+
+Install the documentation site's dependencies, which its pre-commit hooks run
+from:
+
+```bash
+npm ci --prefix docs
+```
 
 A working setup builds and passes the unit tests:
 
@@ -59,6 +69,27 @@ Keycloak container and a sandbox API; it needs Docker and Python 3. Its README
 has the full sequence.
 
 A new behaviour comes with tests, and a fix with a test that fails without it.
+
+## Writing the documentation
+
+The user documentation is a [Starlight](https://starlight.astro.build) site in
+[`docs/`](docs), published to <https://therealm-tech.github.io/oas2mcp/>. Pages
+are Markdown under [`docs/src/content/docs/`](docs/src/content/docs); a new page
+under `guides/` or `reference/` joins the sidebar by itself, placed by the
+`sidebar.order` in its frontmatter. Link another page by its absolute path,
+base included: `/oas2mcp/guides/metrics/`.
+
+Preview it with live reload on <http://localhost:4321/oas2mcp/>:
+
+```bash
+npm --prefix docs run dev
+```
+
+Build it as CI does, which also fails on a broken internal link or anchor:
+
+```bash
+npm --prefix docs run build
+```
 
 ## Pre-commit hooks
 
@@ -90,6 +121,8 @@ pre-commit run cargo-clippy --all-files
 | `helm-lint` | the chart renders | by hand |
 | `helm-docs` | the chart README matches `values.yaml` | fixes itself; re-stage |
 | `hadolint` | the `Dockerfile` | by hand |
+| `biome` | documentation site formatting and lints | `npm --prefix docs exec biome check --write .` |
+| `astro-check` | documentation site types and content frontmatter | by hand |
 
 The same hooks run in CI, so `--no-verify` or `SKIP=` only moves the failure
 somewhere slower. If a rule is wrong for this repository, change
@@ -102,6 +135,7 @@ and say why.
 | --- | --- | --- | --- |
 | [`quality`](.github/workflows/quality.yaml) | pull requests, pushes to `main` | pre-commit, `cargo test`, the end-to-end suite, Trivy filesystem scan | `pre-commit run --all-files`, `cargo test`, [e2e](tests/e2e/README.md), the Trivy command below |
 | [`build`](.github/workflows/build.yaml) | pull requests and pushes to `main` touching the build inputs, manual | multi-arch image build and Trivy image scan; pushes only on manual dispatch or a release | `docker build .` and the Trivy command below |
+| [`docs`](.github/workflows/docs.yaml) | pull requests and pushes to `main` touching `docs/` or the logo, manual | builds the documentation site, checking its internal links; on `main`, deploys it to GitHub Pages | `npm --prefix docs run build` |
 | [`chart`](.github/workflows/chart.yaml) | `chart-X.Y.Z` tag, manual | on a tag, checks it matches `Chart.yaml`; publishes the chart to `ghcr.io/therealm-tech/charts` | — (publish only) |
 | [`release`](.github/workflows/release.yaml) | `vX.Y.Z` tag | checks the tag matches `Cargo.toml`, builds and pushes the image, creates the GitHub Release (not for a pre-release) | — (publish only) |
 
@@ -204,8 +238,9 @@ git tag chart-0.1.0 && git push origin chart-0.1.0
 ## Submitting a change
 
 - Commit subjects are imperative and lowercase; follow `git log --oneline`.
-- Update the README, this file or [ARCHITECTURE.md](ARCHITECTURE.md) in the same
-  pull request as the change that affects them.
+- Update the [documentation](docs/src/content/docs), the README, this file or
+  [ARCHITECTURE.md](ARCHITECTURE.md) in the same pull request as the change
+  that affects them.
 - Label the pull request so it lands in the right section of the release notes
   ([`.github/release.yaml`](.github/release.yaml)): one category label, plus
   `breaking` when upgrading forces users to change anything (a flag, an

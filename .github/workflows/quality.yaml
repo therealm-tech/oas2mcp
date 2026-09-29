@@ -66,6 +66,14 @@ jobs:
             "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64"
           sudo chmod +x /usr/local/bin/hadolint
 
+      - name: set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version-file: docs/.nvmrc
+
+      - name: install the docs site dependencies
+        run: npm ci --prefix docs
+
       - name: install pre-commit
         run: pipx install pre-commit
 
