@@ -31,7 +31,8 @@ flowchart LR
     client -.->|"login, discovered via resource metadata"| idp
 ```
 
-How to run and configure it is in the [README](README.md); this file explains
+How to run and configure it is in the
+[documentation](https://therealm-tech.github.io/oas2mcp/); this file explains
 how it is put together.
 
 ## Components

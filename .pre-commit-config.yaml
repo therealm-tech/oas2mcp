@@ -9,6 +9,7 @@ repos:
         # Helm templates are Go-templated, not plain YAML.
         exclude: ^charts/.*/templates/
       - id: check-added-large-files
+        exclude: ^docs/package-lock\.json$
       - id: check-merge-conflict
       - id: detect-private-key
         # Throwaway RSA and EC keys used only by the unit tests, never real
@@ -61,6 +62,23 @@ repos:
         entry: helm-docs --chart-search-root=charts
         language: system
         files: ^charts/.*/(values\.yaml|Chart\.yaml|README\.md(\.gotmpl)?)$
+        pass_filenames: false
+
+      # Biome from the docs site's own lockfile rather than biomejs/pre-commit,
+      # whose `additional_dependencies` pin would be a second Biome version to
+      # keep in step. Both hooks need `npm ci --prefix docs` first.
+      - id: biome
+        name: biome
+        entry: npm --prefix docs run lint
+        language: system
+        files: ^docs/
+        pass_filenames: false
+
+      - id: astro-check
+        name: astro check
+        entry: npm --prefix docs run check
+        language: system
+        files: ^docs/
         pass_filenames: false
 
   - repo: https://github.com/hadolint/hadolint

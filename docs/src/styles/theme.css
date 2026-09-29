@@ -1,0 +1,30 @@
+/* The logo's two colours: #346187 (blue) and #ff741a (orange). Each theme takes
+   as accent the one that reads on its background; the grays carry the blue's hue. */
+:root {
+	--sl-color-accent-low: #4a2206;
+	--sl-color-accent: #ff741a;
+	--sl-color-accent-high: #ff8a3d;
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #e9eff4;
+	--sl-color-gray-2: #c3d0db;
+	--sl-color-gray-3: #8699aa;
+	--sl-color-gray-4: #4f6477;
+	--sl-color-gray-5: #2c4155;
+	--sl-color-gray-6: #172838;
+	--sl-color-black: #0e1822;
+}
+
+:root[data-theme="light"] {
+	--sl-color-accent-low: #d5e3ef;
+	--sl-color-accent: #346187;
+	--sl-color-accent-high: #1d3a53;
+	--sl-color-white: #0e1822;
+	--sl-color-gray-1: #172838;
+	--sl-color-gray-2: #2c4155;
+	--sl-color-gray-3: #4f6477;
+	--sl-color-gray-4: #8699aa;
+	--sl-color-gray-5: #c3d0db;
+	--sl-color-gray-6: #e9eff4;
+	--sl-color-gray-7: #f4f7fa;
+	--sl-color-black: #ffffff;
+}

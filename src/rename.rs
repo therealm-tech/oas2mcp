@@ -196,7 +196,7 @@ mod tests {
         })
     }
 
-    /// The abbreviation rules documented in the README, against GitLab's names.
+    /// The abbreviation rules the documentation uses as its example, against GitLab's names.
     const GITLAB_RULES: &[&str] = &[
         r"^(get|post|put|delete|patch)ApiV4=${1}_",
         "Projects?Id=proj",

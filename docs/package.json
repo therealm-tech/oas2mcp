@@ -1,0 +1,22 @@
+{
+	"name": "oas2mcp-docs",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "astro dev",
+		"build": "astro build",
+		"preview": "astro preview",
+		"check": "astro check",
+		"lint": "biome check ."
+	},
+	"dependencies": {
+		"@astrojs/starlight": "0.42.4",
+		"astro": "7.3.5",
+		"starlight-links-validator": "0.26.0"
+	},
+	"devDependencies": {
+		"@astrojs/check": "0.9.10",
+		"@biomejs/biome": "2.5.14",
+		"typescript": "6.0.3"
+	}
+}
