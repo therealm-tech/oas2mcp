@@ -3,33 +3,33 @@ changelog:
     labels:
       - ignore-for-release
   categories:
-    - title: 💥 Breaking Changes
+    - title: Breaking changes
       labels:
         - breaking
-    - title: 🔒 Security
+    - title: Security
       labels:
         - security
-    - title: ⚠️ Deprecations
+    - title: Deprecations
       labels:
         - deprecation
-    - title: 🚀 Features
+    - title: Features
       labels:
         - feature
-    - title: ⚡ Performance
+    - title: Performance
       labels:
         - performance
-    - title: 🐛 Bug Fixes
+    - title: Fixes
       labels:
         - fix
-    - title: 📝 Documentation
+    - title: Documentation
       labels:
         - documentation
-    - title: 📦 Dependencies
+    - title: Dependencies
       labels:
         - dependencies
-    - title: 🧰 Maintenance
+    - title: Maintenance
       labels:
         - chore
-    - title: Other Changes
+    - title: Other changes
       labels:
         - "*"

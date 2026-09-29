@@ -12,7 +12,7 @@ for how it is built, see
   [`rust-toolchain.toml`](rust-toolchain.toml) and installed on the first
   `cargo` invocation.
 - **[pre-commit](https://pre-commit.com)** and the binaries its hooks call:
-  `hadolint`, `actionlint`, `shellcheck`, `helm` and `helm-docs`.
+  `hadolint`, `actionlint`, `shellcheck`, `helm`, `helm-docs` and `trivy`.
 - **Docker and Python 3**, only for the end-to-end suite.
 - **Node.js**, at the version in [`docs/.nvmrc`](docs/.nvmrc), for the
   documentation site and the pre-commit hooks that check it.
@@ -20,7 +20,7 @@ for how it is built, see
 **macOS**
 
 ```bash
-brew install pre-commit hadolint actionlint shellcheck helm norwoodj/tap/helm-docs
+brew install pre-commit hadolint actionlint shellcheck helm norwoodj/tap/helm-docs trivy
 ```
 
 **Linux**
@@ -34,7 +34,8 @@ and the other binaries from their release pages:
 [actionlint](https://github.com/rhysd/actionlint/releases),
 [shellcheck](https://github.com/koalaman/shellcheck#installing),
 [helm](https://helm.sh/docs/intro/install/),
-[helm-docs](https://github.com/norwoodj/helm-docs/releases) — the `pre-commit`
+[helm-docs](https://github.com/norwoodj/helm-docs/releases),
+[trivy](https://trivy.dev/latest/getting-started/installation/) — the `pre-commit`
 job in [`quality.yaml`](.github/workflows/quality.yaml) installs exactly these.
 
 Install the documentation site's dependencies, which its pre-commit hooks run
@@ -146,6 +147,7 @@ pre-commit run cargo-clippy --all-files
 | `helm-lint` | the chart renders | by hand |
 | `helm-docs` | the chart README matches `values.yaml` | fixes itself; re-stage |
 | `hadolint` | the `Dockerfile` | by hand |
+| `trivy-config` | `Dockerfile` and rendered chart misconfigurations, HIGH and CRITICAL | by hand |
 | `biome` | documentation site formatting and lints | `npm --prefix docs exec biome check --write .` |
 | `astro-check` | documentation site types and content frontmatter | by hand |
 
@@ -158,8 +160,9 @@ and say why.
 
 | Workflow | Triggers on | What it does | Reproduce locally |
 | --- | --- | --- | --- |
-| [`quality`](.github/workflows/quality.yaml) | pull requests, pushes to `main` | pre-commit, `cargo test`, the docs site tests, the end-to-end suite, Trivy filesystem scan | `pre-commit run --all-files`, `cargo test`, `npm --prefix docs test`, [e2e](tests/e2e/README.md), the Trivy command below |
+| [`quality`](.github/workflows/quality.yaml) | pull requests, pushes to `main` | pre-commit, `cargo test`, the docs site tests, the end-to-end suite | `pre-commit run --all-files`, `cargo test`, `npm --prefix docs test`, [e2e](tests/e2e/README.md) |
 | [`build`](.github/workflows/build.yaml) | pull requests and pushes to `main` touching the build inputs, manual | multi-arch image build and Trivy image scan; pushes only on manual dispatch or a release | `docker build .` and the Trivy command below |
+| [`security`](.github/workflows/security.yaml) | pull requests, pushes to `main`, daily, manual | Trivy filesystem scan; daily and manual runs also scan the image of the latest release | the Trivy commands below |
 | [`docs`](.github/workflows/docs.yaml) | pull requests and pushes to `main` touching `docs/` or the logo, a stable release, manual | builds every version of the documentation site, checking its internal links; on `main`, deploys it to GitHub Pages | `npm --prefix docs run build:versions` |
 | [`chart`](.github/workflows/chart.yaml) | `chart-X.Y.Z` tag, manual | on a tag, checks it matches `Chart.yaml`; publishes the chart to `ghcr.io/therealm-tech/charts` | — (publish only) |
 | [`release`](.github/workflows/release.yaml) | `vX.Y.Z` tag | checks the tag matches `Cargo.toml`, builds and pushes the image, creates the GitHub Release and rebuilds the documentation (not for a pre-release) | — (publish only) |
@@ -181,40 +184,49 @@ since that release, rc tags included.
 
 ### Security scanning
 
-[Trivy](https://trivy.dev) runs in two places, and both fail the build on a
-**HIGH** or **CRITICAL** finding that has a fix available:
+[Trivy](https://trivy.dev) runs in four places. The CI scans fail on a **HIGH**
+or **CRITICAL** finding that has a fix available:
 
-- **quality / trivy** — a filesystem scan of the repository: crate advisories
-  from `Cargo.lock`, leaked secrets, and `Dockerfile` and Helm chart
-  misconfiguration.
+- **the `trivy-config` pre-commit hook** — `Dockerfile` and Helm chart
+  misconfigurations, at commit time: they only change with the code.
+- **security / fs** — a filesystem scan of the repository: crate advisories
+  from `Cargo.lock` and leaked secrets.
+- **security / image** — daily, the image of the latest release as published
+  on GHCR, for each architecture. A new CVE lands against an image nobody
+  rebuilt; a red scheduled run is the notification.
 - **build / scan the image** — scans the container image the commit actually
-  produces, which is what catches CVEs in the base layer. This runs on releases
-  too: a HIGH/CRITICAL finding fails the build, which blocks the `manifest`
-  job, so no usable tag is ever published. Note it covers the base layer only —
-  the runtime image holds a compiled binary, so Trivy sees no Rust dependencies
-  there; those are covered by the `Cargo.lock` scan above.
+  produces, before anything is pushed. This runs on releases too: a
+  HIGH/CRITICAL finding fails the build, which blocks the `manifest` job, so no
+  usable tag is ever published.
 
-The runtime image is distroless, so the image scan mostly covers the base
-layer; see [ARCHITECTURE.md](ARCHITECTURE.md#design-decisions).
+The image scans cover the base layer only — the runtime image holds a compiled
+binary, so Trivy sees no Rust dependencies there; those are covered by the
+`Cargo.lock` scan. The runtime image is distroless; see
+[ARCHITECTURE.md](ARCHITECTURE.md#design-decisions).
 
-Each runs twice, deliberately: once reporting **every** severity to the
-repository's **Security** tab, then once more gating the build on HIGH and
-CRITICAL. Advisories with no released fix are excluded from both.
+Each CI scan runs twice, deliberately: once reporting **every** severity to the
+repository's **Security** tab — misconfigurations included — then once more
+gating the build on HIGH and CRITICAL. Advisories with no released fix are
+reported but never fail the build.
 
 Trivy renders the chart itself, but only when handed the values its templates
-require (`TRIVY_HELM_VALUES`). Without them it logs a render error, scans no
-chart at all, and still reports success — so keep that variable set. The
-misconfiguration checks also read their parameters from [`.trivy/`](.trivy)
-(`TRIVY_CONFIG_DATA`), such as the registries images may come from.
+require (`--helm-values`, `TRIVY_HELM_VALUES` in CI). Without them it logs a
+render error, scans no chart at all, and still reports success — so keep them
+set. The misconfiguration checks also read their parameters from
+[`.trivy/`](.trivy) (`--config-data`, `TRIVY_CONFIG_DATA`), such as the
+registries images may come from.
 
-Reproduce either scan locally:
+Reproduce the scans locally:
 
 ```bash
-# What the quality workflow gates on:
-TRIVY_HELM_VALUES=charts/oas2mcp/values-lint.yaml TRIVY_CONFIG_DATA=.trivy \
-  trivy fs . --scanners vuln,secret,misconfig \
-    --severity HIGH,CRITICAL --ignore-unfixed \
-    --skip-files tests/fixtures/test_rsa_key.pem
+# What security / fs gates on:
+trivy fs . --scanners vuln,secret \
+  --severity HIGH,CRITICAL --ignore-unfixed \
+  --skip-files tests/fixtures/test_rsa_key.pem
+
+# What security / image gates on, against the latest release:
+trivy image ghcr.io/therealm-tech/oas2mcp:<version> --platform linux/amd64 \
+  --severity HIGH,CRITICAL --ignore-unfixed
 
 # What the build workflow gates on, against a locally built image:
 docker build -t oas2mcp:dev .

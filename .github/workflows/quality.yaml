@@ -66,6 +66,13 @@ jobs:
             "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64"
           sudo chmod +x /usr/local/bin/hadolint
 
+      - name: install Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567  # v0.3.1
+        with:
+          # The version trivy-action runs in `security`: one Trivy, one ruleset.
+          version: v0.70.0
+          cache: true
+
       - name: set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
@@ -126,7 +133,7 @@ jobs:
       # `command` is what makes this possible: the Keycloak image has no default
       # CMD, so without it the container prints its usage and exits.
       keycloak:
-        image: quay.io/keycloak/keycloak:26.7
+        image: quay.io/keycloak/keycloak:26.7.4
         command: start-dev
         env:
           KC_BOOTSTRAP_ADMIN_USERNAME: admin
@@ -146,7 +153,7 @@ jobs:
       - name: build oas2mcp
         run: cargo build --locked
 
-      - name: set up python
+      - name: set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.13"
@@ -159,62 +166,3 @@ jobs:
       # there is nothing to mount at that point.
       - name: run the end-to-end suite
         run: tests/e2e/harness.sh
-
-  trivy:
-    name: trivy
-    permissions:
-      contents: read
-      # Publishing the SARIF report to the Security tab.
-      security-events: write
-    runs-on: ubuntu-24.04
-    env:
-      # Trivy renders the chart itself, but only once it has the values the
-      # templates require. Without this it logs a render error and scans no
-      # chart at all — while still reporting success.
-      TRIVY_HELM_VALUES: charts/oas2mcp/values-lint.yaml
-      # Declares ghcr.io a trusted registry for KSV-0125.
-      TRIVY_CONFIG_DATA: .trivy
-    steps:
-      - name: check out the repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      # Two passes on purpose. The Security tab gets everything actionable at
-      # every severity; the build gate below only trips on HIGH/CRITICAL. One
-      # pass cannot do both: `limit-severities-for-sarif` defaults to false, so
-      # a SARIF run ignores `severity` and would fail the build on a LOW.
-      - name: scan the repository
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          # Advisories without a released fix are noise nobody can action;
-          # they would bury the dashboard under the base image's backlog.
-          ignore-unfixed: true
-          # A throwaway RSA key used only by the auth unit tests, never a real
-          # credential — `detect-private-key` skips it for the same reason.
-          skip-files: tests/fixtures/test_rsa_key.pem
-          format: sarif
-          output: trivy-fs.sarif
-          exit-code: "0"
-
-      - name: publish the findings
-        # Only a fork or Dependabot pull request lacks the token to upload, and
-        # both arrive as `pull_request`. Reporting happens from push events.
-        if: ${{ github.event_name != 'pull_request' }}
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
-        with:
-          sarif_file: trivy-fs.sarif
-          category: trivy-fs
-
-      - name: fail on high and critical findings
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          skip-files: tests/fixtures/test_rsa_key.pem
-          format: table
-          exit-code: "1"

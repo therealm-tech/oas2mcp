@@ -64,6 +64,15 @@ repos:
         files: ^charts/.*/(values\.yaml|Chart\.yaml|README\.md(\.gotmpl)?)$
         pass_filenames: false
 
+      # Scans the whole tree: the chart is only checked once rendered with
+      # `values-lint.yaml`, and `.trivy/` holds the check parameters.
+      - id: trivy-config
+        name: trivy config
+        entry: trivy config --quiet --exit-code 1 --severity HIGH,CRITICAL --helm-values charts/oas2mcp/values-lint.yaml --config-data .trivy .
+        language: system
+        files: ^(Dockerfile|charts/oas2mcp/|\.trivy/)
+        pass_filenames: false
+
       # Biome from the docs site's own lockfile rather than biomejs/pre-commit,
       # whose `additional_dependencies` pin would be a second Biome version to
       # keep in step. Both hooks need `npm ci --prefix docs` first.

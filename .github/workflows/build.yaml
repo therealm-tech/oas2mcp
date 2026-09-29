@@ -115,8 +115,7 @@ jobs:
         with:
           input: /tmp/image.tar
           scanners: vuln,secret
-          # Advisories without a released fix are noise nobody can action.
-          ignore-unfixed: true
+          cache: true
           format: sarif
           output: trivy-image.sarif
           exit-code: "0"
@@ -138,7 +137,9 @@ jobs:
           input: /tmp/image.tar
           scanners: vuln,secret
           severity: HIGH,CRITICAL
+          # Unfixed advisories are reported above but cannot be actioned here.
           ignore-unfixed: true
+          cache: true
           format: table
           exit-code: "1"
 
