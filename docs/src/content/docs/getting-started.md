@@ -1,9 +1,38 @@
 ---
 title: Getting started
-description: Build oas2mcp, run it against an OpenAPI document and connect an MCP client.
+description: Install oas2mcp, run it against an OpenAPI document and connect an MCP client.
 ---
 
 ## Install
+
+### With Docker
+
+The image `ghcr.io/therealm-tech/oas2mcp` is published for `amd64` and `arm64`,
+tagged with each release version and `latest`. Its entrypoint is the `oas2mcp`
+binary, so every example below runs the same way with `docker run` in front.
+
+Over stdio — keep `-i`, the MCP client talks to the container's stdin:
+
+```bash
+docker run --rm -i ghcr.io/therealm-tech/oas2mcp \
+  --openapi-url https://petstore3.swagger.io/api/v3/openapi.json
+```
+
+Over Streamable HTTP — the image already binds `0.0.0.0:8000`:
+
+```bash
+docker run --rm -p 8000:8000 ghcr.io/therealm-tech/oas2mcp \
+  http --openapi-url https://petstore3.swagger.io/api/v3/openapi.json
+```
+
+A local document is mounted into the container:
+
+```bash
+docker run --rm -i -v "$PWD/examples:/examples:ro" ghcr.io/therealm-tech/oas2mcp \
+  --openapi-file /examples/petstore.yaml
+```
+
+### From source
 
 Requires `rustup`: the toolchain version is pinned in
 [`rust-toolchain.toml`](https://github.com/therealm-tech/oas2mcp/blob/main/rust-toolchain.toml)
@@ -14,12 +43,6 @@ git clone https://github.com/therealm-tech/oas2mcp.git
 cd oas2mcp
 cargo build --release
 # binary at target/release/oas2mcp
-```
-
-Or with Docker:
-
-```bash
-docker build -t oas2mcp .
 ```
 
 To run it on a cluster, see [Deploying on Kubernetes](/guides/kubernetes/).
