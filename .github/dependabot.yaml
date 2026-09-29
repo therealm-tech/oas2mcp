@@ -10,6 +10,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # The SDK and exporters only compile against the matching
+      # `opentelemetry` release: bumped one at a time, each PR fails to build.
+      opentelemetry:
+        patterns:
+          - opentelemetry*
 
   - package-ecosystem: docker
     directory: /
