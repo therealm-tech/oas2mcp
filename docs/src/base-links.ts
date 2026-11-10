@@ -12,10 +12,10 @@ export function baseLinks(base: string) {
 	return defineMdastPlugin({
 		name: "base-links",
 		link(node, ctx) {
-			ctx.setProperty(node, "url", prefixBase(node.url, base));
+			ctx.setField(node, "url", prefixBase(node.url, base));
 		},
 		definition(node, ctx) {
-			ctx.setProperty(node, "url", prefixBase(node.url, base));
+			ctx.setField(node, "url", prefixBase(node.url, base));
 		},
 	});
 }
