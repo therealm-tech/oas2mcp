@@ -37,3 +37,12 @@ updates:
     directory: /docs
     schedule:
       interval: weekly
+    groups:
+      # `@astrojs/markdown-satteri` pins the `satteri` it runs plugins with, and
+      # `astro` and Starlight pin `@astrojs/markdown-satteri`: bumped alone, the
+      # config's mdast plugin is typed against a second `satteri` and fails.
+      astro:
+        patterns:
+          - astro
+          - "@astrojs/*"
+          - satteri
