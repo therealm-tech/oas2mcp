@@ -44,7 +44,7 @@ indexmap = { version = "2", features = ["serde"] }
 # `use_pem` reads the RFC 7523 client signing key from its PEM file
 # (`EncodingKey::from_{rsa,ec,ed}_pem`), and is also what the auth unit tests
 # sign with.
-jsonwebtoken = { version = "11.0", default-features = false, features = [
+jsonwebtoken = { version = "12.0", default-features = false, features = [
     "rust_crypto",
     "use_pem",
 ] }
