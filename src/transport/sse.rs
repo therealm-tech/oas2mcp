@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -29,6 +30,8 @@ use rmcp::ServiceExt as _;
 use rmcp::service::{RoleServer, RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::sink_stream::SinkStreamTransport;
 use serde::Deserialize;
+use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 
 use crate::server::OpenApiServer;
 use crate::transport::shutdown_signal;
@@ -41,13 +44,30 @@ struct SseState {
     server: OpenApiServer,
     sessions: Arc<Mutex<HashMap<String, mpsc::Sender<Incoming>>>>,
     next_id: Arc<AtomicU64>,
+    streams: CancellationToken,
 }
 
 pub async fn serve(bind: SocketAddr, server: OpenApiServer) -> anyhow::Result<()> {
+    let listener = TcpListener::bind(bind)
+        .await
+        .with_context(|| format!("binding {bind}"))?;
+    tracing::info!(%bind, "legacy SSE MCP endpoints listening at GET /sse and POST /messages");
+    serve_until(listener, server, shutdown_signal()).await
+}
+
+async fn serve_until(
+    listener: TcpListener,
+    server: OpenApiServer,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    // A graceful shutdown waits for every response to end, and an event stream
+    // only ends when its client leaves: closing them is what lets it complete.
+    let streams = CancellationToken::new();
     let state = SseState {
         server,
         sessions: Arc::new(Mutex::new(HashMap::new())),
         next_id: Arc::new(AtomicU64::new(1)),
+        streams: streams.clone(),
     };
 
     let app = axum::Router::new()
@@ -58,13 +78,11 @@ pub async fn serve(bind: SocketAddr, server: OpenApiServer) -> anyhow::Result<()
         ))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(bind)
-        .await
-        .with_context(|| format!("binding {bind}"))?;
-    tracing::info!(%bind, "legacy SSE MCP endpoints listening at GET /sse and POST /messages");
-
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            streams.cancel();
+        })
         .await
         .context("SSE server failed")?;
     Ok(())
@@ -123,7 +141,10 @@ async fn open_stream(
         },
     );
 
-    Sse::new(init.chain(messages))
+    Sse::new(
+        init.chain(messages)
+            .take_until(state.streams.clone().cancelled_owned()),
+    )
 }
 
 #[derive(Deserialize)]
@@ -167,5 +188,65 @@ impl Drop for SessionGuard {
             .expect("sessions mutex")
             .remove(&self.id);
         tracing::debug!(session = %self.id, "SSE session closed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use clap::Parser as _;
+    use tokio::sync::oneshot;
+
+    use super::*;
+    use crate::cli::Cli;
+    use crate::openapi::Spec;
+    use crate::telemetry::Metrics;
+
+    fn server() -> OpenApiServer {
+        let raw = serde_yaml_ng::from_str(
+            r#"
+openapi: 3.0.0
+info: { title: T, version: "1" }
+servers: [{ url: "https://api.example.com" }]
+paths:
+  /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
+"#,
+        )
+        .expect("valid YAML");
+        let spec = Spec::from_value(raw).expect("supported document");
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        OpenApiServer::from_spec(&spec, &cli, None, Metrics::disabled()).expect("server builds")
+    }
+
+    #[tokio::test]
+    async fn shutdown_closes_the_open_streams() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local address");
+        let (stop, stopped) = oneshot::channel::<()>();
+        let running = tokio::spawn(serve_until(listener, server(), async {
+            let _ = stopped.await;
+        }));
+
+        let mut stream = reqwest::get(format!("http://{addr}/sse"))
+            .await
+            .expect("stream opens");
+        let endpoint = stream
+            .chunk()
+            .await
+            .expect("first event")
+            .expect("not closed");
+        assert!(String::from_utf8_lossy(&endpoint).contains("event: endpoint"));
+
+        stop.send(()).expect("server still running");
+        tokio::time::timeout(Duration::from_secs(5), running)
+            .await
+            .expect("the server stops while a client is still connected")
+            .expect("server task")
+            .expect("server exits cleanly");
+        assert!(
+            matches!(stream.chunk().await, Ok(None)),
+            "the stream is closed"
+        );
     }
 }

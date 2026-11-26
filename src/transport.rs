@@ -12,6 +12,7 @@ use rmcp::ServiceExt as _;
 use rmcp::transport::stdio;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+use tokio_util::sync::CancellationToken;
 
 use crate::cli::Command;
 use crate::server::OpenApiServer;
@@ -92,10 +93,19 @@ fn resolve_allowed_hosts(bind: SocketAddr, configured: &[String]) -> Vec<String>
 }
 
 async fn serve_stdio(server: OpenApiServer) -> anyhow::Result<()> {
-    let service = server
-        .serve(stdio())
-        .await
-        .context("starting the stdio transport")?;
+    let shutdown = CancellationToken::new();
+    tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            shutdown_signal().await;
+            shutdown.cancel();
+        }
+    });
+    let service = match server.serve_with_ct(stdio(), shutdown.clone()).await {
+        Ok(service) => service,
+        Err(_) if shutdown.is_cancelled() => return Ok(()),
+        Err(error) => return Err(error).context("starting the stdio transport"),
+    };
     service.waiting().await.context("stdio transport failed")?;
     Ok(())
 }
