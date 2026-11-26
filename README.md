@@ -40,6 +40,13 @@ The image is published on GHCR for `amd64` and `arm64`; its entrypoint is the
 docker run --rm -i ghcr.io/therealm-tech/oas2mcp --openapi-url https://petstore3.swagger.io/api/v3/openapi.json
 ```
 
+Each release image carries a signed build provenance attestation; check that
+this repository's CI built it with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify oci://ghcr.io/therealm-tech/oas2mcp:latest --repo therealm-tech/oas2mcp
+```
+
 Or build from source:
 
 ```bash

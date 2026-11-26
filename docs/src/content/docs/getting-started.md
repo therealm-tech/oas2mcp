@@ -32,6 +32,30 @@ docker run --rm -i -v "$PWD/examples:/examples:ro" ghcr.io/therealm-tech/oas2mcp
   --openapi-file /examples/petstore.yaml
 ```
 
+#### Verify the image
+
+Each release image carries two signed attestations, made by the release
+workflow and pushed to GHCR with it: its build provenance, and a CycloneDX
+SBOM. Check the provenance with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify oci://ghcr.io/therealm-tech/oas2mcp:latest --repo therealm-tech/oas2mcp
+```
+
+And the SBOM, whose content the command prints with `--format json`:
+
+```bash
+gh attestation verify oci://ghcr.io/therealm-tech/oas2mcp:latest --repo therealm-tech/oas2mcp --predicate-type https://cyclonedx.org/bom
+```
+
+The GitHub Release attaches the same SBOM, `oas2mcp-<version>.cdx.json`, and
+the provenance's Sigstore bundle, `oas2mcp-<version>.sigstore.json`, which
+verifies the image without the attestation API:
+
+```bash
+gh attestation verify oci://ghcr.io/therealm-tech/oas2mcp:<version> --bundle oas2mcp-<version>.sigstore.json --repo therealm-tech/oas2mcp
+```
+
 ### From source
 
 Requires `rustup`: the toolchain version is pinned in
