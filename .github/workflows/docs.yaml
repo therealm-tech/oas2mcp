@@ -7,11 +7,17 @@ on:
     paths:
       - docs/**
       - logo.svg
+      - mise.toml
+      - mise.lock
+      - Taskfile.yml
       - .github/workflows/docs.yaml
   pull_request:
     paths:
       - docs/**
       - logo.svg
+      - mise.toml
+      - mise.lock
+      - Taskfile.yml
       - .github/workflows/docs.yaml
   # Dispatched on `main` by `release`: a new release changes which version the
   # root serves.
@@ -24,10 +30,6 @@ concurrency:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: docs
-
 jobs:
   build:
     name: build
@@ -39,17 +41,16 @@ jobs:
           # Every release tag, whose content each version is built from.
           fetch-depth: 0
 
-      - name: set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+      - name: install the tools
+        uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78  # v5.3.0
         with:
-          node-version-file: docs/.nvmrc
-
-      - name: install the dependencies
-        run: npm ci
+          version: 2026.11.10
+          cache: false
+          install_args: node task
 
       # Also fails on a broken internal link or anchor, in any version.
       - name: build every version of the site
-        run: npm run build:versions
+        run: task docs
 
       - name: upload the site
         if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}

@@ -22,70 +22,19 @@ jobs:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: install the Rust toolchain
-        run: rustup toolchain install
+      - name: install the tools
+        uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78  # v5.3.0
+        with:
+          version: 2026.11.10
+          cache: false
 
       - name: cache cargo build artifacts
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-
-      - name: set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
-          python-version: "3.13"
-
-      - name: set up Helm
-        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e  # v5.1.0
-
-      - name: install helm-docs
-        env:
-          HELM_DOCS_VERSION: "1.14.2"
-        run: |
-          curl -fsSL "https://github.com/norwoodj/helm-docs/releases/download/v${HELM_DOCS_VERSION}/helm-docs_${HELM_DOCS_VERSION}_Linux_x86_64.tar.gz" \
-            | sudo tar -xz -C /usr/local/bin helm-docs
-
-      - name: install shellcheck
-        # Preinstalled on the ubuntu-24.04 image, but the hook must not depend
-        # on that staying true.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends shellcheck
-
-      - name: install actionlint
-        env:
-          ACTIONLINT_VERSION: "1.7.12"
-        run: |
-          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
-            | sudo tar -xz -C /usr/local/bin actionlint
-
-      - name: install hadolint
-        # The hook runs the binary on PATH and ignores its own `rev`, so the
-        # version is read from there to keep the one Dependabot bumps in force.
-        run: |
-          HADOLINT_VERSION="$(yq '.repos[] | select(.repo == "https://github.com/hadolint/hadolint") | .rev | sub("^v"; "")' .pre-commit-config.yaml)"
-          sudo curl -fsSL -o /usr/local/bin/hadolint \
-            "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64"
-          sudo chmod +x /usr/local/bin/hadolint
-
-      - name: install Trivy
-        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567  # v0.3.1
-        with:
-          # The version trivy-action runs in `security`: one Trivy, one ruleset.
-          version: v0.70.0
-          cache: true
-
-      - name: set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
-        with:
-          node-version-file: docs/.nvmrc
-
-      - name: install the docs site dependencies
-        run: npm ci --prefix docs
-
-      - name: install pre-commit
-        run: pipx install pre-commit
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: run pre-commit
-        run: pre-commit run --all-files --show-diff-on-failure
+        run: task lint
 
   test:
     name: test
@@ -94,14 +43,20 @@ jobs:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: install the Rust toolchain
-        run: rustup toolchain install
+      - name: install the tools
+        uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78  # v5.3.0
+        with:
+          version: 2026.11.10
+          cache: false
+          install_args: rust task
 
       - name: cache cargo build artifacts
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: run the test suite
-        run: cargo test --all --locked
+        run: task test
 
   docs-test:
     name: docs-test
@@ -110,16 +65,15 @@ jobs:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+      - name: install the tools
+        uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78  # v5.3.0
         with:
-          node-version-file: docs/.nvmrc
-
-      - name: install the docs site dependencies
-        run: npm ci --prefix docs
+          version: 2026.11.10
+          cache: false
+          install_args: node task
 
       - name: run the docs site tests
-        run: npm --prefix docs test
+        run: task docs:test
 
   # What the unit tests cannot answer is whether a real authorization server
   # accepts what we send. This drives the RFC 7523 paths against Keycloak:
@@ -144,25 +98,20 @@ jobs:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: install the Rust toolchain
-        run: rustup toolchain install
+      - name: install the tools
+        uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78  # v5.3.0
+        with:
+          version: 2026.11.10
+          cache: false
+          install_args: python rust task
 
       - name: cache cargo build artifacts
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
-
-      - name: build oas2mcp
-        run: cargo build --locked
-
-      - name: set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
-          python-version: "3.13"
-
-      - name: install the harness dependencies
-        run: pip install --requirement tests/e2e/requirements.txt
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The realm is imported through Keycloak's admin API rather than a mounted
       # file: a service container starts before the repository is checked out, so
       # there is nothing to mount at that point.
       - name: run the end-to-end suite
-        run: tests/e2e/harness.sh
+        run: task e2e

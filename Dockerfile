@@ -1,12 +1,14 @@
 # syntax=docker/dockerfile:1
 
+# renovate: datasource=crate depName=cargo-chef
+ARG CARGO_CHEF_VERSION=0.1.78
+
 # --- chef: cargo-chef base ---------------------------------------------------
-FROM rust:1-trixie AS chef
+# The Rust version is the one `mise.toml` pins: bump both together.
+FROM rust:1.100.0-trixie AS chef
+ARG CARGO_CHEF_VERSION
 WORKDIR /usr/local/src/oas2mcp
-# Before `cook`: otherwise the dependencies are built with the image's rustc and
-# rebuilt from scratch by the pinned one once the sources are copied in.
-COPY rust-toolchain.toml .
-RUN rustup toolchain install && cargo install cargo-chef --locked
+RUN cargo install cargo-chef --locked --version "${CARGO_CHEF_VERSION}"
 
 # --- planner: capture the dependency recipe ----------------------------------
 FROM chef AS planner

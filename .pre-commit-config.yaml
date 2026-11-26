@@ -17,8 +17,20 @@ repos:
         # everywhere else.
         exclude: ^tests/fixtures/test_(rsa|ec)_key\.pem$
 
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: a76b92851fc9eede9f9bc4073eb55202f34eb0df  # frozen: 0.39.0
+    hooks:
+      - id: check-taskfile
+
   - repo: local
     hooks:
+      - id: mise-fmt
+        name: mise fmt
+        entry: mise fmt
+        language: system
+        files: ^mise\.toml$
+        pass_filenames: false
+
       - id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --all -- --check
