@@ -164,8 +164,9 @@ paths carry it, both fed by one `ListChanged` shared by every server clone:
   request open; its handler waits on a `watch` channel bumped by each change.
 
 Stateless `http` gives a pre-`2026-07-28` client no stream to receive the
-notification on. On `http`, shutdown closes the open session and subscription
-streams, which would otherwise hold the graceful drain open.
+notification on. On `http` and `sse`, shutdown closes the open event streams,
+which would otherwise hold the graceful drain open; on `stdio`, it stops the
+session without waiting for the client to close stdin.
 
 ### Listing tools in pages
 

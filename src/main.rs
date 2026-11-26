@@ -29,8 +29,16 @@ use url::Url;
 use crate::cli::Cli;
 use crate::server::OpenApiServer;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
+    let outcome = runtime.block_on(run());
+    // Tokio reads stdin on a blocking thread that cannot be interrupted: waiting
+    // for it would keep a signalled stdio server alive until its client writes.
+    runtime.shutdown_background();
+    outcome
+}
+
+async fn run() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
 
     // The filter directive flows through clap (LOG_FILTER), never read directly.
