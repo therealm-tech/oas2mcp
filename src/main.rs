@@ -43,11 +43,14 @@ async fn run() -> anyhow::Result<()> {
 
     // The filter directive flows through clap (LOG_FILTER), never read directly.
     // SSE/stdio multiplex protocol traffic, so logs always go to stderr.
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::new(&cli.log_filter))
+    let subscriber = tracing_subscriber::fmt()
+        .with_env_filter(log_filter(&cli.log_filter)?)
         .with_writer(std::io::stderr)
-        .with_ansi(false)
-        .init();
+        .with_ansi(false);
+    match cli.log_format {
+        cli::LogFormat::Text => subscriber.init(),
+        cli::LogFormat::Json => subscriber.json().init(),
+    }
 
     if let cli::Command::Healthcheck(listen) = cli.command() {
         return healthcheck::probe(listen.bind_addr).await;
@@ -131,6 +134,13 @@ async fn run() -> anyhow::Result<()> {
     telemetry.shutdown();
 
     Ok(())
+}
+
+/// Parse the `--log-filter` directive. `EnvFilter::new` would drop an invalid
+/// one without a word, leaving less logging than was asked for.
+fn log_filter(directive: &str) -> anyhow::Result<EnvFilter> {
+    EnvFilter::try_new(directive)
+        .map_err(|error| anyhow::anyhow!("invalid --log-filter {directive:?}: {error}"))
 }
 
 /// Refuse to start when the upstream grant delegates but no call could ever
@@ -237,6 +247,13 @@ mod tests {
         .collect();
         args.extend(extra.iter().map(|arg| (*arg).to_string()));
         args
+    }
+
+    #[test]
+    fn an_invalid_log_filter_is_refused() {
+        log_filter("info,oas2mcp=debug").expect("a valid directive parses");
+        let err = log_filter("oas2mcp=loud").expect_err("an unknown level is an error");
+        assert!(format!("{err}").contains("--log-filter"), "{err}");
     }
 
     #[test]

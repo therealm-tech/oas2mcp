@@ -71,7 +71,8 @@ document.
 | `--bind-addr`     | `BIND_ADDR`      | `127.0.0.1:8000` | Bind address of the `sse` and `http` subcommands, and the one `healthcheck` probes. |
 | `--allowed-host`  | `ALLOWED_HOSTS`  | follows `--bind-addr` | Hostname, or `host:port`, accepted in the inbound `Host` header; `*` accepts any. Repeatable; newline-separated via the env var. `http` only — see [Host header validation](/guides/http-transport/#host-header-validation). |
 | `--stream-responses` | `STREAM_RESPONSES` | `false`      | Reply on `http` with an SSE flow and stateful sessions instead of the default single `application/json` body. `http` only. |
-| `--log-filter`    | `LOG_FILTER`     | `info`           | `tracing` filter directive (e.g. `oas2mcp=debug,rmcp=warn`).       |
+| `--log-filter`    | `LOG_FILTER`     | `info`           | `tracing` [filter directive](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives) (e.g. `oas2mcp=debug,rmcp=warn`). An invalid one stops the server at startup. |
+| `--log-format`    | `LOG_FORMAT`     | `text`           | Log line format: `text`, or `json` for a log pipeline that parses it. |
 
 Configuration resolves CLI flags → environment variables → defaults, and every
 option is settable through its environment variable. When the base URL is not

@@ -200,6 +200,8 @@ oas2mcp:
 
   # -- `tracing` filter directive, mapped to `LOG_FILTER`.
   logFilter: info
+  # -- Log line format, `text` or `json`, mapped to `LOG_FORMAT`.
+  logFormat: text
 
   service:
     # -- Service type.

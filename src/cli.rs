@@ -94,6 +94,22 @@ impl std::fmt::Display for DocumentAuth {
     }
 }
 
+/// How log lines are written to stderr.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogFormat {
+    /// Human-readable `key=value` lines.
+    Text,
+    /// One JSON object per line, for a log pipeline that parses it.
+    Json,
+}
+
+impl std::fmt::Display for LogFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = self.to_possible_value().expect("no variant is skipped");
+        f.write_str(value.get_name())
+    }
+}
+
 fn default_bind_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 8000))
 }
@@ -637,6 +653,8 @@ pub struct Cli {
 
     /// `tracing` filter directive (e.g. `info`, `oas2mcp=debug,rmcp=warn`).
     /// Deliberately not `RUST_LOG`, which other crates read on their own.
+    ///
+    /// Syntax: <https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html#directives>
     #[arg(
         global = true,
         long = "log-filter",
@@ -644,6 +662,16 @@ pub struct Cli {
         default_value = "info"
     )]
     pub log_filter: String,
+
+    /// Format of the log lines written to stderr.
+    #[arg(
+        global = true,
+        long = "log-format",
+        env = "LOG_FORMAT",
+        value_enum,
+        default_value_t = LogFormat::Text
+    )]
+    pub log_format: LogFormat,
 
     /// The transport to serve over. Without one, `stdio`.
     #[command(subcommand)]
@@ -992,6 +1020,16 @@ mod tests {
         assert!(!parse(&["--auto-tool-annotations=false"]).expect("parses"));
         assert!(!parse(&["http", "--auto-tool-annotations=false"]).expect("parses"));
         assert!(parse(&["--auto-tool-annotations=maybe"]).is_err());
+    }
+
+    #[test]
+    fn logs_are_text_by_default_and_json_on_request() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
+        assert_eq!(cli.log_format, LogFormat::Text);
+        let cli = Cli::try_parse_from(["oas2mcp", "http", "--log-format", "json"])
+            .expect("json is offered");
+        assert_eq!(cli.log_format, LogFormat::Json);
+        assert_eq!(LogFormat::Json.to_string(), "json");
     }
 
     #[test]
