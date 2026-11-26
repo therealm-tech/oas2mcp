@@ -27,9 +27,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how it is put together.
 
 ### Prerequisites
 
-Docker, to run the published image; or [`rustup`](https://rustup.rs), to build
-from source — the toolchain version is pinned in `rust-toolchain.toml` and
-installed on the first `cargo` invocation.
+Docker, to run the published image; or a Rust toolchain, to build from source —
+[mise](https://mise.jdx.dev) installs the version pinned in
+[`mise.toml`](mise.toml) with `mise install`.
 
 ### Installation
 

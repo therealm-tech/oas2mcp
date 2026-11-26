@@ -4,3 +4,8 @@
 
 # Python bytecode from the end-to-end harness.
 __pycache__/
+
+# Task's checksums, and mise's machine-local config and environment.
+.task/
+mise.local.*
+.env

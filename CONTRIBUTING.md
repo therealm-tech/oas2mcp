@@ -8,47 +8,46 @@ for how it is built, see
 
 ## Development setup
 
-- **Rust** through [`rustup`](https://rustup.rs): the toolchain is pinned in
-  [`rust-toolchain.toml`](rust-toolchain.toml) and installed on the first
-  `cargo` invocation.
-- **[pre-commit](https://pre-commit.com)** and the binaries its hooks call:
-  `hadolint`, `actionlint`, `shellcheck`, `helm`, `helm-docs` and `trivy`.
-- **Docker and Python 3**, only for the end-to-end suite.
-- **Node.js**, at the version in [`docs/.nvmrc`](docs/.nvmrc), for the
-  documentation site and the pre-commit hooks that check it.
+[mise](https://mise.jdx.dev) installs every tool this repository uses — the
+Rust toolchain, Node.js, Python, Task, pre-commit and the binaries its hooks
+call — at the versions pinned in [`mise.toml`](mise.toml). Install it and
+activate it in your shell
+([instructions](https://mise.jdx.dev/getting-started.html)):
 
 **macOS**
 
 ```bash
-brew install pre-commit hadolint actionlint shellcheck helm norwoodj/tap/helm-docs trivy
+brew install mise
 ```
 
 **Linux**
 
 ```bash
-pipx install pre-commit
+curl https://mise.run | sh
 ```
 
-and the other binaries from their release pages:
-[hadolint](https://github.com/hadolint/hadolint/releases),
-[actionlint](https://github.com/rhysd/actionlint/releases),
-[shellcheck](https://github.com/koalaman/shellcheck#installing),
-[helm](https://helm.sh/docs/intro/install/),
-[helm-docs](https://github.com/norwoodj/helm-docs/releases),
-[trivy](https://trivy.dev/latest/getting-started/installation/) — the `pre-commit`
-job in [`quality.yaml`](.github/workflows/quality.yaml) installs exactly these.
-
-Install the documentation site's dependencies, which its pre-commit hooks run
-from:
+Then, from a fresh clone:
 
 ```bash
-npm ci --prefix docs
+mise trust
 ```
+
+```bash
+mise install
+```
+
+```bash
+task setup
+```
+
+`task setup` installs the documentation site's dependencies and the git hooks;
+`task --list` shows the other tasks. Docker is the one prerequisite mise does
+not cover, needed only by the end-to-end suite.
 
 A working setup builds and passes the unit tests:
 
 ```bash
-cargo test
+task test
 ```
 
 ## Running the tests

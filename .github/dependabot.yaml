@@ -22,12 +22,6 @@ updates:
     schedule:
       interval: weekly
 
-  - package-ecosystem: rust-toolchain
-    directory: /
-    schedule:
-      interval: weekly
-
-  # Also drives the hadolint binary CI installs, which reads this `rev`.
   - package-ecosystem: pre-commit
     directory: /
     schedule:

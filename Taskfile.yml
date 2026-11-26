@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+version: '3'
+
+set:
+  - errexit
+  - nounset
+  - pipefail
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  setup:
+    desc: Install the documentation site dependencies and the git hooks
+    deps:
+      - docs:deps
+    cmds:
+      - pre-commit install
+
+  lint:
+    desc: Run every pre-commit hook on the whole repository
+    deps:
+      - docs:deps
+    cmds:
+      - pre-commit run --all-files
+
+  test:
+    desc: Run the unit and in-process tests
+    cmds:
+      - cargo test --all --locked {{.CLI_ARGS}}
+
+  e2e:
+    desc: Run the end-to-end suite against the Keycloak on localhost:8080
+    cmds:
+      - python3 -m pip install --quiet --requirement tests/e2e/requirements.txt
+      - cargo build --locked
+      - tests/e2e/harness.sh
+
+  docs:
+    desc: Build every version of the documentation site
+    deps:
+      - docs:deps
+    cmds:
+      - npm --prefix docs run build:versions
+
+  docs:test:
+    desc: Run the documentation site tests
+    deps:
+      - docs:deps
+    cmds:
+      - npm --prefix docs test
+
+  docs:deps:
+    internal: true
+    sources:
+      - docs/package-lock.json
+    generates:
+      - docs/node_modules/.package-lock.json
+    cmds:
+      - npm ci --prefix docs
+
+  release:
+    desc: Cut a release with scripts/release.sh
+    interactive: true
+    cmds:
+      - scripts/release.sh {{.CLI_ARGS}}

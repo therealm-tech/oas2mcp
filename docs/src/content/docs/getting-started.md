@@ -58,9 +58,10 @@ gh attestation verify oci://ghcr.io/therealm-tech/oas2mcp:<version> --bundle oas
 
 ### From source
 
-Requires `rustup`: the toolchain version is pinned in
-[`rust-toolchain.toml`](https://github.com/therealm-tech/oas2mcp/blob/main/rust-toolchain.toml)
-and installed on the first `cargo` invocation.
+Requires a Rust toolchain: [mise](https://mise.jdx.dev) installs the version
+pinned in
+[`mise.toml`](https://github.com/therealm-tech/oas2mcp/blob/main/mise.toml)
+with `mise install`.
 
 ```bash
 git clone https://github.com/therealm-tech/oas2mcp.git
