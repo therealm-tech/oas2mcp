@@ -1,14 +1,5 @@
-//! Access logging for the HTTP transports.
-//!
-//! `rmcp` rejects a malformed request inside its own tower service, before any
-//! handler here runs, and most of those rejections state their reason in the
-//! response body and nowhere else — a missing `Mcp-Session-Id`, an unsupported
-//! `MCP-Protocol-Version`, an `Accept` header without `text/event-stream`. A few
-//! are logged by `rmcp` itself, most are not, so without this layer a client
-//! stuck on `400 Bad Request` leaves no trace at all on the server side.
-//!
-//! Every response is logged: `debug` when it succeeded, `warn` for a `4xx`,
-//! `error` for a `5xx`, with the reason body echoed on the failures.
+//! Access log for the HTTP transports: `debug` for a success, `warn` for a
+//! `4xx`, `error` for a `5xx`, with the reason body echoed on the failures.
 
 use std::time::Instant;
 
@@ -34,6 +25,11 @@ const HEADER_PROTOCOL_VERSION: &str = "mcp-protocol-version";
 const MAX_REASON_BYTES: usize = 1024;
 
 /// Log one request/response pair, leaving the response otherwise untouched.
+///
+/// `rmcp` rejects a malformed request inside its own service and states most
+/// reasons in the response body only — a missing `Mcp-Session-Id`, an
+/// unsupported `MCP-Protocol-Version`, an `Accept` without `text/event-stream`.
+/// Without this, a client stuck on `400 Bad Request` leaves no server-side trace.
 pub(crate) async fn log_requests(request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_string();

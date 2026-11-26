@@ -1,19 +1,6 @@
-//! A version-agnostic view of an OpenAPI document, covering 3.0 and 3.1.
-//!
-//! `oas2mcp` needs only a narrow slice of an OpenAPI document: the API title
-//! and version, the server list and, per operation, its identity, parameters,
-//! request body and response bodies. OpenAPI 3.0 and 3.1 describe that slice
-//! with the same shapes; where they genuinely diverge is the *schema* dialect —
-//! 3.0 uses a modified JSON Schema draft-04 (`nullable`, boolean
-//! `exclusiveMinimum`), 3.1 uses JSON Schema 2020-12 verbatim (`type` arrays,
-//! `const`, `prefixItems`, numeric `exclusiveMinimum`, boolean schemas).
-//!
-//! So schemas are deliberately *not* modelled in Rust: a typed model forces a
-//! choice of dialect and silently drops every keyword it does not know, which
-//! is exactly the information an MCP client needs. They are kept as raw JSON
-//! and advertised as written, with local `$ref`s inlined. The whole document
-//! is retained as a [`Value`] so that any local JSON pointer resolves against
-//! it — `#/components/schemas/…` and `#/$defs/…` alike.
+//! A version-agnostic view of an OpenAPI 3.0 or 3.1 document: the title,
+//! version and servers, and per operation its parameters and bodies. Both
+//! versions share those shapes; only the schema dialect differs.
 
 use std::borrow::Cow;
 
@@ -31,8 +18,13 @@ const MAX_REF_HOPS: usize = 16;
 /// A parsed OpenAPI 3.x document.
 #[derive(Debug, Clone)]
 pub struct Spec {
-    /// The document as raw JSON. Kept whole so local `$ref` pointers resolve
-    /// against it and so schemas reach MCP clients exactly as written.
+    /// The document as raw JSON. Kept whole so any local `$ref` pointer
+    /// (`#/components/schemas/…`, `#/$defs/…`) resolves against it.
+    ///
+    /// Schemas are not modelled in Rust: a typed model would pick one dialect —
+    /// 3.0's modified draft-04 or 3.1's JSON Schema 2020-12 — and silently drop
+    /// every keyword it does not know, which is what an MCP client needs. They
+    /// reach clients as written, with local `$ref`s inlined.
     raw: Value,
     /// The typed fields needed outside `paths` — all small.
     header: Header,
