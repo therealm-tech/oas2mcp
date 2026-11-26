@@ -71,6 +71,12 @@ impl ToolSpec {
             _ => hints.read_only(false).idempotent(false),
         }
     }
+
+    pub fn params_in(&self, location: ParamLocation) -> impl Iterator<Item = &Param> {
+        self.params
+            .iter()
+            .filter(move |param| param.location == location)
+    }
 }
 
 /// Build one [`ToolSpec`] per operation defined in the document, keeping only

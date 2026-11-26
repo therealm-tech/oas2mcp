@@ -288,13 +288,8 @@ impl OpenApiServer {
         forwarded: &HeaderMap,
         bearer: Option<&str>,
     ) -> anyhow::Result<reqwest::RequestBuilder> {
-        // Resolve path parameters into the template.
         let mut path = spec.path_template.clone();
-        for param in spec
-            .params
-            .iter()
-            .filter(|p| p.location == ParamLocation::Path)
-        {
+        for param in spec.params_in(ParamLocation::Path) {
             let value = args.get(&param.name).ok_or_else(|| {
                 anyhow::anyhow!("missing required path parameter `{}`", param.name)
             })?;
@@ -312,25 +307,15 @@ impl OpenApiServer {
 
         let mut request = self.client.request(spec.method.clone(), url);
 
-        // Query parameters (scalars and arrays).
         let mut query: Vec<(String, String)> = Vec::new();
-        for param in spec
-            .params
-            .iter()
-            .filter(|p| p.location == ParamLocation::Query)
-        {
+        for param in spec.params_in(ParamLocation::Query) {
             collect_query(param, args.get(&param.name), &mut query);
         }
         if !query.is_empty() {
             request = request.query(&query);
         }
 
-        // Header parameters.
-        for param in spec
-            .params
-            .iter()
-            .filter(|p| p.location == ParamLocation::Header)
-        {
+        for param in spec.params_in(ParamLocation::Header) {
             if let Some(value) = args.get(&param.name) {
                 let name = HeaderName::from_bytes(param.name.as_bytes())
                     .with_context(|| format!("invalid header name `{}`", param.name))?;
@@ -352,10 +337,8 @@ impl OpenApiServer {
             request = request.header(AUTHORIZATION, value);
         }
 
-        // Static headers (auth, etc.) apply to every request.
         request = request.headers((*self.extra_headers).clone());
 
-        // JSON body.
         if spec.has_body
             && let Some(body) = args.get("body")
         {
