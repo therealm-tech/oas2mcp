@@ -104,7 +104,12 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # Per-arch Docker layer cache: the expensive thing to recompute.
           cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+          # Saved from `main` only: every other ref restores it, and a pull
+          # request saving its own would evict the one they all read.
+          cache-to: >-
+            ${{ github.ref == 'refs/heads/main'
+            && format('type=gha,scope={0},mode=max', matrix.arch)
+            || '' }}
           outputs: type=docker,dest=/tmp/image.tar
 
       # Two passes: report every severity to the Security tab, gate on HIGH and
@@ -121,9 +126,10 @@ jobs:
           exit-code: "0"
 
       - name: publish the image findings
-        # Only a fork or Dependabot pull request lacks the token to upload, and
-        # both arrive as `pull_request`. Reporting happens from push events.
-        if: ${{ github.event_name != 'pull_request' }}
+        # A pull request from a fork gets a read-only token and cannot upload.
+        if: >-
+          always() && (github.event_name != 'pull_request'
+          || github.event.pull_request.head.repo.full_name == github.repository)
         uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066  # v4.39.3
         with:
           sarif_file: trivy-image.sarif
@@ -179,6 +185,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     runs-on: ubuntu-24.04
     steps:
       - name: download the per-arch digests
@@ -218,3 +227,53 @@ jobs:
 
       - name: inspect the manifest
         run: docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"
+
+      - name: read the manifest digest
+        id: digest
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: attest the image provenance
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+
+      - name: generate the SBOM
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56  # v0.24.4
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.digest.outputs.digest }}
+          format: cyclonedx-json
+          output-file: oas2mcp-${{ steps.meta.outputs.version }}.cdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: attest the SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6  # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          sbom-path: oas2mcp-${{ steps.meta.outputs.version }}.cdx.json
+          push-to-registry: true
+
+      - name: name the attestation bundle after the release
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: cp "$BUNDLE" "oas2mcp-${VERSION}.sigstore.json"
+
+      # Picked up by the `release` workflow, which attaches them to the GitHub
+      # Release.
+      - name: upload the release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: release-files
+          path: |
+            oas2mcp-*.cdx.json
+            oas2mcp-*.sigstore.json
+          if-no-files-found: error

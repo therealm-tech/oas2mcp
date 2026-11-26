@@ -161,14 +161,14 @@ and say why.
 | Workflow | Triggers on | What it does | Reproduce locally |
 | --- | --- | --- | --- |
 | [`quality`](.github/workflows/quality.yaml) | pull requests, pushes to `main` | pre-commit, `cargo test`, the docs site tests, the end-to-end suite | `pre-commit run --all-files`, `cargo test`, `npm --prefix docs test`, [e2e](tests/e2e/README.md) |
-| [`build`](.github/workflows/build.yaml) | pull requests and pushes to `main` touching the build inputs, manual | multi-arch image build and Trivy image scan; pushes only on manual dispatch or a release | `docker build .` and the Trivy command below |
+| [`build`](.github/workflows/build.yaml) | pull requests and pushes to `main` touching the build inputs, manual | multi-arch image build and Trivy image scan; pushes only on manual dispatch or a release, then attests the image's provenance and SBOM | `docker build .` and the Trivy command below |
 | [`security`](.github/workflows/security.yaml) | pull requests, pushes to `main`, daily, manual | Trivy filesystem scan; daily and manual runs also scan the image of the latest release | the Trivy commands below |
 | [`docs`](.github/workflows/docs.yaml) | pull requests and pushes to `main` touching `docs/` or the logo, a stable release, manual | builds every version of the documentation site, checking its internal links; on `main`, deploys it to GitHub Pages | `npm --prefix docs run build:versions` |
 | [`chart`](.github/workflows/chart.yaml) | `chart-X.Y.Z` tag, manual | on a tag, checks it matches `Chart.yaml`; publishes the chart to `ghcr.io/therealm-tech/charts` | — (publish only) |
-| [`release`](.github/workflows/release.yaml) | `vX.Y.Z` tag | checks the tag matches `Cargo.toml`, builds and pushes the image, creates the GitHub Release and rebuilds the documentation (not for a pre-release) | — (publish only) |
+| [`release`](.github/workflows/release.yaml) | `vX.Y.Z` tag | checks the tag matches `Cargo.toml`, builds, pushes and attests the image, creates the GitHub Release with the SBOM and the attestation bundle attached, and rebuilds the documentation (not for a pre-release) | — (publish only) |
 
-The publishing jobs use the workflow's `GITHUB_TOKEN` for the registry; nothing
-else is needed.
+The publishing jobs use the workflow's `GITHUB_TOKEN` for the registry, and its
+OIDC token to sign the attestations through Sigstore; nothing else is needed.
 
 The chart is versioned and released independently of the app. A `vX.Y.Z` tag
 whose version differs from `Cargo.toml` fails `release` before anything is
