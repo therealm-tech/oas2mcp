@@ -5,7 +5,6 @@ mod protected_resource;
 mod sse;
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use anyhow::Context as _;
 use rmcp::ServiceExt as _;
@@ -141,7 +140,7 @@ async fn serve_streamable_http(
     // there, and this is the only place they become visible.
     let mut app = axum::Router::new().nest_service("/mcp", service);
     if let Some(protected) = protected {
-        app = protected.protect(app, Arc::new(move |tool: &str| public.is_public_tool(tool)));
+        app = protected.protect(app, move |tool: &str| public.is_public_tool(tool));
     }
     let app = app.layer(axum::middleware::from_fn(access_log::log_requests));
 
