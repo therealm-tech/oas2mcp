@@ -1,5 +1,7 @@
 # End-to-end suite
 
+The end-to-end tests of [oas2mcp](../../README.md).
+
 Drives oas2mcp against a **real Keycloak** and a real API, to answer the one
 question unit tests cannot: does an actual authorization server accept what we
 send?
@@ -32,18 +34,42 @@ run as a single GHA service with no image to publish and no compose file.
 
 ## Running it locally
 
-Start Keycloak, then hand everything else to the harness:
+Start Keycloak:
 
 ```bash
 docker run --rm -d --name kc-e2e -p 8080:8080 \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
   -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
   quay.io/keycloak/keycloak:26.7 start-dev
+```
 
-python3 -m venv .venv && .venv/bin/pip install -r tests/e2e/requirements.txt
+Create a virtual environment:
+
+```bash
+python3 -m venv .venv
+```
+
+Install the suite's dependencies into it:
+
+```bash
+.venv/bin/pip install -r tests/e2e/requirements.txt
+```
+
+Build oas2mcp:
+
+```bash
 cargo build
-PYTHON=.venv/bin/python tests/e2e/harness.sh
+```
 
+Hand everything else to the harness:
+
+```bash
+PYTHON=.venv/bin/python tests/e2e/harness.sh
+```
+
+When done, remove Keycloak:
+
+```bash
 docker rm -f kc-e2e
 ```
 
@@ -78,8 +104,6 @@ refuses with *"JWT Authorization Grant is not supported for the requested
 client"*.
 
 ## Constraints worth knowing
-
-Discovered by getting them wrong first:
 
 - **One audience, and only one.** Keycloak refuses an assertion carrying several
   `aud` values *even when all of them are valid*. The assertion must name the
