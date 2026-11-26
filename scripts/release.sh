@@ -9,6 +9,11 @@ set -euo pipefail
 readonly BRANCH="main"
 readonly MANIFEST="Cargo.toml"
 readonly CHART="charts/oas2mcp/Chart.yaml"
+# The files whose `helm install` commands pin the chart version.
+readonly CHART_INSTALL_DOCS=(
+    "README.md"
+    "docs/src/content/docs/guides/kubernetes.md"
+)
 
 tmpfile=""
 trap 'rm -f "$tmpfile"' EXIT
@@ -99,6 +104,16 @@ set_chart_version() {
 
 set_chart_app_version() {
     rewrite "$CHART" 's/^appVersion:.*/appVersion: "'"$1"'"/'
+}
+
+set_chart_install_version() {
+    local file
+
+    for file in "${CHART_INSTALL_DOCS[@]}"; do
+        rewrite "$file" 's|\(oci://ghcr\.io/therealm-tech/charts/oas2mcp --version \)[^[:space:]]*|\1'"$1"'|g'
+        grep -qF "oci://ghcr.io/therealm-tech/charts/oas2mcp --version $1" "$file" ||
+            die "failed to write the chart version to $file"
+    done
 }
 
 chart_app_version() {
@@ -266,6 +281,12 @@ main() {
             [ "$(chart_app_version)" = "$app_target" ] || die "failed to write appVersion to $CHART"
         fi
 
+        # A pre-release leaves the install commands on the latest stable chart.
+        if [[ "$chart" != *-* ]]; then
+            info "pinning the install commands to chart $chart"
+            set_chart_install_version "$chart"
+        fi
+
         info "regenerating the chart docs"
         helm-docs --chart-search-root=charts
     fi
@@ -294,7 +315,7 @@ main() {
 
     if [ -n "$(git status --porcelain)" ]; then
         info "committing the version bump"
-        git add --all -- "$MANIFEST" Cargo.lock charts
+        git add --all -- "$MANIFEST" Cargo.lock charts "${CHART_INSTALL_DOCS[@]}"
         git commit --quiet --message "$subject"
     fi
 

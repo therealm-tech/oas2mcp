@@ -85,14 +85,11 @@ authentication, filtering, metrics and connecting an MCP client.
 
 ### Deployment
 
-A Helm chart lives in [charts/oas2mcp](charts/oas2mcp):
-
 ```bash
-helm install petstore charts/oas2mcp --set oas2mcp.openapi.url=https://petstore3.swagger.io/api/v3/openapi.json
+helm install petstore oci://ghcr.io/therealm-tech/charts/oas2mcp --version 1.1.0 --set oas2mcp.openapi.url=https://petstore3.swagger.io/api/v3/openapi.json
 ```
 
-See [Deploying on Kubernetes](https://oas2mcp.therealm.tech/guides/kubernetes/)
-and the chart's [README](charts/oas2mcp/README.md) for every value.
+See [Deploying on Kubernetes](https://oas2mcp.therealm.tech/guides/kubernetes/).
 
 ## Contributing
 

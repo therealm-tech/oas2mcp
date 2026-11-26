@@ -1,4 +1,3 @@
----
 apiVersion: v2
 name: oas2mcp
 description: >-
@@ -11,6 +10,8 @@ icon: https://raw.githubusercontent.com/therealm-tech/oas2mcp/main/logo.svg
 home: https://github.com/therealm-tech/oas2mcp
 sources:
   - https://github.com/therealm-tech/oas2mcp
+annotations:
+  artifacthub.io/license: Apache-2.0
 maintainers:
   - name: Guillaume Leroy
     email: gleroy@therealm.tech
