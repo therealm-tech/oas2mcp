@@ -12,7 +12,7 @@ document at startup and, optionally, on a reload interval.
 flowchart LR
     client["MCP client"]
     idp["Authorization server"]
-    subgraph oas2mcp
+    subgraph oas2mcp["oas2mcp"]
         transport["transport<br/>stdio · sse · http"]
         server["server::OpenApiServer"]
         auth["auth::Authorizer"]
@@ -246,11 +246,12 @@ authorization server.
   initialize afterwards; a session keeps the title it was given. The icon is
   the project logo as a base64 `data:` URI embedded in the binary, so a client
   renders it without a network fetch and the server stays usable offline.
-- **The runtime image is distroless** (`gcr.io/distroless/cc-debian13:nonroot`).
-  With no shell and no package manager, it carries almost no OS packages for a
-  scanner to flag, and the binary is all that runs. For the same reason the
-  image's `HEALTHCHECK` is the binary itself: `oas2mcp healthcheck` succeeds
-  when something accepts TCP connections on `BIND_ADDR`.
+- **The runtime image is distroless, nonroot** (see the
+  [Dockerfile](Dockerfile)). With no shell and no package manager, it carries
+  almost no OS packages for a scanner to flag, and the binary is all that runs.
+  For the same reason the image's `HEALTHCHECK` is the binary itself:
+  `oas2mcp healthcheck` succeeds when something accepts TCP connections on
+  `BIND_ADDR`.
 
 ## Invariants and constraints
 

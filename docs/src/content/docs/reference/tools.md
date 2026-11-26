@@ -13,7 +13,11 @@ paths:
     get:
       operationId: getPetById
       parameters:
-        - { name: petId, in: path, required: true, schema: { type: integer } }
+        - name: petId
+          in: path
+          required: true
+          schema:
+            type: integer
 ```
 
 `oas2mcp` advertises a `getPetById` tool whose input schema requires a `petId`

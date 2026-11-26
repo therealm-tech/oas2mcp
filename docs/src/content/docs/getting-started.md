@@ -40,10 +40,17 @@ and installed on the first `cargo` invocation.
 
 ```bash
 git clone https://github.com/therealm-tech/oas2mcp.git
-cd oas2mcp
-cargo build --release
-# binary at target/release/oas2mcp
 ```
+
+```bash
+cd oas2mcp
+```
+
+```bash
+cargo build --release
+```
+
+The binary is `target/release/oas2mcp`.
 
 To run it on a cluster, see [Deploying on Kubernetes](/guides/kubernetes/).
 
@@ -91,16 +98,18 @@ oas2mcp http \
   --openapi-url https://api.example.com/openapi.json \
   --bind-addr 0.0.0.0:8000 \
   --header 'Authorization: Bearer <token>'
-# MCP endpoint: POST http://0.0.0.0:8000/mcp
 ```
+
+The MCP endpoint is `POST http://0.0.0.0:8000/mcp`.
 
 Serve over the legacy SSE transport:
 
 ```bash
 oas2mcp sse --openapi-file examples/petstore.yaml
-# SSE stream:   GET  http://127.0.0.1:8000/sse
-# Client posts: POST http://127.0.0.1:8000/messages?sessionId=<id>
 ```
+
+The SSE stream is `GET http://127.0.0.1:8000/sse`, and the client posts to
+`POST http://127.0.0.1:8000/messages?sessionId=<id>`.
 
 ## Using it from an MCP client
 
