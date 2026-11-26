@@ -1,5 +1,4 @@
 {{- if .Values.oas2mcp.openapi.inline }}
----
 apiVersion: v1
 kind: ConfigMap
 metadata:

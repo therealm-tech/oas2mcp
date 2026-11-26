@@ -5,12 +5,14 @@ sidebar:
   order: 8
 ---
 
-A Helm chart is provided under [charts/oas2mcp](https://github.com/therealm-tech/oas2mcp/tree/main/charts/oas2mcp). It deploys the
+The Helm chart is published as an OCI artifact at
+`oci://ghcr.io/therealm-tech/charts/oas2mcp`; its sources are under
+[charts/oas2mcp](https://github.com/therealm-tech/oas2mcp/tree/main/charts/oas2mcp). It deploys the
 server with the `http` transport, a restricted security context, and
 resource requests/limits. The upstream auth headers are stored in a `Secret`.
 
 ```bash
-helm install petstore charts/oas2mcp \
+helm install petstore oci://ghcr.io/therealm-tech/charts/oas2mcp --version 1.1.0 \
   --set oas2mcp.openapi.url=https://petstore3.swagger.io/api/v3/openapi.json \
   --set-string 'oas2mcp.upstream.headers[0]=Authorization: Bearer <token>'
 ```
@@ -29,12 +31,12 @@ is the natural home for public CA certs):
 
 ```bash
 # inline PEM → generated Secret
-helm install petstore charts/oas2mcp \
+helm install petstore oci://ghcr.io/therealm-tech/charts/oas2mcp --version 1.1.0 \
   --set oas2mcp.openapi.url=https://internal.example.com/openapi.json \
   --set-file oas2mcp.caCerts.inline=./corp-ca.pem
 
 # or reference an existing ConfigMap
-helm install petstore charts/oas2mcp \
+helm install petstore oci://ghcr.io/therealm-tech/charts/oas2mcp --version 1.1.0 \
   --set oas2mcp.openapi.url=https://internal.example.com/openapi.json \
   --set oas2mcp.caCerts.existing.kind=ConfigMap \
   --set oas2mcp.caCerts.existing.name=corp-ca

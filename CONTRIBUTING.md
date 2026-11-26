@@ -245,7 +245,8 @@ once:
 # The application: bumps Cargo.toml + Cargo.lock, tags v0.4.0.
 scripts/release.sh 0.4.0
 
-# The chart: bumps Chart.yaml + the generated chart README, tags chart-0.5.0.
+# The chart: bumps Chart.yaml, the generated chart README and the version the
+# `helm install` commands pin (stable versions only), tags chart-0.5.0.
 scripts/release.sh --chart 0.5.0
 
 # Both: as above, and `appVersion` is pointed at the app version being

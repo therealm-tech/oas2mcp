@@ -7,7 +7,7 @@ oas2mcp:
   replicaCount: 1
 
   # -- Number of old ReplicaSets the Deployment keeps for rollback.
-  revisionHistoryLimit: 3
+  revisionHistoryLimit: 0
 
   image:
     # -- Container image repository.
@@ -305,9 +305,9 @@ oas2mcp:
   # -- (object) Affinity rules for pod scheduling.
   affinity: {}
 
-  # -- Extra environment variables injected into the container.
+  # -- (list) Extra environment variables injected into the container.
   extraEnv: []
-  # -- Extra volumes added to the pod.
+  # -- (list) Extra volumes added to the pod.
   extraVolumes: []
-  # -- Extra volume mounts added to the container.
+  # -- (list) Extra volume mounts added to the container.
   extraVolumeMounts: []
