@@ -130,9 +130,6 @@ impl Telemetry {
 
         let mut builder = SdkMeterProvider::builder().with_resource(resource);
 
-        // OTLP push exporter (HTTP/protobuf). Enabled when an endpoint is set.
-        // The `/v1/metrics` signal path is appended to the base, matching the
-        // OTLP spec's behaviour for `OTEL_EXPORTER_OTLP_ENDPOINT`.
         if let Some(endpoint) = cli.otlp_endpoint.as_ref() {
             let exporter = opentelemetry_otlp::MetricExporter::builder()
                 .with_http()
@@ -146,7 +143,6 @@ impl Telemetry {
             tracing::info!(%endpoint, "exporting tool-call metrics over OTLP");
         }
 
-        // Prometheus pull exporter. Enabled when a metrics address is set.
         let prometheus = if let Some(addr) = cli.metrics_addr {
             let registry = Registry::new();
             let exporter = opentelemetry_prometheus::exporter()

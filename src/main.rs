@@ -41,7 +41,6 @@ fn main() -> anyhow::Result<()> {
 async fn run() -> anyhow::Result<()> {
     let cli = cli::Cli::parse();
 
-    // The filter directive flows through clap (LOG_FILTER), never read directly.
     // SSE/stdio multiplex protocol traffic, so logs always go to stderr.
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(&cli.log_filter))
@@ -127,7 +126,6 @@ async fn run() -> anyhow::Result<()> {
         .await
         .context("MCP transport terminated with an error")?;
 
-    // Flush any metrics buffered by the OTLP exporter before exiting.
     telemetry.shutdown();
 
     Ok(())
