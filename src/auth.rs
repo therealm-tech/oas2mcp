@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use http::HeaderMap;
-use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet};
+use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet, KeyAlgorithm, PublicKeyUse};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -139,13 +139,17 @@ impl Authorizer {
             .jwks
             .find(&kid)
             .with_context(|| format!("no JWK in the set matches the token's kid `{kid}`"))?;
+        if matches!(jwk.common.public_key_use, Some(PublicKeyUse::Encryption)) {
+            bail!("the JWK `{kid}` is published for encryption (`use: enc`), not signatures");
+        }
 
         let key = DecodingKey::from_jwk(jwk).context("building a decoding key from the JWK")?;
-        // Constrain the accepted algorithms to those of the key's family so a
-        // forged token cannot downgrade to e.g. HS256 against a public key.
+        // Constrain the accepted algorithms to those the key allows so a forged
+        // token cannot downgrade to e.g. HS256 against a public key.
         let mut validation = Validation::new(algorithm_for(jwk)?);
         validation.algorithms = algorithms_for(jwk)?;
         validation.leeway = self.clock_skew.as_secs();
+        validation.validate_nbf = true;
 
         // `aud` and `iss` are only checked when an expectation is configured —
         // and whenever one is, the claim also becomes **mandatory**. Neither
@@ -289,9 +293,24 @@ fn algorithm_for(jwk: &Jwk) -> anyhow::Result<Algorithm> {
     })
 }
 
-/// All algorithms a JWK's key family may legitimately use. Restricting the
-/// validation to this set blocks algorithm-substitution attacks.
+/// The algorithms a token verified with `jwk` may use: the one the JWK declares
+/// in `alg` (RFC 7517 §4.4), or else every algorithm of its key family.
+/// Restricting the validation to this set blocks algorithm-substitution attacks.
 fn algorithms_for(jwk: &Jwk) -> anyhow::Result<Vec<Algorithm>> {
+    let mut algorithms = family_algorithms(jwk)?;
+    if let Some(declared) = jwk.common.key_algorithm {
+        algorithms.retain(|&alg| KeyAlgorithm::from(alg) == declared);
+        if algorithms.is_empty() {
+            bail!(
+                "the JWK declares `alg: {declared}`, which does not verify signatures with its key type"
+            );
+        }
+    }
+    Ok(algorithms)
+}
+
+/// Every algorithm a JWK's key family may legitimately use.
+fn family_algorithms(jwk: &Jwk) -> anyhow::Result<Vec<Algorithm>> {
     Ok(match &jwk.algorithm {
         AlgorithmParameters::RSA(_) => vec![
             Algorithm::RS256,
@@ -457,18 +476,32 @@ pub(crate) mod tests {
 
     pub(crate) const TEST_KID: &str = "test-key";
 
+    /// The test RSA key as a JWK, with `extra` members merged over it.
+    fn test_jwk(extra: &Value) -> Value {
+        let mut jwk = json!({
+            "kty": "RSA",
+            "use": "sig",
+            "alg": "RS256",
+            "kid": TEST_KID,
+            "n": crate::test_keys::keys().rsa_n,
+            "e": "AQAB",
+        });
+        jwk.as_object_mut().expect("a JWK is an object").extend(
+            extra
+                .as_object()
+                .expect("extra members are an object")
+                .clone(),
+        );
+        jwk
+    }
+
     pub(crate) fn test_authorizer() -> Authorizer {
-        let jwks: JwkSet = serde_json::from_value(json!({
-            "keys": [{
-                "kty": "RSA",
-                "use": "sig",
-                "alg": "RS256",
-                "kid": TEST_KID,
-                "n": crate::test_keys::keys().rsa_n,
-                "e": "AQAB",
-            }]
-        }))
-        .expect("test JWKS parses");
+        test_authorizer_with_jwk(&test_jwk(&json!({})))
+    }
+
+    fn test_authorizer_with_jwk(jwk: &Value) -> Authorizer {
+        let jwks: JwkSet =
+            serde_json::from_value(json!({ "keys": [jwk] })).expect("test JWKS parses");
         Authorizer {
             jwks,
             role_claim: "roles".into(),
@@ -546,12 +579,26 @@ pub(crate) mod tests {
 
     /// Sign an arbitrary claim set with the test key.
     fn sign_claims(claims: &Value, kid: Option<&str>) -> String {
-        use jsonwebtoken::{EncodingKey, Header};
-        let mut header = Header::new(Algorithm::RS256);
+        sign_rsa(Algorithm::RS256, claims, kid)
+    }
+
+    /// Sign `claims` with the test RSA key under `alg`.
+    fn sign_rsa(alg: Algorithm, claims: &Value, kid: Option<&str>) -> String {
+        let key =
+            jsonwebtoken::EncodingKey::from_rsa_pem(crate::test_keys::keys().rsa_pem.as_bytes())
+                .expect("test key parses");
+        sign_with(alg, &key, claims, kid)
+    }
+
+    fn sign_with(
+        alg: Algorithm,
+        key: &jsonwebtoken::EncodingKey,
+        claims: &Value,
+        kid: Option<&str>,
+    ) -> String {
+        let mut header = jsonwebtoken::Header::new(alg);
         header.kid = kid.map(str::to_string);
-        let key = EncodingKey::from_rsa_pem(crate::test_keys::keys().rsa_pem.as_bytes())
-            .expect("test key parses");
-        jsonwebtoken::encode(&header, claims, &key).expect("signing succeeds")
+        jsonwebtoken::encode(&header, claims, key).expect("signing succeeds")
     }
 
     pub(crate) fn in_one_hour() -> u64 {
@@ -791,6 +838,74 @@ pub(crate) mod tests {
         let authz = test_authorizer();
         let token = sign_claims(&json!({ "roles": ["admin"], "sub": "u" }), Some(TEST_KID));
         assert!(authz.verify(&token).is_err());
+    }
+
+    #[test]
+    fn an_unsigned_alg_none_token_is_refused() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let encode = |value: Value| URL_SAFE_NO_PAD.encode(value.to_string());
+        let token = format!(
+            "{}.{}.",
+            encode(json!({ "alg": "none", "typ": "JWT", "kid": TEST_KID })),
+            encode(json!({ "roles": ["admin"], "sub": "u", "exp": in_one_hour() })),
+        );
+        assert!(test_authorizer().verify(&token).is_err());
+    }
+
+    #[test]
+    fn an_hmac_token_keyed_with_the_public_key_is_refused() {
+        // RFC 8725 §2.1: a verifier that took the algorithm from the token would
+        // check this HMAC with the public key it holds — which the forger has too.
+        let public =
+            jsonwebtoken::EncodingKey::from_secret(crate::test_keys::keys().rsa_n.as_bytes())
+                .expect("an HMAC key builds");
+        let claims = json!({ "roles": ["admin"], "sub": "u", "exp": in_one_hour() });
+        for alg in [Algorithm::HS256, Algorithm::HS384, Algorithm::HS512] {
+            let token = sign_with(alg, &public, &claims, Some(TEST_KID));
+            assert!(test_authorizer().verify(&token).is_err(), "{alg:?}");
+        }
+    }
+
+    #[test]
+    fn the_algorithm_declared_by_the_jwk_is_the_only_one_accepted() {
+        let claims = json!({ "roles": ["admin"], "sub": "u", "exp": in_one_hour() });
+        let pss = sign_rsa(Algorithm::PS256, &claims, Some(TEST_KID));
+        // The test JWK declares `alg: RS256`.
+        assert!(test_authorizer().verify(&pss).is_err());
+        // Without `alg`, any algorithm of the key's family verifies.
+        let any_rsa = test_authorizer_with_jwk(&test_jwk(&json!({ "alg": null })));
+        assert!(any_rsa.verify(&pss).is_ok());
+    }
+
+    #[test]
+    fn a_jwk_whose_alg_does_not_sign_verifies_nothing() {
+        let authz = test_authorizer_with_jwk(&test_jwk(&json!({ "alg": "RSA-OAEP" })));
+        let token = sign(&json!(["admin"]), in_one_hour(), Some(TEST_KID));
+        assert!(authz.verify(&token).is_err());
+    }
+
+    #[test]
+    fn an_encryption_jwk_verifies_nothing() {
+        let authz = test_authorizer_with_jwk(&test_jwk(&json!({ "use": "enc" })));
+        let token = sign(&json!(["admin"]), in_one_hour(), Some(TEST_KID));
+        assert!(authz.verify(&token).is_err());
+    }
+
+    #[test]
+    fn a_token_not_valid_yet_is_refused_beyond_the_clock_skew() {
+        let now = in_one_hour() - 3600;
+        let with_nbf = |nbf: u64| {
+            sign_claims(
+                &json!({ "roles": ["admin"], "sub": "u", "nbf": nbf, "exp": now + 7200 }),
+                Some(TEST_KID),
+            )
+        };
+        let authz = test_authorizer();
+        assert!(authz.verify(&with_nbf(now - 10)).is_ok());
+        // Inside the default 60s tolerance.
+        assert!(authz.verify(&with_nbf(now + 30)).is_ok());
+        assert!(authz.verify(&with_nbf(now + 3600)).is_err());
     }
 
     #[test]

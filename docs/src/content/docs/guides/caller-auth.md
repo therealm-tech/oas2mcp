@@ -37,10 +37,12 @@ oas2mcp http \
 
 This needs the caller's JWT, which only the `http` transport
 exposes — under `stdio`/`sse` no token is available, so only the public tools
-are exposed. The signature is verified with the key family advertised by the JWK
-(an algorithm-substitution downgrade such as `HS256` against a public key is
-rejected), and the token's `exp` is enforced. Invalid regexes are rejected at
-startup. With multiple entries set through the environment variable, separate
+are exposed. The signature is verified with the algorithm the JWK declares in
+`alg`, or with its key family when it declares none (an algorithm-substitution
+downgrade such as `HS256` against a public key is rejected), and a JWK marked
+`use: enc` is refused. The token's `exp` is required, and its `nbf`, when
+present, is enforced too, both within `--inbound-clock-skew`. Invalid regexes
+are rejected at startup. With multiple entries set through the environment variable, separate
 them with newlines (e.g. `INBOUND_ROLE_MAPPER=$'admin:.*\nreader:^get'`).
 
 ## Tracing the caller's JWT claims
