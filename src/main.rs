@@ -29,6 +29,12 @@ use clap::Parser as _;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
+// musl's allocator serialises concurrent allocations behind one lock; the
+// static release build would otherwise stall every tokio worker under load.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use crate::cli::Cli;
 use crate::server::OpenApiServer;
 

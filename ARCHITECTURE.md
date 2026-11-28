@@ -253,12 +253,21 @@ authorization server.
   configuration — `SSL_CERT_FILE`, a CA an administrator dropped into the
   host's store — widens it. Certificate and hostname verification are always
   on; a private CA is trusted by adding it, never by disabling a check.
-- **The runtime image is distroless, nonroot** (see the
-  [Dockerfile](Dockerfile)). With no shell and no package manager, it carries
-  almost no OS packages for a scanner to flag, and the binary is all that runs.
-  For the same reason the image's `HEALTHCHECK` is the binary itself:
-  `oas2mcp healthcheck` succeeds when something accepts TCP connections on
-  `BIND_ADDR`.
+- **The image runs a static binary on distroless `static`, nonroot** (see the
+  [Dockerfile](Dockerfile)). The binary targets musl and links everything in,
+  aws-lc and ring included, so the runtime holds no libc, no libssl and no
+  libstdc++; the base adds only data files (`/etc/passwd`, tzdata, a CA
+  bundle the binary does not read). Those shared
+  libraries are where nearly every scanner finding on a glibc image comes
+  from, most of them with no upstream fix to apply; without them the image has
+  no OS package to report against. Nothing at runtime needs a system library
+  either: rustls verifies against the bundled roots (above), and musl resolves
+  DNS from `/etc/resolv.conf` and `/etc/hosts` with no NSS modules to load.
+  The musl build swaps in mimalloc as the global allocator, since musl's own
+  allocator serialises allocations from every tokio worker behind one lock.
+  No shell and no package manager means the image's `HEALTHCHECK` is the
+  binary itself: `oas2mcp healthcheck` succeeds when something accepts TCP
+  connections on `BIND_ADDR`.
 
 ## Invariants and constraints
 
