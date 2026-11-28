@@ -19,12 +19,18 @@ const USER_AGENT: &str = concat!("oas2mcp/", env!("CARGO_PKG_VERSION"));
 /// Build a `reqwest` client carrying the shared user agent plus any extra root
 /// CA certificates configured via `--ca-cert`.
 ///
-/// The platform's built-in roots stay trusted; the configured certificates are
+/// The bundled Mozilla roots stay trusted; the configured certificates are
 /// *added* on top, so pointing at a single private/corporate CA bundle is
 /// enough to reach an upstream that terminates TLS with it — no need to also
 /// re-supply the public roots.
 pub fn client(cli: &Cli) -> anyhow::Result<reqwest::Client> {
-    let mut builder = reqwest::Client::builder().user_agent(USER_AGENT);
+    // Not reqwest's default platform verifier: see ARCHITECTURE.md, "Outbound
+    // TLS trusts the bundled Mozilla roots".
+    let mut roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .map(|der| Certificate::from_der(der))
+        .collect::<Result<Vec<_>, _>>()
+        .context("loading the bundled root CA certificates")?;
     for path in &cli.ca_certs {
         let pem = fs::read(path)
             .with_context(|| format!("reading CA certificate file {}", path.display()))?;
@@ -41,11 +47,13 @@ pub fn client(cli: &Cli) -> anyhow::Result<reqwest::Client> {
             );
         }
         tracing::debug!(path = %path.display(), count = certs.len(), "adding extra root CA certificates");
-        for cert in certs {
-            builder = builder.add_root_certificate(cert);
-        }
+        roots.extend(certs);
     }
-    builder.build().context("building the HTTP client")
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .tls_certs_only(roots)
+        .build()
+        .context("building the HTTP client")
 }
 
 #[cfg(test)]
@@ -120,6 +128,91 @@ gpg0QXMxyWnjLJlYIpB9z4CDr4TZIpkqgw==
         let built = client(&cli);
         let _ = std::fs::remove_file(&path);
         built.expect("a client with a valid extra CA builds");
+    }
+
+    /// Serve one HTTPS request on `127.0.0.1` with a `localhost` certificate
+    /// signed by a CA generated for this call; returns the CA's PEM and the port.
+    async fn serve_tls_signed_by_a_fresh_ca() -> (String, u16) {
+        use std::sync::Arc;
+
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        use tokio_rustls::rustls;
+
+        let ca_key = rcgen::KeyPair::generate().expect("CA key");
+        let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).expect("CA params");
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = rcgen::CertifiedIssuer::self_signed(ca_params, ca_key).expect("CA certificate");
+        let leaf_key = rcgen::KeyPair::generate().expect("leaf key");
+        let leaf = rcgen::CertificateParams::new(vec!["localhost".to_owned()])
+            .expect("leaf params")
+            .signed_by(&leaf_key, &ca)
+            .expect("leaf certificate");
+
+        let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .expect("TLS versions")
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![leaf.der().clone()],
+                rustls::pki_types::PrivatePkcs8KeyDer::from(leaf_key.serialize_der()).into(),
+            )
+            .expect("server certificate");
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("local address").port();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.expect("accept");
+            // A client that rejects the certificate aborts the handshake here.
+            let Ok(mut tls) = acceptor.accept(tcp).await else {
+                return;
+            };
+            let mut request = [0u8; 1024];
+            let _ = tls.read(&mut request).await;
+            let _ = tls
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
+                .await;
+            let _ = tls.shutdown().await;
+        });
+        (ca.pem(), port)
+    }
+
+    #[tokio::test]
+    async fn trusts_a_server_signed_by_an_extra_ca() {
+        let (ca_pem, port) = serve_tls_signed_by_a_fresh_ca().await;
+        let path = std::env::temp_dir().join(format!("oas2mcp-extra-ca-{port}.pem"));
+        std::fs::write(&path, ca_pem).expect("write temp CA");
+        let built = client(&cli_from(&["--ca-cert", path.to_str().unwrap()]));
+        let _ = std::fs::remove_file(&path);
+
+        let response = built
+            .expect("client builds")
+            .get(format!("https://localhost:{port}/"))
+            .send()
+            .await
+            .expect("the extra CA is a trust anchor");
+        assert_eq!(response.text().await.expect("body"), "ok");
+    }
+
+    #[tokio::test]
+    async fn rejects_a_server_signed_by_an_unknown_ca() {
+        let (_, port) = serve_tls_signed_by_a_fresh_ca().await;
+        let err = client(&cli_from(&[]))
+            .expect("client builds")
+            .get(format!("https://localhost:{port}/"))
+            .send()
+            .await
+            .expect_err("a CA outside the trusted roots must be refused");
+        let chain = std::iter::successors(Some(&err as &dyn std::error::Error), |e| e.source())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(": ");
+        assert!(
+            chain.contains("UnknownIssuer"),
+            "expected a certificate error: {chain}"
+        );
     }
 
     #[test]
