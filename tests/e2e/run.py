@@ -27,7 +27,8 @@ import jwt
 KEYCLOAK = os.environ.get("KEYCLOAK_URL", "http://localhost:8080")
 REALM = os.environ.get("KEYCLOAK_REALM", "oas2mcp")
 MCP = os.environ.get("MCP_URL", "http://127.0.0.1:8765/mcp")
-SIGNING_KEY = os.environ.get("SIGNING_KEY", "tests/fixtures/test_rsa_key.pem")
+# Generated per run by keys.py; the harness passes its path.
+SIGNING_KEY = os.environ["SIGNING_KEY"]
 # Must match the `issuer` of the realm's identity provider.
 ONEACCESS_ISSUER = os.environ.get("ONEACCESS_ISSUER", "https://oneaccess.example/")
 # RFC 7523 §3: the assertion names the authorization server that consumes it.

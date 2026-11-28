@@ -34,7 +34,7 @@
         "jwtAuthorizationGrantAssertionReuseAllowed": "false",
         "jwtAuthorizationGrantMaxAllowedAssertionExpiration": "600",
         "jwtAuthorizationGrantAllowedClockSkew": "30",
-        "publicKeySignatureVerifier": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApIrAmCcbgl0Z6Fmomx9TVpVhMiOjJOrtjzKHoKnV5pYyFz86Zpor4tHmK8inQB6ES7j2V+0cgnT+62g/wCCwJHS+jJY0GawNgkxPq/5zFSFBuhJjyGpQzofexEPP7Qof6ZQKRViNw5A64C+dkcgoixhOBS1TWk6mkDOgoYOv9q2IUM5saRYZIwQw7OU4hsKetZcq8gbmVSjbzPylFryaIu5Udlo4JxFt+7t0RG/N858nu6eBYR68KMlOZIqN4YsaaQBm6teCdOUUXxAww8Yuij0gbz/YXMSnu5A5Ooff8w83kQLJqPLJyyEb357CvCqZsDZmlp3LFVRRmNuDPUtTKQIDAQAB",
+        "publicKeySignatureVerifier": "__ONEACCESS_PUBLIC_KEY__",
         "publicKeySignatureVerifierKeyId": "oneaccess-key"
       }
     }
@@ -182,7 +182,7 @@
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "attributes": {
-        "jwt.credential.certificate": "MIIDDTCCAfWgAwIBAgIUBqtS7T0WsyNSJKrrYktcB8GcGbAwDQYJKoZIhvcNAQELBQAwFjEUMBIGA1UEAwwLb2FzMm1jcC1lMmUwHhcNMjYwODExMTQxMDIxWhcNMzYwODA4MTQxMDIxWjAWMRQwEgYDVQQDDAtvYXMybWNwLWUyZTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAKSKwJgnG4JdGehZqJsfU1aVYTIjoyTq7Y8yh6Cp1eaWMhc/OmaaK+LR5ivIp0AehEu49lftHIJ0/utoP8AgsCR0voyWNBmsDYJMT6v+cxUhQboSY8hqUM6H3sRDz+0KH+mUCkVYjcOQOuAvnZHIKIsYTgUtU1pOppAzoKGDr/atiFDObGkWGSMEMOzlOIbCnrWXKvIG5lUo28z8pRa8miLuVHZaOCcRbfu7dERvzfOfJ7ungWEevCjJTmSKjeGLGmkAZurXgnTlFF8QMMPGLoo9IG8/2FzEp7uQOTqH3/MPN5ECyajyycshG9+ewrwqmbA2ZpadyxVUUZjbgz1LUykCAwEAAaNTMFEwHQYDVR0OBBYEFJcqTq+SZD08kCgwKhGXaxOfK/I5MB8GA1UdIwQYMBaAFJcqTq+SZD08kCgwKhGXaxOfK/I5MA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBADJReTSujyyFhMxXcDxPJRoeAOeBhtqNv/1pQcgMd5wNYQ1Hr5owpof0A16Fh6qdpjxBsaQqbnAdTbnkeLAbNBnbl5POSu8VMwEBwU6vvUQuxdKAvdCKS0ZQWVfWurfWKTiNoSEOun/yNL41babrcWLVwGMNpBNG98bMOuoG5O6Dk1+MuH6gING8I6syPtwG9KYZlPuJ7+ik+KvrYlJTYwG3SEofegNhxq2hviXIJxYCOhtIoJi+bTVzu7moFpSB7sONqwzFLAxDseipWrS5by+unlzzSeqqDNtJiGowMJoExVGx/IFIf2AG0LIvbMUw1vsuoivhiQxuIAwHFQH72sk=",
+        "jwt.credential.certificate": "__OAS2MCP_DOC_CERTIFICATE__",
         "token.endpoint.auth.signing.alg": "RS256"
       },
       "protocolMappers": [

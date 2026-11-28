@@ -89,6 +89,16 @@ What it configures, and why each piece matters:
 - an identity provider of type `jwt-authorization-grant` for the external
   provider, holding its **public key directly** (`publicKeySignatureVerifier`)
   rather than a JWKS URL;
+- the `oas2mcp-doc` client, authenticating with a client assertion checked
+  against its certificate (`jwt.credential.certificate`).
+
+Both keys are placeholders in the file. [`keys.py`](keys.py) generates a fresh
+signing key on every run, and the harness imports the realm with its public key
+and a self-signed certificate filled in. One key plays both roles, and none is
+committed.
+
+The realm also sets up:
+
 - users **linked** to that provider (`federatedIdentities`), the link being what
   lets Keycloak resolve an assertion's `sub` to a local user. `carol` is
   deliberately left unlinked, so the suite can prove an unknown external identity

@@ -58,6 +58,11 @@ wait_for() {
 echo "== waiting for Keycloak"
 wait_for Keycloak "$KEYCLOAK_URL/realms/master/.well-known/openid-configuration" 120
 
+echo "== generating the signing key"
+# A fresh key per run, never committed: its public half goes into the realm and
+# the JWKS, and everything lives in $logs, which the cleanup removes.
+"$PYTHON" "$here/keys.py" "$here/keycloak/realm-oas2mcp.json" "$logs" oneaccess-key
+
 echo "== importing the realm"
 # Through the admin API rather than a mounted file: a service container starts
 # before the repository is checked out, so there is nothing to mount at that
@@ -73,18 +78,13 @@ curl -s -o /dev/null -X DELETE "$KEYCLOAK_URL/admin/realms/$KEYCLOAK_REALM" \
   -H "authorization: Bearer $admin_token"
 status=$(curl -s -o "$logs/import.log" -w '%{http_code}' -X POST "$KEYCLOAK_URL/admin/realms" \
   -H "authorization: Bearer $admin_token" -H 'content-type: application/json' \
-  --data-binary "@$here/keycloak/realm-oas2mcp.json")
+  --data-binary "@$logs/realm.json")
 if [ "$status" != "201" ]; then
   echo "  realm import failed with HTTP $status" >&2
   cat "$logs/import.log" >&2
   exit 1
 fi
 echo "  realm $KEYCLOAK_REALM imported"
-
-echo "== writing the JWKS oas2mcp verifies caller tokens with"
-# The external provider's public half. oas2mcp reads it from disk, so the suite
-# needs no HTTP server standing in for the provider.
-"$PYTHON" "$here/jwks.py" tests/fixtures/test_rsa_key.pem oneaccess-key > "$logs/oneaccess-jwks.json"
 
 echo "== starting the sandbox API"
 OIDC_ISSUER="$KEYCLOAK_URL/realms/$KEYCLOAK_REALM" \
@@ -103,10 +103,10 @@ echo "== starting oas2mcp"
   --openapi-url "$API_URL/openapi.json" \
   --openapi-oauth-token-url "$KEYCLOAK_URL/realms/$KEYCLOAK_REALM/protocol/openid-connect/token" \
   --openapi-oauth-client-id oas2mcp-doc \
-  --openapi-oauth-private-key tests/fixtures/test_rsa_key.pem \
+  --openapi-oauth-private-key "$logs/signing-key.pem" \
   --openapi-oauth-signing-alg rs256 \
   --bind-addr "127.0.0.1:$MCP_PORT" \
-  --inbound-jwks-file "$logs/oneaccess-jwks.json" \
+  --inbound-jwks-file "$logs/jwks.json" \
   --inbound-role-mapper 'admin:.*' \
   --inbound-role-mapper 'reader:^(getPets|whoami)$' \
   --inbound-expected-issuer https://oneaccess.example/ \
@@ -129,4 +129,5 @@ echo "== running the suite"
 KEYCLOAK_URL="$KEYCLOAK_URL" \
 KEYCLOAK_REALM="$KEYCLOAK_REALM" \
 MCP_URL="http://127.0.0.1:$MCP_PORT/mcp" \
+SIGNING_KEY="$logs/signing-key.pem" \
   "$PYTHON" "$here/run.py"
