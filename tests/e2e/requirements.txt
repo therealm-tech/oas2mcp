@@ -5,6 +5,6 @@
 # be a poor thing to carry in a suite about verifying tokens.
 cryptography==50.0.2
 fastapi==0.165.0
-httpx==0.28.1
+httpx==0.29.0
 pyjwt==2.15.1
 uvicorn==0.52.1
