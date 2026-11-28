@@ -1,5 +1,15 @@
 # actionlint configuration.
-#
+
+# GitHub-hosted labels missing from actionlint's built-in list (still absent
+# from the latest release, 1.7.12): without them every `runs-on` fails the
+# `runner-label` rule. Declaring them here is actionlint's documented way to
+# add labels; any other unknown label still fails. Drop them once actionlint
+# ships https://github.com/rhysd/actionlint/issues/682.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
+
 # `jobs.<id>.services.<id>.command` and `.entrypoint` are documented GitHub
 # Actions keys, but actionlint does not know them yet (still absent from the
 # latest release, 1.7.12). Its schema check therefore rejects a valid workflow.

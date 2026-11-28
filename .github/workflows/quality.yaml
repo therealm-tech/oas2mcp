@@ -17,7 +17,7 @@ permissions:
 jobs:
   pre-commit:
     name: pre-commit
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -40,7 +40,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -64,7 +64,7 @@ jobs:
 
   docs-test:
     name: docs-test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: check out the repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -88,7 +88,7 @@ jobs:
   # upstream token.
   e2e:
     name: e2e
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     services:
       # `command` is what makes this possible: the Keycloak image has no default
       # CMD, so without it the container prints its usage and exits.
