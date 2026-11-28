@@ -98,9 +98,18 @@
       "groupName": "astro"
     },
     {
-      "description": "The Rust toolchain `mise.toml` pins and the Dockerfile's `rust` builder image stay on one version",
+      "description": "The Rust toolchain `mise.toml` pins and the Dockerfile's `rust` builder image stay on one version. Docker Hub gives the `rust` image no release timestamp (anonymous tag listing stops at 1000 tags), so a release age would hold it pending forever: the image's own publication, days after the toolchain's, is the delay",
       "matchDepNames": ["rust"],
-      "groupName": "rust"
+      "groupName": "rust",
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "mise reads the toolchain's versions from the `rust` image's tags rather than from static.rust-lang.org, so it never moves to a release whose builder image is not published yet",
+      "matchManagers": ["mise"],
+      "matchDepNames": ["rust"],
+      "overrideDatasource": "docker",
+      "overridePackageName": "rust",
+      "versioning": "docker"
     },
     {
       "description": "The hadolint hook runs the `hadolint` binary `mise.toml` pins: the hook revision and the binary stay on one release",
