@@ -108,6 +108,11 @@
       "description": "The config validator hook and the Renovate image the workflow runs come from the same Renovate release",
       "matchDepNames": ["ghcr.io/renovatebot/renovate", "renovatebot/pre-commit-hooks"],
       "groupName": "renovate"
+    },
+    {
+      "description": "TypeScript stays on 6: `astro check` (`@astrojs/check`, peer `typescript ^5 || ^6`) refuses TypeScript 7.0, see https://github.com/withastro/astro/issues/17268. Lift once `@astrojs/check` accepts TypeScript 7, or once TypeScript 7.1 is stable with a non-experimental `@astrojs/ts-content-mapper` to replace `astro check`",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<7"
     }
   ]
 }
