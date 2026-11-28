@@ -371,7 +371,7 @@ mod tests {
             "--openapi-oauth-client-id",
             "client-abc",
             "--openapi-oauth-private-key",
-            "tests/fixtures/test_rsa_key.pem",
+            &crate::test_keys::keys().rsa_path,
         ]);
         let config = TokenConfig::for_document(&cli)
             .expect("the grant is well-formed")
@@ -396,7 +396,7 @@ mod tests {
             "--openapi-oauth-client-id",
             "client-abc",
             "--openapi-oauth-private-key",
-            "tests/fixtures/test_rsa_key.pem",
+            &crate::test_keys::keys().rsa_path,
             "--openapi-oauth-assertion-audience",
             "https://idp.example.com/",
             "--openapi-oauth-assertion-lifetime",
@@ -504,7 +504,7 @@ mod tests {
             "--upstream-oauth-client-id",
             "id",
             "--upstream-oauth-private-key",
-            "tests/fixtures/test_rsa_key.pem",
+            &crate::test_keys::keys().rsa_path,
             "--upstream-oauth-grant",
             "jwt-bearer",
             "--upstream-oauth-subject",
@@ -534,7 +534,7 @@ mod tests {
             "--upstream-oauth-client-id",
             "client-abc",
             "--upstream-oauth-private-key",
-            "tests/fixtures/test_rsa_key.pem",
+            &crate::test_keys::keys().rsa_path,
             "--upstream-oauth-grant",
             "jwt-bearer",
         ]);

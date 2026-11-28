@@ -134,9 +134,7 @@ fn warn_on_loose_permissions(_path: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const RSA_KEY: &str = "tests/fixtures/test_rsa_key.pem";
-    const EC_KEY: &str = "tests/fixtures/test_ec_key.pem";
+    use crate::test_keys::keys;
 
     /// Assert the load failed and hand back the formatted error.
     ///
@@ -153,11 +151,11 @@ mod tests {
     #[test]
     fn loads_an_rsa_key_and_keeps_the_key_id() {
         let key = load(
-            Path::new(RSA_KEY),
+            Path::new(&keys().rsa_path),
             SigningAlg::Rs256,
             Some("kid-1".to_string()),
         )
-        .expect("the RSA fixture loads");
+        .expect("the RSA test key loads");
         assert_eq!(key.algorithm, Algorithm::RS256);
         assert_eq!(key.key_id.as_deref(), Some("kid-1"));
     }
@@ -166,12 +164,12 @@ mod tests {
     fn loads_an_ec_key_through_the_ec_parser() {
         // The whole point of picking a parser per family: an EC key must load
         // for `es256` and fail for `rs256`, not silently misbehave.
-        let key = load(Path::new(EC_KEY), SigningAlg::Es256, None)
-            .expect("the EC fixture loads as es256");
+        let key = load(Path::new(&keys().ec_path), SigningAlg::Es256, None)
+            .expect("the EC test key loads as es256");
         assert_eq!(key.algorithm, Algorithm::ES256);
         assert!(key.key_id.is_none());
 
-        let message = rejection(load(Path::new(EC_KEY), SigningAlg::Rs256, None));
+        let message = rejection(load(Path::new(&keys().ec_path), SigningAlg::Rs256, None));
         assert!(message.contains("as a rs256 signing key"), "{message}");
     }
 
