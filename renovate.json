@@ -37,6 +37,14 @@
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG [A-Z0-9_]+=(?<currentValue>\\S+)"
       ]
+    },
+    {
+      "description": "Runner labels in a workflow matrix, e.g. `runner: ubuntu-26.04-arm` in `build.yaml`: the `github-actions` manager reads `runs-on` only, so these would stay on the old image. Same depName as the `runs-on` labels, so both land in one PR",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": ["runner: (?<depName>ubuntu)-(?<currentValue>\\S+)"],
+      "datasourceTemplate": "github-runners",
+      "versioningTemplate": "docker"
     }
   ],
   "packageRules": [
