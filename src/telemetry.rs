@@ -1,16 +1,6 @@
-//! OpenTelemetry metrics for tool calls.
-//!
-//! Every MCP tool call is counted and timed, attributed by the tool name and
-//! the call outcome. (Per-caller breakdown lives in the tracing logs via
-//! `--trace-claim`, not in metric labels, to keep metric cardinality bounded.)
-//! The metrics are exported two ways,
-//! enabled independently from the CLI:
-//!
-//! - **OTLP** (`--otlp-endpoint`): pushed to a collector over HTTP/protobuf.
-//! - **Prometheus** (`--metrics-addr`): scraped from a `/metrics` endpoint.
-//!
-//! With neither configured the instruments still exist but record to nowhere,
-//! so the call path never has to branch on whether telemetry is on.
+//! OpenTelemetry metrics for tool calls, counted and timed per tool and outcome,
+//! pushed over OTLP (`--otlp-endpoint`) and scraped by Prometheus
+//! (`--metrics-addr`), each enabled on its own.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -97,7 +87,9 @@ impl Metrics {
         Self::new(&SdkMeterProvider::builder().build().meter(METER_NAME))
     }
 
-    /// Record one completed tool call, attributed by tool name and outcome.
+    /// Record one completed tool call, attributed by tool name and outcome. The
+    /// caller is left out to keep cardinality bounded: `--trace-claim` puts it
+    /// in the logs instead.
     pub fn record_call(&self, tool: &str, outcome: Outcome, elapsed: Duration) {
         let attrs = [
             KeyValue::new("tool", tool.to_string()),
@@ -120,8 +112,10 @@ pub struct Telemetry {
 
 impl Telemetry {
     /// Build the metrics pipeline from the CLI. Always produces usable
-    /// [`Metrics`]; an exporter that is configured but fails to build is an
-    /// error — fail loud rather than silently drop telemetry.
+    /// [`Metrics`], recording to nowhere when no exporter is configured, so the
+    /// call path never branches on whether telemetry is on. An exporter that is
+    /// configured but fails to build is an error — fail loud rather than
+    /// silently drop telemetry.
     pub fn from_cli(cli: &Cli) -> anyhow::Result<Self> {
         let resource = Resource::builder()
             .with_service_name(cli.otel_service_name.clone())
@@ -130,9 +124,6 @@ impl Telemetry {
 
         let mut builder = SdkMeterProvider::builder().with_resource(resource);
 
-        // OTLP push exporter (HTTP/protobuf). Enabled when an endpoint is set.
-        // The `/v1/metrics` signal path is appended to the base, matching the
-        // OTLP spec's behaviour for `OTEL_EXPORTER_OTLP_ENDPOINT`.
         if let Some(endpoint) = cli.otlp_endpoint.as_ref() {
             let exporter = opentelemetry_otlp::MetricExporter::builder()
                 .with_http()
@@ -146,7 +137,6 @@ impl Telemetry {
             tracing::info!(%endpoint, "exporting tool-call metrics over OTLP");
         }
 
-        // Prometheus pull exporter. Enabled when a metrics address is set.
         let prometheus = if let Some(addr) = cli.metrics_addr {
             let registry = Registry::new();
             let exporter = opentelemetry_prometheus::exporter()

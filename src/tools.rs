@@ -1,5 +1,5 @@
-//! Mapping of OpenAPI operations to MCP tools, and execution of a tool call as
-//! a proxied HTTP request to the upstream API.
+//! Mapping of OpenAPI operations to MCP tools. Executing a call as an upstream
+//! HTTP request is [`crate::server`]'s job.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -70,6 +70,12 @@ impl ToolSpec {
             "PATCH" => hints.read_only(false).destructive(true).idempotent(false),
             _ => hints.read_only(false).idempotent(false),
         }
+    }
+
+    pub fn params_in(&self, location: ParamLocation) -> impl Iterator<Item = &Param> {
+        self.params
+            .iter()
+            .filter(move |param| param.location == location)
     }
 }
 

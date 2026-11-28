@@ -1,20 +1,6 @@
-//! OAuth 2.0 `client_credentials` token provider used to authenticate the
-//! OpenAPI document fetch. A long-running server that reloads the document
-//! periodically cannot rely on a static bearer token — it expires. This
-//! provider obtains a token from the configured endpoint, caches it, and
-//! refreshes it automatically shortly before it expires.
-//!
-//! The client authenticates to the token endpoint in one of two ways:
-//!
-//! - a shared `client_secret` over HTTP Basic (RFC 6749 §2.3.1);
-//! - a JWT assertion signed with the client's private key
-//!   (`private_key_jwt`, RFC 7523 §2.2), for providers that will not issue a
-//!   shared secret, or to keep the credential out of the environment entirely.
-//!
-//! The provider is configured through a [`TokenConfig`] rather than reading the
-//! [`Cli`] directly: the grant is a self-contained piece of configuration, and
-//! keeping it that way is what makes the token request testable against a local
-//! endpoint without fabricating a whole command line.
+//! OAuth 2.0 token providers for the OpenAPI document fetch and the upstream
+//! API: a `client_credentials` or RFC 7523 `jwt-bearer` grant, the token cached
+//! and refreshed shortly before it expires.
 
 mod assertion;
 mod key;
@@ -90,8 +76,9 @@ pub enum SubjectSource {
     Caller,
 }
 
-/// Everything needed to run one grant against one token endpoint.
-/// Self-contained on purpose — see the module docs.
+/// Everything needed to run one grant against one token endpoint. Built from
+/// the [`Cli`] but independent of it, so the token request can be tested
+/// against a local endpoint without fabricating a whole command line.
 pub struct TokenConfig {
     pub token_url: Url,
     pub client_id: String,

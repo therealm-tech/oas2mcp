@@ -1,6 +1,7 @@
 //! Command-line interface. Configuration resolves CLI flags → environment
 //! variables → defaults, and every option carries an `env = "..."`.
 
+use std::fmt;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -29,21 +30,18 @@ pub enum SigningAlg {
     EdDsa,
 }
 
-impl std::fmt::Display for SigningAlg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Mirror the `ValueEnum` names so `default_value_t` round-trips.
-        f.write_str(match self {
-            Self::Rs256 => "rs256",
-            Self::Rs384 => "rs384",
-            Self::Rs512 => "rs512",
-            Self::Ps256 => "ps256",
-            Self::Ps384 => "ps384",
-            Self::Ps512 => "ps512",
-            Self::Es256 => "es256",
-            Self::Es384 => "es384",
-            Self::EdDsa => "eddsa",
-        })
+impl fmt::Display for SigningAlg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_value_name(self, f)
     }
+}
+
+/// Write the name clap parses `value` from, so `default_value_t` round-trips.
+fn write_value_name(value: &impl ValueEnum, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let value = value
+        .to_possible_value()
+        .expect("no ValueEnum variant is skipped");
+    f.write_str(value.get_name())
 }
 
 /// Which OAuth grant obtains the upstream token.
@@ -65,13 +63,9 @@ pub enum UpstreamGrant {
     JwtBearerRelay,
 }
 
-impl std::fmt::Display for UpstreamGrant {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::ClientCredentials => "client-credentials",
-            Self::JwtBearer => "jwt-bearer",
-            Self::JwtBearerRelay => "jwt-bearer-relay",
-        })
+impl fmt::Display for UpstreamGrant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_value_name(self, f)
     }
 }
 
@@ -85,12 +79,9 @@ pub enum DocumentAuth {
     Upstream,
 }
 
-impl std::fmt::Display for DocumentAuth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Own => "own",
-            Self::Upstream => "upstream",
-        })
+impl fmt::Display for DocumentAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_value_name(self, f)
     }
 }
 
@@ -1408,5 +1399,23 @@ mod tests {
         let err = Cli::try_parse_from(["oas2mcp", "--openapi-oauth-signing-alg", "hs256"])
             .expect_err("hs256 must not be accepted");
         assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn displayed_values_parse_back() {
+        fn round_trips<T: ValueEnum + fmt::Display + PartialEq + fmt::Debug>() {
+            for variant in T::value_variants() {
+                let parsed = T::from_str(&variant.to_string(), false).expect("parses back");
+                assert_eq!(&parsed, variant);
+            }
+        }
+        round_trips::<SigningAlg>();
+        round_trips::<UpstreamGrant>();
+        round_trips::<DocumentAuth>();
+        assert_eq!(SigningAlg::EdDsa.to_string(), "eddsa");
+        assert_eq!(
+            UpstreamGrant::JwtBearerRelay.to_string(),
+            "jwt-bearer-relay"
+        );
     }
 }

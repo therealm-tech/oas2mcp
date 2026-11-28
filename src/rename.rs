@@ -1,23 +1,14 @@
-//! Tool-name rewriting: turn an OpenAPI operation name into a short, readable
-//! MCP tool name.
-//!
-//! Names taken straight from a real-world document are frequently unusable.
-//! GitLab's `postApiV4ProjectsIdMergeRequestsNoteableIdDiscussionsDiscussionIdNotes`
-//! is 70 characters on its own, while both Anthropic and OpenAI cap tool names
-//! at 64 (`^[a-zA-Z0-9_-]{1,64}$`) — and a gateway aggregating several MCP
-//! servers usually prefixes every tool with its backend name (Envoy AI Gateway
-//! emits `<backend>__<tool>`), eating into that budget before the name is even
-//! seen. Short names are also simply better: a model picks tools by name, and
-//! `post_projmrdiscNotes` is easier to select than a wall of CamelCase.
-//!
-//! The rewrite is a chain of regex rules, then sanitisation, then a hard length
-//! cap. **Operation filtering deliberately runs before all of this**, on the raw
-//! name — see [`crate::filter`] and `tools::build_tools`.
+//! Tool-name rewriting: regex rules, then sanitisation, then a length cap turn
+//! an OpenAPI operation name into a short MCP tool name. Operation filtering
+//! runs before it, on the raw name — see [`crate::filter`].
 
 use regex::Regex;
 
 /// Default maximum length of a tool name, matching the limit Anthropic and
-/// OpenAI both enforce on tool names.
+/// OpenAI both enforce (`^[a-zA-Z0-9_-]{1,64}$`). Real operation names overrun
+/// it — GitLab's `postApiV4ProjectsIdMergeRequestsNoteableIdDiscussionsDiscussionIdNotes`
+/// is 70 characters — and a gateway aggregating several MCP servers eats into
+/// it further by prefixing each tool with its backend name.
 pub const DEFAULT_MAX_NAME_LEN: usize = 64;
 
 /// Hex characters of the disambiguating hash appended to a truncated name.
