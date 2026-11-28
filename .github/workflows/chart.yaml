@@ -54,14 +54,18 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: check Chart.yaml matches the tag
-        if: ${{ github.event_name == 'push' }}
+      - name: check the committed versions match
         env:
           VERSION: ${{ steps.v.outputs.version }}
+        # A stable chart is also what the README tells people to install.
         run: |
           committed="$(sed -n 's/^version:[[:space:]]*//p' "$CHART_DIR/Chart.yaml" | tr -d "\"'")"
           if [ "$committed" != "$VERSION" ]; then
-            echo "::error::Chart.yaml version is $committed but the tag says $VERSION. Cut chart releases with scripts/release.sh --chart so the two stay in step."
+            echo "::error::Chart.yaml version is $committed but the release says $VERSION. Cut chart releases with \`task release -- --chart\` so the two stay in step."
+            exit 1
+          fi
+          if [[ "$VERSION" != *-* ]] && ! grep -qF "oas2mcp --version $VERSION " README.md; then
+            echo "::error::README.md does not install chart $VERSION. Cut chart releases with \`task release -- --chart\` so the two stay in step."
             exit 1
           fi
 

@@ -149,66 +149,28 @@ request and say why.
 
 ## Continuous integration
 
-| Workflow | Triggers on | What it does | Reproduce locally |
-| --- | --- | --- | --- |
-| [`quality`](.github/workflows/quality.yaml) | pull requests, pushes to `main` | pre-commit, `cargo test`, the docs site tests, the end-to-end suite | `pre-commit run --all-files`, `cargo test`, `npm --prefix docs test`, [e2e](tests/e2e/README.md) |
-| [`build`](.github/workflows/build.yaml) | pull requests and pushes to `main` touching the build inputs, manual | multi-arch image build and Trivy image scan; pushes only on manual dispatch or a release, then attests the image's provenance and SBOM | `docker build .` and the Trivy command below |
-| [`security`](.github/workflows/security.yaml) | pull requests, pushes to `main`, daily, manual | Trivy filesystem scan; daily and manual runs also scan the image of the latest release | the Trivy commands below |
-| [`docs`](.github/workflows/docs.yaml) | pull requests and pushes to `main` touching `docs/` or the logo, a stable release, manual | builds every version of the documentation site, checking its internal links; on `main`, deploys it to GitHub Pages | `npm --prefix docs run build:versions` |
-| [`chart`](.github/workflows/chart.yaml) | `chart-X.Y.Z` tag, manual | on a tag, checks it matches `Chart.yaml`; publishes the chart to `ghcr.io/therealm-tech/charts` | — (publish only) |
-| [`release`](.github/workflows/release.yaml) | `vX.Y.Z` tag | checks the tag matches `Cargo.toml`, builds, pushes and attests the image, creates the GitHub Release with the SBOM and the attestation bundle attached, and rebuilds the documentation (not for a pre-release) | — (publish only) |
+| Workflow | Purpose | Reproduce locally |
+| --- | --- | --- |
+| [`quality`](.github/workflows/quality.yaml) | pre-commit, unit tests, docs site tests, end-to-end suite | `task lint`, `task test`, `task docs:test`, `task e2e` |
+| [`build`](.github/workflows/build.yaml) | multi-arch image build and Trivy image scan | `docker build .`, then the image scan below |
+| [`security`](.github/workflows/security.yaml) | Trivy scan of the code, and daily of the latest release image | the scans below |
+| [`docs`](.github/workflows/docs.yaml) | build every version of the documentation site, deploy it from `main` | `task docs` |
+| [`release`](.github/workflows/release.yaml) | publish the image and the GitHub Release from a `vX.Y.Z` tag | — (publish only) |
+| [`chart`](.github/workflows/chart.yaml) | publish the chart from a `chart-X.Y.Z` tag | — (publish only) |
 
-The publishing jobs use the workflow's `GITHUB_TOKEN` for the registry, and its
-OIDC token to sign the attestations through Sigstore; nothing else is needed.
+A pull request merges with every check green. What may surprise you:
 
-The chart is versioned and released independently of the app. A `vX.Y.Z` tag
-whose version differs from `Cargo.toml` fails `release` before anything is
-published: the tag names the image, but `Cargo.toml` is what
-`oas2mcp --version` reports. A `chart-X.Y.Z` tag that differs from the
-`version` in `Chart.yaml` fails `chart` the same way.
+- `build` and `docs` only run when their inputs change; the path filters are
+  at the top of each file.
+- `security` also runs daily against the published image of the latest
+  release, so it can go red with no change of yours: a new CVE landed on an
+  image nobody rebuilt.
+- The Trivy scans fail on a HIGH or CRITICAL finding with a fix available;
+  every severity still goes to the repository's **Security** tab.
+- The publishing jobs need no secret: the workflow's `GITHUB_TOKEN` pushes to
+  GHCR, and its OIDC token signs the attestations.
 
-A pre-release tag — any version with a `-`, such as `v0.9.0-rc1` — publishes
-the image under that version and stops there: it does not move `latest` and
-creates no GitHub Release, since an rc exists to be tested. The notes of a
-stable release start from the previous stable tag, so they cover everything
-since that release, rc tags included.
-
-### Security scanning
-
-[Trivy](https://trivy.dev) runs in four places. The `security` and `build` gates
-fail on a **HIGH** or **CRITICAL** finding that has a fix available:
-
-- **the `trivy-config` pre-commit hook** — `Dockerfile` and Helm chart
-  misconfigurations of any severity, at commit time: they only change with the
-  code.
-- **security / fs** — a filesystem scan of the repository: crate advisories
-  from `Cargo.lock` and leaked secrets.
-- **security / image** — daily, the image of the latest release as published
-  on GHCR, for each architecture. A new CVE lands against an image nobody
-  rebuilt; a red scheduled run is the notification.
-- **build / scan the image** — scans the container image the commit actually
-  produces, before anything is pushed. This runs on releases too: a
-  HIGH/CRITICAL finding fails the build, which blocks the `manifest` job, so no
-  usable tag is ever published.
-
-The image scans cover the base layer only — the runtime image holds a compiled
-binary, so Trivy sees no Rust dependencies there; those are covered by the
-`Cargo.lock` scan. The runtime image is distroless; see
-[ARCHITECTURE.md](ARCHITECTURE.md#design-decisions).
-
-Each CI scan runs twice, deliberately: once reporting **every** severity to the
-repository's **Security** tab — misconfigurations included — then once more
-gating the build on HIGH and CRITICAL. Advisories with no released fix are
-reported but never fail the build.
-
-Trivy renders the chart itself, but only when handed the values its templates
-require (`--helm-values`, `TRIVY_HELM_VALUES` in CI). Without them it logs a
-render error, scans no chart at all, and still reports success — so keep them
-set. The misconfiguration checks also read their parameters from
-[`.trivy/`](.trivy) (`--config-data`, `TRIVY_CONFIG_DATA`), such as the
-registries images may come from.
-
-Reproduce the scans locally:
+Reproduce the scans:
 
 ```bash
 # What security / fs gates on:
@@ -225,46 +187,6 @@ docker build -t oas2mcp:dev .
 trivy image oas2mcp:dev --severity HIGH,CRITICAL --ignore-unfixed
 ```
 
-## Cutting a release
-
-The app and the chart have separate release lifecycles.
-
-The helper script bumps the version files, runs the checks, commits, tags and
-pushes — which is what triggers the workflows. Release either side, or both at
-once:
-
-```bash
-# The application: bumps Cargo.toml + Cargo.lock, tags v0.4.0.
-scripts/release.sh 0.4.0
-
-# The chart: bumps Chart.yaml, the generated chart README and the version the
-# `helm install` commands pin (stable versions only), tags chart-0.5.0.
-scripts/release.sh --chart 0.5.0
-
-# Both: as above, and `appVersion` is pointed at the app version being
-# released, since the chart now targets that image.
-scripts/release.sh 0.4.0 --chart 0.5.0
-```
-
-A chart-only release points `appVersion` at the latest `vX.Y.Z` tag, so a chart
-published on its own still ships against the newest app image instead of
-quietly lagging behind it. The script refuses to run on a dirty tree, off
-`main`, out of sync with `origin/main`, or when a tag already exists. Useful
-flags: `--skip-tests`, `--no-push` (commit and tag locally only), `-y` (no
-confirmation prompt). Bumping the chart needs `helm` and `helm-docs` on `PATH`.
-
-Doing it by hand works too, as long as `Cargo.toml` (for the app) or
-`Chart.yaml` (for the chart) already carries the same version — otherwise the
-workflow fails its version check:
-
-```bash
-# Release the application (image + GitHub Release):
-git tag v0.1.0 && git push origin v0.1.0
-
-# Release the Helm chart (OCI push), independently:
-git tag chart-0.1.0 && git push origin chart-0.1.0
-```
-
 ## Submitting a change
 
 - Commit subjects are imperative and lowercase; follow `git log --oneline`.
@@ -276,3 +198,39 @@ git tag chart-0.1.0 && git push origin chart-0.1.0
   `breaking` when upgrading forces users to change anything (a flag, an
   environment variable, a chart value, a default). Say in the description what
   breaks and how to migrate.
+
+## Releasing
+
+`task release` is the only way to cut a release: it runs
+[`scripts/release.sh`](scripts/release.sh), which bumps the version files,
+regenerates what derives from them, commits and tags on an up-to-date `main`,
+then asks before pushing. The app (`vX.Y.Z`) and the chart (`chart-X.Y.Z`)
+version independently; release either, or both:
+
+```bash
+task release -- 1.1.0
+```
+
+```bash
+task release -- --chart 1.2.0
+```
+
+```bash
+task release -- 1.1.0 --chart 1.2.0
+```
+
+Add `--dry-run` to see what would change. A chart release points `appVersion`
+at the app released in the same run, or else at the latest `vX.Y.Z`
+(`--app-version` picks another), and pins the `helm install` commands of the
+docs to a stable chart. Run `task release -- --help` for the rest.
+
+Pushing is what publishes: the tags trigger
+[`release`](.github/workflows/release.yaml) and
+[`chart`](.github/workflows/chart.yaml). Any answer but `y`, or no terminal,
+leaves the commit and tags local and prints the push command. Both workflows
+refuse a tag that disagrees with the committed version, so a hand-made tag
+fails before anything is published.
+
+A pre-release, any version with a `-` such as `1.1.0-rc1`, publishes and stops
+there: the image does not move `latest` and gets no GitHub Release, and the
+docs keep installing the last stable chart.

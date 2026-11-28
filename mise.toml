@@ -2,6 +2,10 @@ min_version = "2026.11.10"
 
 [tools]
 actionlint = "1.7.12"
+# `scripts/release.sh` writes the version with `cargo set-version`.
+"cargo:cargo-edit" = "0.13.14"
+# Lets mise install cargo-edit as a prebuilt binary instead of compiling it.
+cargo-binstall = "1.28.0"
 hadolint = "2.15.1"
 helm = "4.3.2"
 helm-docs = "1.14.2"

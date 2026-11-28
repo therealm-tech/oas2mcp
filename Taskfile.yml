@@ -62,7 +62,7 @@ tasks:
       - npm ci --prefix docs
 
   release:
-    desc: Cut a release with scripts/release.sh
+    desc: Bump, commit and tag a release, then ask before pushing
     interactive: true
     cmds:
       - scripts/release.sh {{.CLI_ARGS}}
