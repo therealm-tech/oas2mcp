@@ -92,8 +92,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Build to a local tarball. Scan it, then push the very same bits — a
-      # release must scan the artefact it publishes, and the base image is a
-      # mutable tag whose advisories move daily.
+      # release must scan the artefact it publishes, and advisories move daily.
       - name: build the image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
         with:
