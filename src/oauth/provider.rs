@@ -160,9 +160,9 @@ impl TokenProvider {
     /// because the assertion names the same subject regardless of who called.
     fn cache_key(&self, delegation: Option<&Delegation<'_>>) -> CacheKey {
         match (&self.inner.config.grant, delegation) {
-            (Grant::ClientCredentials, _) => CacheKey::Client,
             (
-                Grant::JwtBearer(GrantAssertion::SelfSigned {
+                Grant::ClientCredentials
+                | Grant::JwtBearer(GrantAssertion::SelfSigned {
                     subject: SubjectSource::Fixed(_),
                     ..
                 }),
@@ -228,7 +228,7 @@ impl TokenProvider {
                 form.push(("grant_type", "client_credentials".to_string()));
             }
             Grant::JwtBearer(source) => {
-                let (assertion, subject) = self.grant_assertion(source, delegation)?;
+                let (assertion, subject) = Self::grant_assertion(source, delegation)?;
                 tracing::debug!(
                     token_url = %config.token_url,
                     subject = %subject,
@@ -312,7 +312,6 @@ impl TokenProvider {
     /// fallback: quietly obtaining a token for the client itself would hand the
     /// least-authorized caller the broadest identity the server has.
     fn grant_assertion(
-        &self,
         source: &GrantAssertion,
         delegation: Option<&Delegation<'_>>,
     ) -> anyhow::Result<(String, String)> {
@@ -383,13 +382,18 @@ mod tests {
     fn trust_window_subtracts_the_refresh_margin() {
         assert_eq!(
             trust_window(Some(Duration::from_secs(3600))),
-            Duration::from_secs(3540)
+            Duration::from_mins(59)
         );
     }
 
     #[test]
     fn trust_window_defaults_when_expiry_absent() {
-        assert_eq!(trust_window(None), DEFAULT_TTL - REFRESH_MARGIN);
+        assert_eq!(
+            trust_window(None),
+            DEFAULT_TTL
+                .checked_sub(REFRESH_MARGIN)
+                .expect("the margin is shorter than the default TTL")
+        );
     }
 
     #[test]
@@ -566,7 +570,9 @@ mod tests {
             .expect("token cache mutex poisoned")
             .get_mut(key)
             .expect("a token was cached under this key")
-            .refresh_at = Instant::now() - Duration::from_secs(1);
+            .refresh_at = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("the clock is past its first second");
     }
 
     /// Pull one form field out of a captured request body.
@@ -887,9 +893,10 @@ mod tests {
     /// Decode the assertion the fake AS received, without verifying it (the
     /// signature is covered in `assertion`).
     fn assertion_claims(body: &str) -> serde_json::Value {
+        use base64::Engine as _;
+
         let assertion = form_field(body, "assertion").expect("an assertion was sent");
         let payload = assertion.split('.').nth(1).expect("a JWT has three parts");
-        use base64::Engine as _;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(payload)
             .expect("the payload is base64url");
@@ -1112,7 +1119,9 @@ mod tests {
             let refresh_at = if i % 2 == 0 {
                 Instant::now() + Duration::from_secs(3600)
             } else {
-                Instant::now() - Duration::from_secs(1)
+                Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("the clock is past its first second")
             };
             provider.store(
                 CacheKey::Delegated {

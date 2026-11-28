@@ -93,11 +93,13 @@ impl TokenConfig {
     pub fn needs_caller_identity(&self) -> bool {
         matches!(
             &self.grant,
-            Grant::JwtBearer(GrantAssertion::Caller)
-                | Grant::JwtBearer(GrantAssertion::SelfSigned {
-                    subject: SubjectSource::Caller,
-                    ..
-                })
+            Grant::JwtBearer(
+                GrantAssertion::Caller
+                    | GrantAssertion::SelfSigned {
+                        subject: SubjectSource::Caller,
+                        ..
+                    }
+            )
         )
     }
 }
@@ -251,40 +253,37 @@ impl TokenConfig {
 
         let grant = match flags.jwt_bearer {
             None => Grant::ClientCredentials,
-            Some(jwt_bearer) => Grant::JwtBearer(match jwt_bearer.relay {
-                true => {
-                    if jwt_bearer.subject.is_some() {
-                        bail!(
-                            "{prefix}-subject has no meaning with {prefix}-grant jwt-bearer-relay: \
-                             the relayed token already names its own subject"
-                        );
-                    }
-                    GrantAssertion::Caller
+            Some(jwt_bearer) => Grant::JwtBearer(if jwt_bearer.relay {
+                if jwt_bearer.subject.is_some() {
+                    bail!(
+                        "{prefix}-subject has no meaning with {prefix}-grant jwt-bearer-relay: \
+                         the relayed token already names its own subject"
+                    );
                 }
-                false => {
-                    // A shared secret cannot sign anything. Rather than accept a
-                    // configuration that could never mint an assertion, say so at
-                    // startup.
-                    let ClientAuth::PrivateKeyJwt { key, .. } = &client_auth else {
-                        bail!(
-                            "{prefix}-grant jwt-bearer needs {prefix}-private-key to sign the \
-                             assertion; a client secret cannot sign one. Use \
-                             {prefix}-grant jwt-bearer-relay to relay the caller's token instead."
-                        )
-                    };
-                    GrantAssertion::SelfSigned {
-                        issuer: jwt_bearer
-                            .issuer
-                            .cloned()
-                            .unwrap_or_else(|| client_id.clone()),
-                        audience: assertion_audience,
-                        lifetime: assertion_lifetime,
-                        key: Arc::clone(key),
-                        subject: match jwt_bearer.subject {
-                            Some(fixed) => SubjectSource::Fixed(fixed.clone()),
-                            None => SubjectSource::Caller,
-                        },
-                    }
+                GrantAssertion::Caller
+            } else {
+                // A shared secret cannot sign anything. Rather than accept a
+                // configuration that could never mint an assertion, say so at
+                // startup.
+                let ClientAuth::PrivateKeyJwt { key, .. } = &client_auth else {
+                    bail!(
+                        "{prefix}-grant jwt-bearer needs {prefix}-private-key to sign the \
+                         assertion; a client secret cannot sign one. Use \
+                         {prefix}-grant jwt-bearer-relay to relay the caller's token instead."
+                    )
+                };
+                GrantAssertion::SelfSigned {
+                    issuer: jwt_bearer
+                        .issuer
+                        .cloned()
+                        .unwrap_or_else(|| client_id.clone()),
+                    audience: assertion_audience,
+                    lifetime: assertion_lifetime,
+                    key: Arc::clone(key),
+                    subject: match jwt_bearer.subject {
+                        Some(fixed) => SubjectSource::Fixed(fixed.clone()),
+                        None => SubjectSource::Caller,
+                    },
                 }
             }),
         };
@@ -442,9 +441,9 @@ mod tests {
             "--openapi-oauth-signing-alg",
             "es256",
         ]);
-        assert!(
-            ineffective_assertion_flags(&document_flags(&cli).expect("a token url is set"))
-                .is_empty()
+        assert_eq!(
+            ineffective_assertion_flags(&document_flags(&cli).expect("a token url is set")),
+            [""; 0]
         );
     }
 

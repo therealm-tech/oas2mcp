@@ -59,7 +59,7 @@ pub fn sign(config: &AssertionConfig, key: &SigningKey) -> anyhow::Result<String
     };
 
     let mut header = Header::new(key.algorithm);
-    header.kid = key.key_id.clone();
+    header.kid.clone_from(&key.key_id);
     jsonwebtoken::encode(&header, &claims, &key.key).context("signing the OAuth client assertion")
 }
 

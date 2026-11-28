@@ -258,7 +258,7 @@ mod tests {
             .expect("infallible")
     }
 
-    fn rpc(method: &str, params: Value) -> String {
+    fn rpc(method: &str, params: &Value) -> String {
         json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string()
     }
 
@@ -306,7 +306,7 @@ mod tests {
         // Roles decide which tools are visible, not whether the caller is
         // authenticated: a verified token with no matching role is let through.
         let app = app("https://mcp.example.com/mcp");
-        let token = sign(json!(["nobody"]), in_one_hour(), Some(TEST_KID));
+        let token = sign(&json!(["nobody"]), in_one_hour(), Some(TEST_KID));
         let response = send(&app, "POST", "/mcp", Some(&token)).await;
         assert_eq!(response.status(), StatusCode::OK);
     }
@@ -337,9 +337,9 @@ mod tests {
     async fn with_public_tools_an_anonymous_client_gets_in_and_its_body_intact() {
         let app = app_with_public_tools(&["^get_public"]);
         for message in [
-            rpc("initialize", json!({})),
-            rpc("tools/list", json!({})),
-            rpc("tools/call", json!({ "name": "get_public_stats" })),
+            rpc("initialize", &json!({})),
+            rpc("tools/list", &json!({})),
+            rpc("tools/call", &json!({ "name": "get_public_stats" })),
             "not json".to_string(),
         ] {
             let response = send_body(&app, "POST", "/mcp", None, Body::from(message.clone())).await;
@@ -351,7 +351,7 @@ mod tests {
     #[tokio::test]
     async fn with_public_tools_an_anonymous_call_to_another_tool_is_challenged() {
         let app = app_with_public_tools(&["^get_public"]);
-        let call = rpc("tools/call", json!({ "name": "delete_pet" }));
+        let call = rpc("tools/call", &json!({ "name": "delete_pet" }));
         let response = send_body(&app, "POST", "/mcp", None, Body::from(call)).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert!(
@@ -366,7 +366,7 @@ mod tests {
         // A bad token is not downgraded to anonymous: the client would otherwise
         // never learn that its token needs replacing.
         let app = app_with_public_tools(&["^get_public"]);
-        let list = rpc("tools/list", json!({}));
+        let list = rpc("tools/list", &json!({}));
         let response = send_body(&app, "POST", "/mcp", Some("not.a.jwt"), Body::from(list)).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert!(challenge_of(&response).contains("error=\"invalid_token\""));
@@ -385,11 +385,11 @@ mod tests {
         .expect("valid resource")
         .protect(mcp, move |tool: &str| is_public.is_public(tool));
 
-        let list = rpc("tools/list", json!({}));
+        let list = rpc("tools/list", &json!({}));
         let response = send_body(&app, "POST", "/mcp", None, Body::from(list)).await;
         assert_eq!(response.status(), StatusCode::OK);
 
-        let call = rpc("tools/call", json!({ "name": "delete_pet" }));
+        let call = rpc("tools/call", &json!({ "name": "delete_pet" }));
         let response = send_body(&app, "POST", "/mcp", None, Body::from(call)).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
