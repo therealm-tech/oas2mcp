@@ -37,12 +37,17 @@ tokio-util = "0.7"
 futures = "0.3"
 axum = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
     "json",
-    "rustls-tls",
+    "form",
+    "query",
+    "rustls",
     "charset",
     "http2",
 ] }
+# The Mozilla roots every outbound client trusts, beside `--ca-cert`; see
+# `http::client`.
+webpki-root-certs = "1"
 indexmap = { version = "2", features = ["serde"] }
 # `jsonwebtoken` 10 moved to pluggable crypto backends and no longer picks one
 # implicitly: exactly one of `rust_crypto` and `aws_lc_rs` must be enabled, or
@@ -99,6 +104,9 @@ rmcp = { version = "3.1", features = ["client"] }
 rsa = "0.10"
 p256 = { version = "0.14", features = ["getrandom"] }
 getrandom = { version = "0.4", features = ["sys_rng"] }
+# A throwaway CA and a TLS server signed by it, to check what `http::client` trusts.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
+tokio-rustls = "0.26"
 
 # The unit tests generate a 3072-bit RSA key at startup; unoptimised, the prime
 # search alone takes ~3 s of every `cargo test`, against ~0.1 s at opt-level 3.

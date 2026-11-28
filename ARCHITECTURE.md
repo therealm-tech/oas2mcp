@@ -247,6 +247,12 @@ authorization server.
   initialize afterwards; a session keeps the title it was given. The icon is
   the project logo as a base64 `data:` URI embedded in the binary, so a client
   renders it without a network fetch and the server stays usable offline.
+- **Outbound TLS trusts the bundled Mozilla roots plus `--ca-cert`, not the
+  host's trust store.** The trusted set is then the same on a laptop, in the
+  distroless image and in any other container, and nothing outside the
+  configuration — `SSL_CERT_FILE`, a CA an administrator dropped into the
+  host's store — widens it. Certificate and hostname verification are always
+  on; a private CA is trusted by adding it, never by disabling a check.
 - **The runtime image is distroless, nonroot** (see the
   [Dockerfile](Dockerfile)). With no shell and no package manager, it carries
   almost no OS packages for a scanner to flag, and the binary is all that runs.
