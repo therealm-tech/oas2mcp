@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# Cut a release: align the version files, commit, tag and push. The `release`
-# workflow builds the image and drafts the notes off the `vX.Y.Z` tag; the
-# `chart` workflow publishes the chart off the `chart-X.Y.Z` tag.
-#
-# The app and the chart version independently, so either can be released alone.
+# Cut a release: bump the version files, commit, tag, then ask before pushing.
+# The `release` workflow publishes from the `vX.Y.Z` tag, the `chart` workflow
+# from the `chart-X.Y.Z` tag; the app and the chart version independently.
 set -euo pipefail
 
 readonly BRANCH="main"
 readonly MANIFEST="Cargo.toml"
 readonly CHART="charts/oas2mcp/Chart.yaml"
-# The files whose `helm install` commands pin the chart version.
 readonly CHART_INSTALL_DOCS=(
     "README.md"
     "docs/src/content/docs/guides/kubernetes.md"
@@ -22,28 +19,32 @@ usage() {
     cat <<'EOF'
 Usage: scripts/release.sh [options] [<version>]
 
-Cut an oas2mcp release. Give an app version, a chart version, or both.
+Cut an oas2mcp release: bump the version files, commit, tag, then ask before
+pushing. Give an app version, a chart version, or both.
 
 Arguments:
-  <version>            App version to release, with or without a leading `v`
-                       (e.g. `0.4.0` or `v0.4.0`). Bumps `Cargo.toml` and tags
-                       `vX.Y.Z`.
+  <version>              App version, with or without a leading `v`. Bumps
+                         Cargo.toml and Cargo.lock, tags `vX.Y.Z`.
 
 Options:
-  --chart <version>    Also release the Helm chart at this version: bumps the
-                       chart `version` in `Chart.yaml` and tags `chart-X.Y.Z`.
-                       `appVersion` is pointed at the app version released in
-                       the same run, or at the latest `vX.Y.Z` tag otherwise.
-  --skip-tests         Skip the test suite before tagging.
-  --no-push            Commit and tag locally, but push nothing.
-  -y, --yes            Do not ask for confirmation before pushing.
-  -h, --help           Show this help.
+  --chart <version>      Release the Helm chart at this version: bumps
+                         `version` in Chart.yaml, regenerates the chart README,
+                         pins the `helm install` commands of the docs (stable
+                         versions only) and tags `chart-X.Y.Z`.
+  --app-version <ver>    With --chart alone, point `appVersion` at this
+                         released `vX.Y.Z` instead of the latest stable one.
+  --dry-run              Print what would change, then stop.
+  -h, --help             Show this help.
+
+Without a terminal, or on any answer but `y`, nothing is pushed and the push
+command is printed instead.
 
 Examples:
-  scripts/release.sh 0.4.0                  # app only
-  scripts/release.sh --chart 0.5.0          # chart only, appVersion follows
-                                            # the latest vX.Y.Z tag
-  scripts/release.sh 0.4.0 --chart 0.5.0    # both, appVersion becomes 0.4.0
+  scripts/release.sh 1.1.0                         # app only
+  scripts/release.sh --chart 1.2.0                 # chart, appVersion = latest vX.Y.Z
+  scripts/release.sh 1.1.0 --chart 1.2.0           # both, appVersion = 1.1.0
+  scripts/release.sh --chart 1.2.1 --app-version 1.0.2
+  scripts/release.sh 1.1.0-rc1 --dry-run
 EOF
 }
 
@@ -72,8 +73,12 @@ require_tag_absent() {
     fi
 }
 
-# Rewrite a file through a sed script. Not `sed -i`: the in-place flag takes an
-# argument on BSD sed and none on GNU sed, so there is no portable spelling.
+require_command() {
+    command -v "$1" >/dev/null || die "$1 is not on PATH; run \`mise install\`"
+}
+
+# Not `sed -i`: the in-place flag takes an argument on BSD sed and none on GNU
+# sed, so there is no portable spelling.
 rewrite() {
     local file="$1" script="$2"
 
@@ -84,18 +89,17 @@ rewrite() {
     tmpfile=""
 }
 
-# Read the `version` field of the `[package]` section, and nothing else: a
-# dependency further down the file also has a `version` key.
+# The `[package]` section only: dependencies further down have a `version` too.
 manifest_version() {
     sed -n '/^\[package\]/,/^\[/{s/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p;}' "$MANIFEST"
 }
 
-set_manifest_version() {
-    rewrite "$MANIFEST" '/^\[package\]/,/^\[/ s/^version[[:space:]]*=.*/version = "'"$1"'"/'
-}
-
 chart_version() {
     sed -n 's/^version:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$CHART"
+}
+
+chart_app_version() {
+    sed -n 's/^appVersion:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$CHART"
 }
 
 set_chart_version() {
@@ -116,20 +120,13 @@ set_chart_install_version() {
     done
 }
 
-chart_app_version() {
-    sed -n 's/^appVersion:[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p' "$CHART"
-}
-
-# The newest released app version, from the tags fetched above. Prints nothing
-# when the repo has none. A loop, not a `grep | head` pipeline: under `pipefail`
-# a grep that matches nothing fails the whole substitution, and `set -e` would
-# kill the script with no message at all.
+# A loop, not `grep | head`: under `pipefail` a grep matching nothing fails
+# the substitution, and `set -e` kills the script without a message.
 latest_app_version() {
     local tag
 
     while IFS= read -r tag; do
-        # Pre-releases are skipped — appVersion must name an image that exists.
-        # `--sort=-v:refname` already put the newest tag first.
+        # appVersion must name a stable image; rc tags are skipped.
         if printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             printf '%s' "${tag#v}"
             return 0
@@ -137,34 +134,19 @@ latest_app_version() {
     done <<<"$(git tag --list 'v*' --sort=-v:refname)"
 }
 
-confirm() {
-    local prompt="$1" answer
-
-    if [ ! -t 0 ]; then
-        die "$prompt (no tty to ask on — rerun with --yes)"
-    fi
-
-    read -r -p "$prompt [y/N] " answer
-    case "$answer" in
-        y | Y | yes | YES) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
 main() {
-    local version="" chart="" skip_tests=false push=true assume_yes=false
+    local version="" chart="" app_version="" dry_run=false
 
     while [ $# -gt 0 ]; do
         case "$1" in
-            --chart)
-                [ $# -ge 2 ] || die "--chart needs a version"
-                chart="$2"
+            --chart | --app-version)
+                [ $# -ge 2 ] || die "$1 needs a version"
+                if [ "$1" = --chart ]; then chart="$2"; else app_version="$2"; fi
                 shift
                 ;;
             --chart=*) chart="${1#--chart=}" ;;
-            --skip-tests) skip_tests=true ;;
-            --no-push) push=false ;;
-            -y | --yes) assume_yes=true ;;
+            --app-version=*) app_version="${1#--app-version=}" ;;
+            --dry-run) dry_run=true ;;
             -h | --help)
                 usage
                 return 0
@@ -182,6 +164,10 @@ main() {
         usage >&2
         die "nothing to release: give <version>, --chart <version>, or both"
     fi
+    if [ -n "$app_version" ]; then
+        [ -n "$chart" ] || die "--app-version only applies with --chart"
+        [ -z "$version" ] || die "--app-version conflicts with <version>, which appVersion follows"
+    fi
 
     local tags=()
     if [ -n "$version" ]; then
@@ -190,23 +176,24 @@ main() {
         tags+=("v$version")
     fi
     if [ -n "$chart" ]; then
+        chart="${chart#chart-}"
         chart="${chart#v}"
         require_semver "$chart"
         tags+=("chart-$chart")
+    fi
+    if [ -n "$app_version" ]; then
+        app_version="${app_version#v}"
+        require_semver "$app_version"
     fi
 
     cd "$(git rev-parse --show-toplevel)"
 
     if [ -n "$version" ]; then
-        command -v cargo >/dev/null || die "cargo is not on PATH"
-        [ -f "$MANIFEST" ] || die "$MANIFEST not found"
+        require_command cargo
+        require_command cargo-set-version
     fi
     if [ -n "$chart" ]; then
-        [ -f "$CHART" ] || die "$CHART not found"
-        # The chart README badges are generated from Chart.yaml; without
-        # helm-docs the commit would fail the `helm-docs` pre-commit hook.
-        command -v helm >/dev/null || die "helm is not on PATH"
-        command -v helm-docs >/dev/null || die "helm-docs is not on PATH"
+        require_command helm-docs
     fi
 
     # A dirty tree would smuggle unrelated changes into the release commit.
@@ -218,89 +205,28 @@ main() {
 
     info "fetching origin"
     git fetch --quiet --tags origin "$BRANCH"
-
-    if [ "$(git rev-parse HEAD)" != "$(git rev-parse FETCH_HEAD)" ]; then
-        die "$BRANCH is not in sync with origin/$BRANCH — pull or push first"
-    fi
+    [ "$(git rev-list --count "HEAD..origin/$BRANCH")" -eq 0 ] ||
+        die "$BRANCH is behind origin/$BRANCH; pull first"
+    [ "$(git rev-list --count "origin/$BRANCH..HEAD")" -eq 0 ] ||
+        die "$BRANCH has commits origin/$BRANCH lacks; land them through a pull request first"
 
     local tag
     for tag in "${tags[@]}"; do
         require_tag_absent "$tag"
     done
 
-    # A chart release always ships against the newest app image: the one being
-    # released here, or the last `vX.Y.Z` tag when the chart moves on its own.
-    # Left to itself, appVersion silently rots behind the app. Resolved up
-    # front, before any file is touched.
     local app_target=""
     if [ -n "$chart" ]; then
         if [ -n "$version" ]; then
             app_target="$version"
+        elif [ -n "$app_version" ]; then
+            git rev-parse -q --verify "refs/tags/v$app_version" >/dev/null ||
+                die "--app-version $app_version: no v$app_version tag; release the app first"
+            app_target="$app_version"
         else
             app_target="$(latest_app_version)"
             [ -n "$app_target" ] ||
-                die "no vX.Y.Z tag to take appVersion from — release the app first, or pass a version"
-        fi
-    fi
-
-    if [ -n "$version" ]; then
-        local current
-        current="$(manifest_version)"
-        [ -n "$current" ] || die "could not read the version from $MANIFEST"
-
-        if [ "$current" = "$version" ]; then
-            info "$MANIFEST is already at $version"
-        else
-            info "bumping $MANIFEST from $current to $version"
-            set_manifest_version "$version"
-            [ "$(manifest_version)" = "$version" ] || die "failed to write the version to $MANIFEST"
-            # Refresh the workspace entry in Cargo.lock without re-resolving
-            # dependencies, so `cargo build --locked` still works.
-            cargo update --quiet --workspace
-        fi
-    fi
-
-    if [ -n "$chart" ]; then
-        local current_chart
-        current_chart="$(chart_version)"
-        [ -n "$current_chart" ] || die "could not read the version from $CHART"
-
-        if [ "$current_chart" = "$chart" ]; then
-            info "$CHART is already at $chart"
-        else
-            info "bumping $CHART from $current_chart to $chart"
-            set_chart_version "$chart"
-            [ "$(chart_version)" = "$chart" ] || die "failed to write the version to $CHART"
-        fi
-
-        if [ "$(chart_app_version)" = "$app_target" ]; then
-            info "appVersion is already at $app_target"
-        else
-            info "pointing appVersion at $app_target"
-            set_chart_app_version "$app_target"
-            [ "$(chart_app_version)" = "$app_target" ] || die "failed to write appVersion to $CHART"
-        fi
-
-        # A pre-release leaves the install commands on the latest stable chart.
-        if [[ "$chart" != *-* ]]; then
-            info "pinning the install commands to chart $chart"
-            set_chart_install_version "$chart"
-        fi
-
-        info "regenerating the chart docs"
-        helm-docs --chart-search-root=charts
-    fi
-
-    if [ "$skip_tests" = true ]; then
-        info "skipping the test suite"
-    else
-        if [ -n "$version" ]; then
-            info "running the test suite"
-            cargo test --all --locked
-        fi
-        if [ -n "$chart" ]; then
-            info "linting the chart"
-            helm lint charts/oas2mcp -f charts/oas2mcp/values-lint.yaml
+                die "no vX.Y.Z tag to take appVersion from; release the app first"
         fi
     fi
 
@@ -313,8 +239,62 @@ main() {
         subject="release chart $chart"
     fi
 
+    local current_version="" current_chart="" current_app=""
+    if [ -n "$version" ]; then
+        current_version="$(manifest_version)"
+        [ -n "$current_version" ] || die "could not read the version from $MANIFEST"
+    fi
+    if [ -n "$chart" ]; then
+        current_chart="$(chart_version)"
+        current_app="$(chart_app_version)"
+        [ -n "$current_chart" ] || die "could not read the version from $CHART"
+    fi
+
+    if [ "$dry_run" = true ]; then
+        [ -z "$version" ] || info "$MANIFEST: $current_version -> $version"
+        if [ -n "$chart" ]; then
+            info "$CHART: version $current_chart -> $chart, appVersion $current_app -> $app_target"
+            if [[ "$chart" != *-* ]]; then
+                info "helm install commands: --version $chart"
+            fi
+        fi
+        info "commit: $subject"
+        info "tags: ${tags[*]}"
+        info "dry run: nothing changed"
+        return 0
+    fi
+
+    if [ -n "$version" ] && [ "$current_version" != "$version" ]; then
+        info "bumping $MANIFEST from $current_version to $version"
+        cargo set-version --package oas2mcp "$version"
+        [ "$(manifest_version)" = "$version" ] || die "failed to write the version to $MANIFEST"
+    fi
+
+    if [ -n "$chart" ]; then
+        if [ "$current_chart" != "$chart" ]; then
+            info "bumping $CHART from $current_chart to $chart"
+            set_chart_version "$chart"
+            [ "$(chart_version)" = "$chart" ] || die "failed to write the version to $CHART"
+        fi
+
+        if [ "$current_app" != "$app_target" ]; then
+            info "pointing appVersion at $app_target"
+            set_chart_app_version "$app_target"
+            [ "$(chart_app_version)" = "$app_target" ] || die "failed to write appVersion to $CHART"
+        fi
+
+        # An rc must not become what the docs tell people to install.
+        if [[ "$chart" != *-* ]]; then
+            info "pinning the install commands to chart $chart"
+            set_chart_install_version "$chart"
+        fi
+
+        info "regenerating the chart README"
+        helm-docs --chart-search-root=charts
+    fi
+
     if [ -n "$(git status --porcelain)" ]; then
-        info "committing the version bump"
+        info "committing: $subject"
         git add --all -- "$MANIFEST" Cargo.lock charts "${CHART_INSTALL_DOCS[@]}"
         git commit --quiet --message "$subject"
     fi
@@ -324,22 +304,27 @@ main() {
         git tag --annotate "$tag" --message "$tag"
     done
 
-    if [ "$push" = false ]; then
-        info "not pushing (--no-push); undo with: git tag -d ${tags[*]}"
-        return 0
+    local push=(git push --atomic origin "$BRANCH" "${tags[@]}")
+    local reply=""
+    if [ -t 0 ]; then
+        printf 'push %s and %s to origin? this publishes the release. [y/N] ' "$BRANCH" "${tags[*]}"
+        read -r reply || reply=""
+    else
+        info "no terminal to ask on"
     fi
 
-    if [ "$assume_yes" = false ] && ! confirm "push $BRANCH and ${tags[*]} to origin?"; then
-        die "aborted — undo with: git tag -d ${tags[*]} && git reset --hard origin/$BRANCH"
-    fi
+    case "$reply" in
+        y | Y | yes | YES) ;;
+        *)
+            info "not pushed; the commit and tags stay local. Publish with:"
+            printf '  %s\n' "${push[*]}"
+            return 0
+            ;;
+    esac
 
     info "pushing $BRANCH and ${tags[*]}"
-    git push origin "$BRANCH"
-    for tag in "${tags[@]}"; do
-        git push origin "$tag"
-    done
-
-    info "released ${tags[*]} — the workflows take it from here"
+    "${push[@]}"
+    info "pushed ${tags[*]}; the release and chart workflows publish from the tags"
 }
 
 main "$@"
