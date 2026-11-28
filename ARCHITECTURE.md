@@ -268,5 +268,7 @@ authorization server.
   expose no client headers, so caller authentication and header forwarding are
   flags of the `http` subcommand alone, and per-caller delegation is refused at
   startup on the others.
-- **Accepted JWT algorithms follow the JWK's key family**, so a token cannot
-  downgrade to an HMAC keyed with a public key.
+- **Accepted JWT algorithms come from the JWK, never from the token**: the
+  `alg` the JWK declares, or else its key family, so a token cannot downgrade
+  to an HMAC keyed with a public key. A JWK published for encryption
+  (`use: enc`) verifies nothing.
