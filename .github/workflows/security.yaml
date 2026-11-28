@@ -49,7 +49,7 @@ jobs:
       # defaults to false, so a SARIF run ignores `severity` and would fail the
       # build on a LOW.
       - name: scan the repository
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -72,7 +72,7 @@ jobs:
       # Misconfigurations are gated at commit time by the `trivy-config`
       # pre-commit hook; this gate covers what changes without a commit.
       - name: fail on high and critical findings
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -116,7 +116,7 @@ jobs:
 
       - name: scan the released image
         if: ${{ steps.release.outputs.version != '' }}
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ steps.release.outputs.version }}
           scanners: vuln,secret
@@ -136,7 +136,7 @@ jobs:
 
       - name: fail on high and critical findings
         if: ${{ steps.release.outputs.version != '' }}
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # 0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}:${{ steps.release.outputs.version }}
           scanners: vuln,secret

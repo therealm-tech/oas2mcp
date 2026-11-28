@@ -1,0 +1,111 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Europe/Paris",
+  "dependencyDashboard": {
+    "enabled": true,
+    "title": "Dependency dashboard"
+  },
+  "prConcurrentLimit": 5,
+  "minimumReleaseAge": "3 days",
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "**/examples/**",
+    "**/__fixtures__/**",
+    "**/.mise/locks/**",
+    "**/.config/mise/locks/**"
+  ],
+  "labels": ["dependencies"],
+  "vulnerabilityAlerts": {
+    "labels": ["security"]
+  },
+  "pre-commit": {
+    "enabled": true
+  },
+  "customManagers": [
+    {
+      "description": "Versions in a Dockerfile `ARG` carrying a renovate comment, e.g. `# renovate: datasource=crate depName=cargo-chef` followed by `ARG CARGO_CHEF_VERSION=0.1.78`",
+      "customType": "regex",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG [A-Z0-9_]+=(?<currentValue>\\S+)"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Commit subjects follow the repository's lowercase imperative style, e.g. `deps: bump regex to v1.13.2`. Set here rather than at the top level, where manager defaults would win",
+      "matchPackageNames": ["*"],
+      "semanticCommits": "disabled",
+      "commitMessagePrefix": "deps:",
+      "commitMessageAction": "bump",
+      "commitMessageTopic": "{{depName}}"
+    },
+    {
+      "description": "The repository's ecosystem labels, beside `dependencies`",
+      "matchManagers": ["cargo"],
+      "addLabels": ["rust"]
+    },
+    {
+      "description": "The repository's ecosystem labels, beside `dependencies`",
+      "matchManagers": ["github-actions"],
+      "addLabels": ["github_actions"]
+    },
+    {
+      "description": "The repository's ecosystem labels, beside `dependencies`",
+      "matchManagers": ["npm"],
+      "addLabels": ["javascript"]
+    },
+    {
+      "description": "The repository's ecosystem labels, beside `dependencies`",
+      "matchManagers": ["pre-commit"],
+      "addLabels": ["pre_commit"]
+    },
+    {
+      "description": "Minor and patch bumps land as one PR; each major gets its own",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "minor and patch"
+    },
+    {
+      "description": "Below 1.0 a minor bump is a breaking release, e.g. reqwest 0.12 to 0.13: it gets its own PR rather than breaking the group",
+      "matchUpdateTypes": ["minor"],
+      "matchCurrentVersion": "/^[~^=<>]*v?0\\./",
+      "groupName": null
+    },
+    {
+      "description": "The SDK and exporters only compile against the matching opentelemetry release: bumped one at a time, each PR fails to build",
+      "matchPackageNames": ["opentelemetry*"],
+      "groupName": "opentelemetry"
+    },
+    {
+      "description": "`@astrojs/markdown-satteri` pins the `satteri` it runs plugins with, and `astro` and Starlight pin `@astrojs/markdown-satteri`: bumped alone, the config's mdast plugin is typed against a second `satteri` and fails",
+      "matchPackageNames": ["astro", "@astrojs/*", "satteri"],
+      "groupName": "astro"
+    },
+    {
+      "description": "The Rust toolchain `mise.toml` pins and the Dockerfile's `rust` builder image stay on one version",
+      "matchDepNames": ["rust"],
+      "groupName": "rust"
+    },
+    {
+      "description": "The hadolint hook runs the `hadolint` binary `mise.toml` pins: the hook revision and the binary stay on one release",
+      "matchDepNames": ["hadolint", "hadolint/hadolint"],
+      "groupName": "hadolint"
+    },
+    {
+      "description": "trivy-action runs its default Trivy, which is the one `mise.toml` pins for the pre-commit hook: one Trivy, one ruleset",
+      "matchDepNames": ["trivy", "aquasecurity/trivy-action"],
+      "groupName": "trivy"
+    },
+    {
+      "description": "The config validator hook and the Renovate image the workflow runs come from the same Renovate release",
+      "matchDepNames": ["ghcr.io/renovatebot/renovate", "renovatebot/pre-commit-hooks"],
+      "groupName": "renovate"
+    }
+  ]
+}
