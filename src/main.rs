@@ -16,6 +16,8 @@ mod pagination;
 mod rename;
 mod server;
 mod telemetry;
+#[cfg(test)]
+mod test_keys;
 mod tools;
 mod transport;
 
@@ -236,7 +238,7 @@ mod tests {
             "--upstream-oauth-client-id",
             "id",
             "--upstream-oauth-private-key",
-            "tests/fixtures/test_rsa_key.pem",
+            &crate::test_keys::keys().rsa_path,
             "--upstream-oauth-grant",
             "jwt-bearer",
         ]

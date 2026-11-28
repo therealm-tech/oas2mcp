@@ -452,14 +452,7 @@ pub(crate) mod tests {
         assert!(extract_traced_claims(&claims, &[]).is_empty());
     }
 
-    // A throwaway 2048-bit RSA keypair generated solely for these tests, with
-    // the matching JWK modulus. NOT a real credential — never used outside the
-    // test. The PEM lives in a fixture file (and is excluded from the
-    // detect-private-key hook) rather than inline so it cannot be mistaken for a
-    // leaked production key.
     pub(crate) const TEST_KID: &str = "test-key";
-    const TEST_N: &str = "pIrAmCcbgl0Z6Fmomx9TVpVhMiOjJOrtjzKHoKnV5pYyFz86Zpor4tHmK8inQB6ES7j2V-0cgnT-62g_wCCwJHS-jJY0GawNgkxPq_5zFSFBuhJjyGpQzofexEPP7Qof6ZQKRViNw5A64C-dkcgoixhOBS1TWk6mkDOgoYOv9q2IUM5saRYZIwQw7OU4hsKetZcq8gbmVSjbzPylFryaIu5Udlo4JxFt-7t0RG_N858nu6eBYR68KMlOZIqN4YsaaQBm6teCdOUUXxAww8Yuij0gbz_YXMSnu5A5Ooff8w83kQLJqPLJyyEb357CvCqZsDZmlp3LFVRRmNuDPUtTKQ";
-    const TEST_PRIV_PEM: &str = include_str!("../tests/fixtures/test_rsa_key.pem");
 
     pub(crate) fn test_authorizer() -> Authorizer {
         let jwks: JwkSet = serde_json::from_value(json!({
@@ -468,7 +461,7 @@ pub(crate) mod tests {
                 "use": "sig",
                 "alg": "RS256",
                 "kid": TEST_KID,
-                "n": TEST_N,
+                "n": crate::test_keys::keys().rsa_n,
                 "e": "AQAB",
             }]
         }))
@@ -553,7 +546,8 @@ pub(crate) mod tests {
         use jsonwebtoken::{EncodingKey, Header};
         let mut header = Header::new(Algorithm::RS256);
         header.kid = kid.map(str::to_string);
-        let key = EncodingKey::from_rsa_pem(TEST_PRIV_PEM.as_bytes()).expect("test key parses");
+        let key = EncodingKey::from_rsa_pem(crate::test_keys::keys().rsa_pem.as_bytes())
+            .expect("test key parses");
         jsonwebtoken::encode(&header, &claims, &key).expect("signing succeeds")
     }
 

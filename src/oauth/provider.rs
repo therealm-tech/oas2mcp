@@ -720,7 +720,7 @@ mod tests {
         assert!(provider.cached(&CacheKey::Client).is_none());
     }
 
-    /// A `private_key_jwt` client auth backed by the RSA fixture.
+    /// A `private_key_jwt` client auth backed by the RSA test key.
     fn private_key_jwt(audience: &str) -> ClientAuth {
         ClientAuth::PrivateKeyJwt {
             assertion: AssertionConfig {
@@ -731,11 +731,11 @@ mod tests {
             },
             key: Arc::new(
                 super::super::key::load(
-                    std::path::Path::new("tests/fixtures/test_rsa_key.pem"),
+                    std::path::Path::new(&crate::test_keys::keys().rsa_path),
                     crate::cli::SigningAlg::Rs256,
                     Some("kid-1".to_string()),
                 )
-                .expect("the RSA fixture loads"),
+                .expect("the RSA test key loads"),
             ),
         }
     }
@@ -795,8 +795,9 @@ mod tests {
         // key and be addressed to the AS. Claim-level coverage lives in
         // `assertion`; this checks the wire actually carried a usable one.
         let sent = form_field(&seen.body, "client_assertion").expect("an assertion was sent");
-        let key = jsonwebtoken::DecodingKey::from_rsa_components(RSA_N, "AQAB")
-            .expect("public key builds");
+        let key =
+            jsonwebtoken::DecodingKey::from_rsa_components(&crate::test_keys::keys().rsa_n, "AQAB")
+                .expect("public key builds");
         let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
         validation.set_audience(&[audience.as_str()]);
         let claims = jsonwebtoken::decode::<serde_json::Value>(&sent, &key, &validation)
@@ -836,16 +837,16 @@ mod tests {
         assert_ne!(first, second);
     }
 
-    /// A `jwt-bearer` grant signed with the RSA fixture, acting for whoever the
+    /// A `jwt-bearer` grant signed with the RSA test key, acting for whoever the
     /// caller turns out to be.
     fn delegating_provider(fake: &FakeAs, subject: SubjectSource) -> TokenProvider {
         let key = Arc::new(
             super::super::key::load(
-                std::path::Path::new("tests/fixtures/test_rsa_key.pem"),
+                std::path::Path::new(&crate::test_keys::keys().rsa_path),
                 crate::cli::SigningAlg::Rs256,
                 None,
             )
-            .expect("the RSA fixture loads"),
+            .expect("the RSA test key loads"),
         );
         TokenProvider::new(
             TokenConfig {
@@ -1136,7 +1137,4 @@ mod tests {
             "cache grew to {cached}, past the {MAX_CACHED_TOKENS} ceiling"
         );
     }
-
-    /// Modulus of the throwaway RSA fixture, to verify what the AS received.
-    const RSA_N: &str = "pIrAmCcbgl0Z6Fmomx9TVpVhMiOjJOrtjzKHoKnV5pYyFz86Zpor4tHmK8inQB6ES7j2V-0cgnT-62g_wCCwJHS-jJY0GawNgkxPq_5zFSFBuhJjyGpQzofexEPP7Qof6ZQKRViNw5A64C-dkcgoixhOBS1TWk6mkDOgoYOv9q2IUM5saRYZIwQw7OU4hsKetZcq8gbmVSjbzPylFryaIu5Udlo4JxFt-7t0RG_N858nu6eBYR68KMlOZIqN4YsaaQBm6teCdOUUXxAww8Yuij0gbz_YXMSnu5A5Ooff8w83kQLJqPLJyyEb357CvCqZsDZmlp3LFVRRmNuDPUtTKQ";
 }

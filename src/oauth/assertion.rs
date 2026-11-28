@@ -80,19 +80,7 @@ mod tests {
 
     use super::*;
     use crate::cli::SigningAlg;
-
-    /// The modulus of the throwaway RSA fixture in `tests/fixtures`, so the
-    /// assertion can be verified here with the matching public key. Same value
-    /// as `auth::tests::TEST_N` — if it ever drifts, these tests stop verifying.
-    const RSA_N: &str = "pIrAmCcbgl0Z6Fmomx9TVpVhMiOjJOrtjzKHoKnV5pYyFz86Zpor4tHmK8inQB6ES7j2V-0cgnT-62g_wCCwJHS-jJY0GawNgkxPq_5zFSFBuhJjyGpQzofexEPP7Qof6ZQKRViNw5A64C-dkcgoixhOBS1TWk6mkDOgoYOv9q2IUM5saRYZIwQw7OU4hsKetZcq8gbmVSjbzPylFryaIu5Udlo4JxFt-7t0RG_N858nu6eBYR68KMlOZIqN4YsaaQBm6teCdOUUXxAww8Yuij0gbz_YXMSnu5A5Ooff8w83kQLJqPLJyyEb357CvCqZsDZmlp3LFVRRmNuDPUtTKQ";
-
-    /// Public half of the throwaway EC fixture, to verify an `es256` assertion.
-    const EC_PUBLIC_PEM: &str = "\
------BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXGvAHlS6XVytLWduCmNUVGg0Gays
-F/crinjkiv2S3P1TaHq9KSGfuuuE0GC9lLm0odTYSg+bsG3StBziDwCr+w==
------END PUBLIC KEY-----
-";
+    use crate::test_keys::keys;
 
     fn config() -> AssertionConfig {
         AssertionConfig {
@@ -105,16 +93,17 @@ F/crinjkiv2S3P1TaHq9KSGfuuuE0GC9lLm0odTYSg+bsG3StBziDwCr+w==
 
     fn rsa_key(key_id: Option<&str>) -> SigningKey {
         super::super::key::load(
-            Path::new("tests/fixtures/test_rsa_key.pem"),
+            Path::new(&keys().rsa_path),
             SigningAlg::Rs256,
             key_id.map(str::to_string),
         )
-        .expect("the RSA fixture loads")
+        .expect("the RSA test key loads")
     }
 
-    /// Verify against the fixture's public key and return the claims.
+    /// Verify against the test key's public half and return the claims.
     fn verify_rsa(token: &str, audience: &str) -> Value {
-        let key = DecodingKey::from_rsa_components(RSA_N, "AQAB").expect("public key builds");
+        let key =
+            DecodingKey::from_rsa_components(&keys().rsa_n, "AQAB").expect("public key builds");
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_audience(&[audience]);
         validation.set_required_spec_claims(&["exp", "aud"]);
@@ -180,7 +169,8 @@ F/crinjkiv2S3P1TaHq9KSGfuuuE0GC9lLm0odTYSg+bsG3StBziDwCr+w==
     fn a_wrong_audience_fails_verification() {
         let config = config();
         let token = sign(&config, &rsa_key(None)).expect("signing succeeds");
-        let key = DecodingKey::from_rsa_components(RSA_N, "AQAB").expect("public key builds");
+        let key =
+            DecodingKey::from_rsa_components(&keys().rsa_n, "AQAB").expect("public key builds");
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_audience(&["https://other.example.com/token"]);
         assert!(
@@ -191,17 +181,13 @@ F/crinjkiv2S3P1TaHq9KSGfuuuE0GC9lLm0odTYSg+bsG3StBziDwCr+w==
 
     #[test]
     fn signs_with_an_ec_key_too() {
-        let key = super::super::key::load(
-            Path::new("tests/fixtures/test_ec_key.pem"),
-            SigningAlg::Es256,
-            None,
-        )
-        .expect("the EC fixture loads");
+        let key = super::super::key::load(Path::new(&keys().ec_path), SigningAlg::Es256, None)
+            .expect("the EC test key loads");
         let config = config();
         let token = sign(&config, &key).expect("signing with an EC key succeeds");
 
-        let decoding =
-            DecodingKey::from_ec_pem(EC_PUBLIC_PEM.as_bytes()).expect("EC public key builds");
+        let decoding = DecodingKey::from_ec_pem(keys().ec_public_pem.as_bytes())
+            .expect("EC public key builds");
         let mut validation = Validation::new(Algorithm::ES256);
         validation.set_audience(&[config.audience.as_str()]);
         let claims = decode::<Value>(&token, &decoding, &validation)
