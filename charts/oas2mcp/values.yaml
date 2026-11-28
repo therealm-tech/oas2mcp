@@ -130,6 +130,9 @@ oas2mcp:
       # -- Key in the resource holding the PEM bundle (also the mounted file name).
       key: ca-certificates.crt
 
+  # -- (int) Smallest RSA modulus, in bits, accepted for the OAuth client signing keys and the JWKS keys. Unset → the binary default (`2048`, the NIST minimum through 2030). A shorter signing key stops startup; a shorter JWKS key is ignored, so the tokens it signs are refused. Lower it only for a peer that cannot rotate its key: a shorter RSA key lets a well-funded attacker forge what it signs. Never below `1024`. Maps to `MIN_RSA_KEY_BITS`.
+  minRsaKeyBits: ~
+
   # -- Declare an MCP `outputSchema` on each tool whose success response has a JSON object body. Off by default: clients may then validate `structuredContent` against it, so an upstream that strays from its own OpenAPI document fails calls on the client side. Maps to `TOOL_OUTPUT_SCHEMA`.
   toolOutputSchema: false
 

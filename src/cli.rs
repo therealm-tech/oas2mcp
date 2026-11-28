@@ -11,6 +11,7 @@ use clap::{ArgAction, ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use regex::Regex;
 use url::Url;
 
+use crate::key_length::DEFAULT_MIN_RSA_KEY_BITS;
 use crate::rename::{DEFAULT_MAX_NAME_LEN, RenameRule};
 
 /// Signature algorithm for the JWT client assertions of RFC 7523. Only
@@ -477,6 +478,25 @@ pub struct Cli {
         env = "UPSTREAM_OAUTH_TOKEN_AUDIENCE"
     )]
     pub upstream_oauth_token_audience: Option<String>,
+
+    /// Smallest RSA modulus, in bits, accepted for any RSA key: the
+    /// `--openapi-oauth-private-key` and `--upstream-oauth-private-key` signing
+    /// keys, and the keys of the inbound JWKS. Defaults to 2048, the NIST
+    /// minimum through 2030. A signing key below it stops startup; a JWKS key
+    /// below it is ignored with a warning, so the tokens it signs are refused.
+    ///
+    /// Lower it only to interoperate with a peer that cannot rotate to a longer
+    /// key: a shorter RSA key is within reach of a well-funded attacker, who
+    /// could then forge the tokens or assertions it signs. Keys under 1024 bits
+    /// are never accepted.
+    #[arg(
+        global = true,
+        long = "min-rsa-key-bits",
+        env = "MIN_RSA_KEY_BITS",
+        default_value_t = DEFAULT_MIN_RSA_KEY_BITS,
+        value_parser = clap::value_parser!(u32).range(1024..)
+    )]
+    pub min_rsa_key_bits: u32,
 
     /// Base OTLP endpoint to push tool-call metrics to over HTTP/protobuf (e.g.
     /// `http://localhost:4318`). When set, metrics are exported to this
@@ -987,6 +1007,20 @@ mod tests {
                 "{rule}"
             );
         }
+    }
+
+    #[test]
+    fn the_rsa_minimum_defaults_to_2048_and_never_goes_below_1024() {
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("bare invocation parses");
+        assert_eq!(cli.min_rsa_key_bits, 2048);
+
+        let cli = Cli::try_parse_from(["oas2mcp", "--min-rsa-key-bits", "1024"])
+            .expect("the escape hatch parses");
+        assert_eq!(cli.min_rsa_key_bits, 1024);
+
+        let err = Cli::try_parse_from(["oas2mcp", "--min-rsa-key-bits", "512"])
+            .expect_err("a minimum below 1024 is refused");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
     }
 
     #[test]

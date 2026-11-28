@@ -10,6 +10,7 @@ mod cli;
 mod filter;
 mod healthcheck;
 mod http;
+mod key_length;
 mod oauth;
 mod openapi;
 mod pagination;

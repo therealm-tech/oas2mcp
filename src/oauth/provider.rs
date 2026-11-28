@@ -740,6 +740,7 @@ mod tests {
                     std::path::Path::new(&crate::test_keys::keys().rsa_path),
                     crate::cli::SigningAlg::Rs256,
                     Some("kid-1".to_string()),
+                    crate::key_length::DEFAULT_MIN_RSA_KEY_BITS,
                 )
                 .expect("the RSA test key loads"),
             ),
@@ -851,6 +852,7 @@ mod tests {
                 std::path::Path::new(&crate::test_keys::keys().rsa_path),
                 crate::cli::SigningAlg::Rs256,
                 None,
+                crate::key_length::DEFAULT_MIN_RSA_KEY_BITS,
             )
             .expect("the RSA test key loads"),
         );

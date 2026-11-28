@@ -317,6 +317,10 @@ spec:
             - name: CA_CERT_FILE
               value: /etc/oas2mcp-ca-certs/{{ include "oas2mcp.caCertsKey" . }}
             {{- end }}
+            {{- with .Values.oas2mcp.minRsaKeyBits }}
+            - name: MIN_RSA_KEY_BITS
+              value: {{ . | quote }}
+            {{- end }}
             {{- with .Values.oas2mcp.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -1386,6 +1386,7 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "futures",
+ "getrandom 0.4.3",
  "http",
  "http-body",
  "humantime",
