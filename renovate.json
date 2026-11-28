@@ -6,7 +6,8 @@
     "enabled": true,
     "title": "Dependency dashboard"
   },
-  "prConcurrentLimit": 5,
+  "prConcurrentLimit": 0,
+  "prHourlyLimit": 0,
   "minimumReleaseAge": "3 days",
   "lockFileMaintenance": {
     "enabled": true
@@ -21,6 +22,7 @@
     "**/.config/mise/locks/**"
   ],
   "labels": ["dependencies"],
+  "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
     "labels": ["security"]
   },
