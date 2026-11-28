@@ -2,6 +2,9 @@
 **/*.rs.bk
 *.pdb
 
+# The docs site's coverage report; Rust's lands under /target.
+/docs/coverage/
+
 # Python bytecode from the end-to-end harness.
 __pycache__/
 

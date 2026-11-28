@@ -31,6 +31,22 @@ tasks:
     cmds:
       - cargo test --all --locked {{.CLI_ARGS}}
 
+  coverage:
+    desc: Run the unit, in-process and docs site tests and measure their coverage
+    deps:
+      - docs:deps
+    cmds:
+      - cargo llvm-cov --workspace --all-targets --locked {{.CLI_ARGS}}
+      - cargo llvm-cov report --html
+      - mkdir -p docs/coverage
+      - npm --prefix docs run coverage | tee docs/coverage/summary.txt
+
+  coverage:summary:
+    desc: Print the summary of the last coverage run
+    cmds:
+      - cargo llvm-cov report
+      - sed -n '/start of coverage report/,/end of coverage report/p' docs/coverage/summary.txt
+
   e2e:
     desc: Run the end-to-end suite against the Keycloak on localhost:8080
     cmds:
