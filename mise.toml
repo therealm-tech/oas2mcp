@@ -22,7 +22,7 @@ rust = { version = "1.100.0", components = [
 shellcheck = "0.11.0"
 task = "3.54.0"
 # The version trivy-action runs in `security` and `build`: one Trivy, one ruleset.
-trivy = "0.70.0"
+trivy = "0.76.2"
 
 [settings]
 lockfile = true
