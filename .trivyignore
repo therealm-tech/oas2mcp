@@ -1,0 +1,4 @@
+# No CPU limit: a limit throttles a compressible resource.
+KSV-0011
+# The namespace comes from `helm install --namespace`.
+KSV-0110

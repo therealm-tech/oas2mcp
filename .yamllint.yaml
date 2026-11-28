@@ -1,0 +1,27 @@
+extends: default
+
+ignore:
+  # Go templates, not YAML until rendered.
+  - charts/*/templates/
+  - docs/node_modules/
+
+rules:
+  # No `---` opening a file. A multi-document file needs its own `ignore` here.
+  document-start:
+    present: false
+  # Block style only; `non-empty` still allows `{}` and `[]`.
+  braces:
+    forbid: non-empty
+  brackets:
+    forbid: non-empty
+  # A digest or SHA pin and a helm-docs annotation are long by construction.
+  line-length: disable
+  # A GitHub workflow's `on:` key reads as a boolean in YAML 1.1.
+  truthy:
+    allowed-values:
+      - 'true'
+      - 'false'
+    check-keys: false
+  # A pin comment may follow its SHA after a single space.
+  comments:
+    min-spaces-from-content: 1
