@@ -29,7 +29,7 @@ jobs:
       contents: read
       # Publishing the SARIF report to the Security tab.
       security-events: write
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       # Trivy renders the chart itself, but only once it has the values the
       # templates require. Without this it logs a render error and scans no
@@ -93,7 +93,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
