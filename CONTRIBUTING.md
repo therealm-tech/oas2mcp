@@ -70,6 +70,16 @@ The [end-to-end suite](tests/e2e/README.md) drives the real binary against a
 Keycloak container and a sandbox API; it needs Docker and Python 3. Its README
 has the full sequence.
 
+Measure the coverage of the unit, in-process and
+[docs site](#writing-the-documentation) tests, with no threshold to meet:
+
+```bash
+task coverage
+```
+
+The Rust HTML report lands in `target/llvm-cov/html/`, and the docs site's
+LCOV report in `docs/coverage/lcov.info`.
+
 A new behaviour comes with tests, and a fix with a test that fails without it.
 
 ## Writing the documentation
@@ -154,6 +164,7 @@ request and say why.
 | Workflow | Purpose | Reproduce locally |
 | --- | --- | --- |
 | [`quality`](.github/workflows/quality.yaml) | pre-commit, unit tests, docs site tests, end-to-end suite | `task lint`, `task test`, `task docs:test`, `task e2e` |
+| [`coverage`](.github/workflows/coverage.yaml) | test coverage report, not required | `task coverage` |
 | [`build`](.github/workflows/build.yaml) | multi-arch image build and Trivy image scan | `docker build .`, then the image scan below |
 | [`security`](.github/workflows/security.yaml) | Trivy scan of the code, and daily of the latest release image | the scans below |
 | [`docs`](.github/workflows/docs.yaml) | build every version of the documentation site, deploy it from `main` | `task docs` |

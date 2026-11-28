@@ -1,0 +1,63 @@
+name: coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - name: check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: install the tools
+        uses: jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78  # v5.3.0
+        with:
+          version: 2026.11.10
+          cache: false
+          install_args: aqua:taiki-e/cargo-llvm-cov node rust task
+
+      - name: cache cargo build artifacts
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: measure the coverage
+        run: task coverage
+
+      - name: write the summary to the job summary
+        run: |
+          {
+            echo '## Test coverage'
+            echo '```text'
+            task --silent coverage:summary
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: upload the Rust HTML report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: coverage-html
+          path: target/llvm-cov/html
+          if-no-files-found: error
+
+      # `node --test` writes no HTML report.
+      - name: upload the docs site LCOV report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: coverage-docs-lcov
+          path: docs/coverage/lcov.info
+          if-no-files-found: error
