@@ -75,6 +75,8 @@ spec:
               value: "0.0.0.0:{{ .Values.oas2mcp.service.port }}"
             - name: LOG_FILTER
               value: {{ .Values.oas2mcp.logFilter | quote }}
+            - name: LOG_FORMAT
+              value: {{ .Values.oas2mcp.logFormat | quote }}
             {{- with .Values.oas2mcp.allowedHosts }}
             - name: ALLOWED_HOSTS
               value: {{ join "\n" . | quote }}

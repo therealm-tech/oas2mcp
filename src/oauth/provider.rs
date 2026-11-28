@@ -282,6 +282,12 @@ impl TokenProvider {
             .json()
             .await
             .context("parsing the OAuth token response")?;
+        tracing::debug!(
+            token_url = %config.token_url,
+            %status,
+            expires_in = ?token.expires_in,
+            "obtained OAuth token"
+        );
 
         let ttl = token.expires_in.map(Duration::from_secs);
         let mut refresh_at = Instant::now() + trust_window(ttl);

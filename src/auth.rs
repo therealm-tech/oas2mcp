@@ -269,9 +269,9 @@ async fn load_jwks(cli: &Cli, inbound: &InboundArgs) -> anyhow::Result<Option<Jw
         (None, None) => return Ok(None),
     };
 
-    serde_json::from_slice(&bytes)
-        .map(Some)
-        .context("parsing the JWKS document")
+    let jwks: JwkSet = serde_json::from_slice(&bytes).context("parsing the JWKS document")?;
+    tracing::debug!(keys = jwks.keys.len(), "loaded JWKS");
+    Ok(Some(jwks))
 }
 
 /// The primary verification algorithm for a JWK, picked from its key type.

@@ -103,6 +103,7 @@ impl DocAuth {
             .bytes()
             .await
             .with_context(|| format!("reading OpenAPI response body from {url}"))?;
+        tracing::debug!(%url, bytes = bytes.len(), "fetched OpenAPI document");
 
         parse(&bytes).with_context(|| format!("parsing OpenAPI document from {url}"))
     }
