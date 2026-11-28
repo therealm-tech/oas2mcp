@@ -1,9 +1,11 @@
 # Contributing
 
-Issues and pull requests are welcome on
-[GitHub](https://github.com/therealm-tech/oas2mcp). For running and configuring
-`oas2mcp` itself, see the [documentation](https://oas2mcp.therealm.tech/);
-for how it is built, see
+Report a bug or request a feature on the
+[issue tracker](https://github.com/therealm-tech/oas2mcp/issues), and send
+changes as pull requests. A vulnerability goes through
+[SECURITY.md](SECURITY.md) instead, never a public issue. For running and
+configuring `oas2mcp` itself, see the
+[documentation](https://oas2mcp.therealm.tech/); for how it is built, see
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Development setup
@@ -157,11 +159,19 @@ request and say why.
 | [`docs`](.github/workflows/docs.yaml) | build every version of the documentation site, deploy it from `main` | `task docs` |
 | [`release`](.github/workflows/release.yaml) | publish the image and the GitHub Release from a `vX.Y.Z` tag | — (publish only) |
 | [`chart`](.github/workflows/chart.yaml) | publish the chart from a `chart-X.Y.Z` tag | — (publish only) |
+| [`scorecard`](.github/workflows/scorecard.yaml) | OpenSSF Scorecard grade of the repository, weekly and on `main` | — (graded by the Scorecard API) |
 
-A pull request merges with every check green. What may surprise you:
+`main` only takes changes through a pull request, and a pull request merges
+once these checks are green: `pre-commit`, `test`, `docs-test` and `e2e` from
+`quality`, and `fs` from `security`. Every other check is informational, and
+`scorecard` never runs on a pull request. What may surprise you:
 
 - `build` and `docs` only run when their inputs change; the path filters are
   at the top of each file.
+- Renaming, adding or removing a job of `quality` or `security` changes the
+  required checks: the ruleset on `main` is updated once the pull request's
+  CI has reported the new names, before it merges, or every pull request
+  waits on a check that never comes.
 - `security` also runs daily against the published image of the latest
   release, so it can go red with no change of yours: a new CVE landed on an
   image nobody rebuilt.
@@ -227,7 +237,9 @@ docs to a stable chart. Run `task release -- --help` for the rest.
 Pushing is what publishes: the tags trigger
 [`release`](.github/workflows/release.yaml) and
 [`chart`](.github/workflows/chart.yaml). Any answer but `y`, or no terminal,
-leaves the commit and tags local and prints the push command. Both workflows
+leaves the commit and tags local and prints the push command. The push
+lands on `main` without a pull request, which only a repository admin may
+do: the ruleset on `main` lets admins bypass it for this. Both workflows
 refuse a tag that disagrees with the committed version, so a hand-made tag
 fails before anything is published.
 

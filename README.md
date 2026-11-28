@@ -4,6 +4,8 @@
 
 # oas2mcp
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/therealm-tech/oas2mcp/badge)](https://scorecard.dev/viewer/?uri=github.com/therealm-tech/oas2mcp)
+
 Load an [OpenAPI](https://www.openapis.org/) document at startup and expose
 every operation it describes as a tool of a
 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server.
