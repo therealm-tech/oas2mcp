@@ -54,6 +54,19 @@ tasks:
       - cargo build --locked
       - tests/e2e/harness.sh
 
+  e2e:image:
+    desc: Run the end-to-end suite against a container image (OAS2MCP_IMAGE=oas2mcp:e2e)
+    # Not `IMAGE`: Task reads the environment as variables, and `build.yaml` sets
+    # that one to the registry repository.
+    vars:
+      OAS2MCP_IMAGE: '{{.OAS2MCP_IMAGE | default "oas2mcp:e2e"}}'
+    preconditions:
+      - sh: docker image inspect {{.OAS2MCP_IMAGE}}
+        msg: "no image {{.OAS2MCP_IMAGE}}: build it with `docker build -t {{.OAS2MCP_IMAGE}} .`"
+    cmds:
+      - python3 -m pip install --quiet --requirement tests/e2e/requirements.txt
+      - OAS2MCP_IMAGE={{.OAS2MCP_IMAGE}} tests/e2e/harness.sh
+
   docs:
     desc: Build every version of the documentation site
     deps:

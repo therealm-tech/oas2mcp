@@ -232,9 +232,9 @@ def main() -> int:
     )
 
     print("\n=== the inbound Host header is validated ===")
-    # The harness binds loopback and sets no `--allowed-host`, so the DNS
-    # rebinding protection is on: a request arriving under someone else's
-    # hostname is refused before it reaches any tool.
+    # The DNS rebinding protection is on, from the loopback bind of the local
+    # binary or the `--allowed-host` the image is given: a request arriving under
+    # someone else's hostname is refused before it reaches any tool.
     forged, _ = mcp_http(host="evil.example", token=alice)
     check("a forged Host is rejected", forged == 403, f"HTTP {forged}")
     allowed, _ = mcp_http(host=MCP.split("//", 1)[1].split("/", 1)[0], token=alice)

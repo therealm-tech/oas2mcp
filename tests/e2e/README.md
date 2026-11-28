@@ -27,10 +27,11 @@ against a real implementation.
 | Keycloak | container (GitHub Actions `services:`) | the thing under test needs a real one |
 | The external provider | **not a service** | Keycloak holds its public key directly, so nothing is fetched; the suite mints assertions with the matching private key |
 | sandbox API | `uvicorn` process | needs the repo, so it cannot be a service container |
-| oas2mcp | `cargo build` binary | ditto |
+| oas2mcp | `cargo build` binary, or a [container image](#against-the-container-image) | `OAS2MCP_IMAGE` picks |
 
-Keeping Keycloak as the only container is deliberate: it is what lets the suite
-run as a single GHA service with no image to publish and no compose file.
+With the binary, Keycloak is the only container: it is what lets the suite run as
+a single GHA service with no compose file. The sandbox API serves HTTPS under a
+CA generated for the run, which oas2mcp trusts through `--ca-cert`.
 
 ## Running it locally
 
@@ -76,6 +77,37 @@ docker rm -f kc-e2e
 The harness imports the realm, starts the API and oas2mcp, runs the suite, and
 dumps every log on failure. It is idempotent: rerun it against a live Keycloak
 and the realm is replaced.
+
+## Against the container image
+
+`OAS2MCP_IMAGE` makes the harness run that image instead of the local binary,
+with the same scenario. With Keycloak and the virtual environment set up as
+above, build the image:
+
+```bash
+docker build -t oas2mcp:e2e .
+```
+
+Run the suite against it:
+
+```bash
+PYTHON=.venv/bin/python OAS2MCP_IMAGE=oas2mcp:e2e tests/e2e/harness.sh
+```
+
+On top of the suite, this checks what only exists in the image:
+
+- **outbound TLS and DNS**: the API is reached over HTTPS under a name that only
+  Docker's DNS server resolves;
+- **the runtime user**: the server process runs as UID 65532, and reads its
+  mounted files as such;
+- **the health check**: the image's own `HEALTHCHECK` reports it healthy, on the
+  image's default bind address.
+
+oas2mcp joins the network namespace of a relay container on a bridge network of
+its own. There `localhost:8080` forwards to the host's Keycloak, so the issuer
+is the one every token already names, and the API's name is the relay's network
+alias, forwarded to the host too. In this mode the sandbox API listens on every
+interface of the host, and `KEYCLOAK_URL` must be a `localhost` URL with a port.
 
 ## The realm
 
