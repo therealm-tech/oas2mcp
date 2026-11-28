@@ -118,42 +118,34 @@ npm --prefix docs test
 
 ## Pre-commit hooks
 
-Install the hooks once, then every commit runs them:
-
-```bash
-pre-commit install
-```
+`task setup` installs the hooks, which every commit then runs. They must pass
+before a commit is pushed.
 
 Run them all, or one while iterating:
 
 ```bash
-pre-commit run --all-files
+task lint
 ```
 
 ```bash
 pre-commit run cargo-clippy --all-files
 ```
 
-| Hook | Checks | Fix |
-| --- | --- | --- |
-| `trailing-whitespace`, `end-of-file-fixer` | whitespace | fixes itself; re-stage |
-| `check-yaml`, `check-merge-conflict`, `check-added-large-files` | file sanity | by hand |
-| `detect-private-key` | committed keys (test fixtures excluded) | remove the key |
-| `cargo-fmt` | Rust formatting | `cargo fmt --all` |
-| `cargo-clippy` | Rust lints, warnings denied | by hand |
-| `shellcheck` | shell scripts | by hand |
-| `actionlint` | GitHub workflows | by hand |
-| `helm-lint` | the chart renders | by hand |
-| `helm-docs` | the chart README matches `values.yaml` | fixes itself; re-stage |
-| `hadolint` | the `Dockerfile` | by hand |
-| `trivy-config` | `Dockerfile` and rendered chart misconfigurations, HIGH and CRITICAL | by hand |
-| `biome` | documentation site formatting and lints | `npm --prefix docs exec biome check --write .` |
-| `astro-check` | documentation site types and content frontmatter | by hand |
+[`.pre-commit-config.yaml`](.pre-commit-config.yaml) lists the hooks. The ones
+whose failure needs explaining:
 
-The same hooks run in CI, so `--no-verify` or `SKIP=` only moves the failure
-somewhere slower. If a rule is wrong for this repository, change
-[`.pre-commit-config.yaml`](.pre-commit-config.yaml) in the same pull request
-and say why.
+| Hook | When it fails |
+| --- | --- |
+| `no-co-authors` | the commit message has a `Co-Authored-By:` trailer or a `Generated with` line: rewrite it. It runs at `commit-msg` only, so neither `task lint` nor CI runs it; in a clone whose hooks predate it, run `pre-commit install` once |
+| `helm-docs` | it regenerated the chart README from `values.yaml`: stage the result |
+| `trivy-config` | fix the `Dockerfile` or chart finding, whatever its severity; [`.trivyignore`](.trivyignore) holds the accepted ones, each with its reason |
+| `biome` | `npm --prefix docs exec biome check --write .` applies the safe fixes. Like `astro-check`, it needs the site's dependencies, which `task lint` installs |
+| `astro-check` | fix the type or content frontmatter error it reports |
+
+The same hooks, `commit-msg` aside, run in CI, so `--no-verify` or `SKIP=` only
+moves the failure somewhere slower. If a rule is wrong for this repository,
+change [`.pre-commit-config.yaml`](.pre-commit-config.yaml) in the same pull
+request and say why.
 
 ## Continuous integration
 
@@ -183,11 +175,12 @@ since that release, rc tags included.
 
 ### Security scanning
 
-[Trivy](https://trivy.dev) runs in four places. The CI scans fail on a **HIGH**
-or **CRITICAL** finding that has a fix available:
+[Trivy](https://trivy.dev) runs in four places. The `security` and `build` gates
+fail on a **HIGH** or **CRITICAL** finding that has a fix available:
 
 - **the `trivy-config` pre-commit hook** — `Dockerfile` and Helm chart
-  misconfigurations, at commit time: they only change with the code.
+  misconfigurations of any severity, at commit time: they only change with the
+  code.
 - **security / fs** — a filesystem scan of the repository: crate advisories
   from `Cargo.lock` and leaked secrets.
 - **security / image** — daily, the image of the latest release as published

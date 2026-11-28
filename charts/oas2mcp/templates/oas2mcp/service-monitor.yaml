@@ -3,7 +3,6 @@
 {{- fail "oas2mcp.metrics.prometheus.enabled must be true to create a ServiceMonitor (it scrapes the /metrics endpoint)" }}
 {{- end }}
 {{- $sm := .Values.oas2mcp.metrics.prometheus.serviceMonitor }}
----
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

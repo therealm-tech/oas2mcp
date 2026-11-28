@@ -12,6 +12,7 @@ rust = { version = "1.100.0", components = [
   "rustfmt",
   "clippy",
 ], profile = "minimal" }
+# actionlint runs it on the `run:` scripts; the pre-commit hook ships its own.
 shellcheck = "0.11.0"
 task = "3.54.0"
 # The version trivy-action runs in `security` and `build`: one Trivy, one ruleset.

@@ -1,15 +1,20 @@
----
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        args:
+          - --allow-multiple-documents
         # Helm templates are Go-templated, not plain YAML.
-        exclude: ^charts/.*/templates/
+        exclude: ^charts/[^/]+/templates/
       - id: check-added-large-files
-        exclude: ^docs/package-lock\.json$
+        exclude: ^(Cargo\.lock|docs/package-lock\.json)$
       - id: check-merge-conflict
       - id: detect-private-key
         # Throwaway RSA and EC keys used only by the unit tests, never real
@@ -22,8 +27,31 @@ repos:
     hooks:
       - id: check-taskfile
 
+  - repo: https://github.com/adrienverge/yamllint
+    rev: cba56bcde1fdd01c1deb3f945e69764c291a6530  # frozen: v1.38.0
+    hooks:
+      - id: yamllint
+        # Without it, warnings (`document-start` among them) pass the hook.
+        args:
+          - --strict
+        exclude: ^charts/[^/]+/templates/
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: 745eface02aef23e168a8afb6b5737818efbea95  # frozen: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
   - repo: local
     hooks:
+      - id: no-co-authors
+        name: no co-authors in commit message
+        entry: '^\s*co-authored-by:|\bgenerated with\b'
+        language: pygrep
+        args:
+          - --ignore-case
+        stages:
+          - commit-msg
+
       - id: mise-fmt
         name: mise fmt
         entry: mise fmt
@@ -46,13 +74,6 @@ repos:
         types:
           - rust
         pass_filenames: false
-
-      - id: shellcheck
-        name: shellcheck
-        entry: shellcheck
-        language: system
-        types:
-          - shell
 
       - id: actionlint
         name: actionlint
@@ -83,11 +104,11 @@ repos:
         name: trivy config
         entry: >-
           bash -c 'for target in Dockerfile charts/oas2mcp; do
-          trivy config --quiet --exit-code 1 --severity HIGH,CRITICAL
+          trivy config --quiet --exit-code 1
           --helm-values charts/oas2mcp/values-lint.yaml --config-data .trivy "$target" || exit 1;
           done'
         language: system
-        files: ^(Dockerfile|charts/oas2mcp/|\.trivy/)
+        files: ^(Dockerfile|charts/oas2mcp/|\.trivy/|\.trivyignore$)
         pass_filenames: false
 
       # Biome from the docs site's own lockfile rather than biomejs/pre-commit,
@@ -108,7 +129,7 @@ repos:
         pass_filenames: false
 
   - repo: https://github.com/hadolint/hadolint
-    rev: v2.15.1
+    rev: 2eece55955ced00200be9729e9728cb7dacca505  # frozen: v2.15.1
     hooks:
       # `language: system` — needs the `hadolint` binary on PATH (installed in CI).
       - id: hadolint
