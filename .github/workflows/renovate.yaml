@@ -1,0 +1,61 @@
+name: renovate
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: Dry-run mode; any ref other than `main` is always dry-run, with `full` when `off` is chosen
+        type: choice
+        default: "off"
+        options:
+          - "off"
+          - extract
+          - lookup
+          - full
+      logLevel:
+        description: Renovate log level
+        type: choice
+        default: info
+        options:
+          - info
+          - debug
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    name: renovate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      RENOVATE_REPOSITORIES: ${{ github.repository }}
+      RENOVATE_ONBOARDING: "false"
+      RENOVATE_REQUIRE_CONFIG: required
+      # Dispatched on another branch, Renovate reads that branch's
+      # `renovate.json` and works against it, and only ever dry-runs: that is
+      # how a config change is tried before it merges.
+      RENOVATE_BASE_BRANCH_PATTERNS: ${{ github.ref != 'refs/heads/main' && github.ref_name || '' }}
+      RENOVATE_USE_BASE_BRANCH_CONFIG: merge
+      RENOVATE_DRY_RUN: >-
+        ${{ inputs.dryRun && inputs.dryRun != 'off' && inputs.dryRun
+        || github.ref != 'refs/heads/main' && 'full' || '' }}
+      LOG_LEVEL: ${{ inputs.logLevel || 'info' }}
+      # Updating `mise.lock` runs `mise lock`, which Renovate refuses by
+      # default and then leaves both `mise.toml` and `mise.lock` untouched.
+      RENOVATE_ALLOWED_UNSAFE_EXECUTIONS: mise
+    steps:
+      - name: run Renovate
+        uses: renovatebot/github-action@1376d90bcd3a4d4e7393ae762eea56ac684aee38  # v48.0.0
+        with:
+          # A PR opened with `GITHUB_TOKEN` triggers no workflow, so it would
+          # arrive with no CI; the job's own token stays read-only.
+          token: ${{ secrets.RENOVATE_TOKEN }}
+          renovate-image: ghcr.io/renovatebot/renovate:45.3.2@sha256:d0358088501c7665688673c8932474b02517941703a16e970e8b4fcf235299cb

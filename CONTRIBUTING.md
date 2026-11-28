@@ -171,6 +171,7 @@ request and say why.
 | [`release`](.github/workflows/release.yaml) | publish the image and the GitHub Release from a `vX.Y.Z` tag | — (publish only) |
 | [`chart`](.github/workflows/chart.yaml) | publish the chart from a `chart-X.Y.Z` tag | — (publish only) |
 | [`scorecard`](.github/workflows/scorecard.yaml) | OpenSSF Scorecard grade of the repository, weekly and on `main` | — (graded by the Scorecard API) |
+| [`renovate`](.github/workflows/renovate.yaml) | daily dependency update pull requests, configured in [`renovate.json`](renovate.json) | dispatch it on your branch: it dry-runs that branch's `renovate.json` |
 
 `main` only takes changes through a pull request, and a pull request merges
 once these checks are green: `pre-commit`, `test`, `docs-test` and `e2e` from
@@ -190,6 +191,8 @@ once these checks are green: `pre-commit`, `test`, `docs-test` and `e2e` from
   every severity still goes to the repository's **Security** tab.
 - The publishing jobs need no secret: the workflow's `GITHUB_TOKEN` pushes to
   GHCR, and its OIDC token signs the attestations.
+- `renovate` opens its pull requests with the `RENOVATE_TOKEN` secret rather
+  than `GITHUB_TOKEN`, whose pull requests would trigger no CI.
 
 Reproduce the scans:
 
