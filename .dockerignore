@@ -1,6 +1,16 @@
 /target
 /.git
 /.github
+/.claude
+/.task
+/.env
+/mise.local.*
+/charts
+/docs
+/examples
+/scripts
+**/node_modules
+**/__pycache__
 **/*.log
 *.md
 .pre-commit-config.yaml
