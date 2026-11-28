@@ -175,8 +175,7 @@ Reproduce the scans:
 ```bash
 # What security / fs gates on:
 trivy fs . --scanners vuln,secret \
-  --severity HIGH,CRITICAL --ignore-unfixed \
-  --skip-files tests/fixtures/test_rsa_key.pem
+  --severity HIGH,CRITICAL --ignore-unfixed
 
 # What security / image gates on, against the latest release:
 trivy image ghcr.io/therealm-tech/oas2mcp:<version> --platform linux/amd64 \
