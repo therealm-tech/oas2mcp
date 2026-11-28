@@ -5,6 +5,7 @@
 # oas2mcp
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/therealm-tech/oas2mcp/badge)](https://scorecard.dev/viewer/?uri=github.com/therealm-tech/oas2mcp)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/17221/badge)](https://www.bestpractices.dev/projects/17221)
 
 Load an [OpenAPI](https://www.openapis.org/) document at startup and expose
 every operation it describes as a tool of a
