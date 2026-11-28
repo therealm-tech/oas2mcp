@@ -22,6 +22,7 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use crate::cli::{Cli, InboundArgs};
+use crate::key_length::rsa_modulus_bits;
 
 /// The role of a `--inbound-role-mapper` entry granting its tools to everyone,
 /// with or without a token.
@@ -100,6 +101,7 @@ impl Authorizer {
         let Some(jwks) = load_jwks(cli, inbound).await? else {
             return Ok(None);
         };
+        let jwks = without_short_rsa_keys(jwks, cli.min_rsa_key_bits);
         let (public, rules): (Vec<_>, Vec<_>) = parse_rules(&inbound.inbound_role_mapper)?
             .into_iter()
             .partition(|rule| rule.role == PUBLIC_ROLE);
@@ -278,6 +280,24 @@ async fn load_jwks(cli: &Cli, inbound: &InboundArgs) -> anyhow::Result<Option<Jw
     Ok(Some(jwks))
 }
 
+/// Drop the RSA keys whose modulus is shorter than `min_rsa_bits`, warning about
+/// each: a token one of them signs then matches no key and is refused.
+fn without_short_rsa_keys(mut jwks: JwkSet, min_rsa_bits: u32) -> JwkSet {
+    jwks.keys.retain(|jwk| match rsa_modulus_bits(jwk) {
+        Some(bits) if bits < min_rsa_bits => {
+            tracing::warn!(
+                kid = jwk.common.key_id.as_deref().unwrap_or("-"),
+                bits,
+                min_bits = min_rsa_bits,
+                "ignoring a JWKS key shorter than --min-rsa-key-bits; the tokens it signs are refused"
+            );
+            false
+        }
+        _ => true,
+    });
+    jwks
+}
+
 /// The primary verification algorithm for a JWK, picked from its key type.
 fn algorithm_for(jwk: &Jwk) -> anyhow::Result<Algorithm> {
     Ok(match &jwk.algorithm {
@@ -367,6 +387,8 @@ fn extract_traced_claims(claims: &Value, names: &[String]) -> Map<String, Value>
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::key_length::DEFAULT_MIN_RSA_KEY_BITS;
+    use crate::test_keys::{keys, rsa_1024, rsa_2048};
     use http::HeaderValue;
     use serde_json::json;
 
@@ -500,10 +522,16 @@ pub(crate) mod tests {
     }
 
     fn test_authorizer_with_jwk(jwk: &Value) -> Authorizer {
+        test_authorizer_with_min_rsa_bits(jwk, DEFAULT_MIN_RSA_KEY_BITS)
+    }
+
+    /// An authorizer whose JWKS holds `jwk` alone, filtered the way
+    /// [`Authorizer::from_cli`] filters it under `--min-rsa-key-bits`.
+    fn test_authorizer_with_min_rsa_bits(jwk: &Value, min_rsa_bits: u32) -> Authorizer {
         let jwks: JwkSet =
             serde_json::from_value(json!({ "keys": [jwk] })).expect("test JWKS parses");
         Authorizer {
-            jwks,
+            jwks: without_short_rsa_keys(jwks, min_rsa_bits),
             role_claim: "roles".into(),
             subject_claim: "sub".into(),
             expected_audiences: Vec::new(),
@@ -641,6 +669,65 @@ pub(crate) mod tests {
         // Unknown kid: no matching JWK.
         let unknown = sign(&json!(["admin"]), in_one_hour(), Some("other-key"));
         assert!(authz.verify(&unknown).is_err());
+    }
+
+    /// A token signed by the RSA key in `pem`, and a JWK carrying its modulus `n`.
+    fn token_and_jwk_for(pem: &str, n: &str) -> (String, Value) {
+        let encoding =
+            jsonwebtoken::EncodingKey::from_rsa_pem(pem.as_bytes()).expect("test key parses");
+        let token = sign_with(
+            Algorithm::RS256,
+            &encoding,
+            &json!({ "sub": "user-123", "exp": in_one_hour() }),
+            Some(TEST_KID),
+        );
+        (token, test_jwk(&json!({ "n": n })))
+    }
+
+    #[test]
+    fn a_1024_bit_jwks_key_is_ignored_by_default() {
+        let (token, jwk) = token_and_jwk_for(&rsa_1024().pem, &rsa_1024().n);
+        let authz = test_authorizer_with_jwk(&jwk);
+        let Err(err) = authz.verify(&token) else {
+            panic!("the token is refused");
+        };
+        let message = format!("{err:#}");
+        assert!(message.contains("no JWK in the set matches"), "{message}");
+    }
+
+    #[test]
+    fn a_1024_bit_jwks_key_verifies_once_the_minimum_is_lowered() {
+        let (token, jwk) = token_and_jwk_for(&rsa_1024().pem, &rsa_1024().n);
+        let authz = test_authorizer_with_min_rsa_bits(&jwk, 1024);
+        authz
+            .verify(&token)
+            .expect("a lowered minimum accepts the key");
+    }
+
+    #[test]
+    fn jwks_keys_of_2048_and_3072_bits_meet_the_default_minimum() {
+        for (pem, n) in [
+            (&rsa_2048().pem, &rsa_2048().n),
+            (&keys().rsa_pem, &keys().rsa_n),
+        ] {
+            let (token, jwk) = token_and_jwk_for(pem, n);
+            test_authorizer_with_jwk(&jwk)
+                .verify(&token)
+                .expect("the token verifies");
+        }
+    }
+
+    #[test]
+    fn the_minimum_leaves_non_rsa_jwks_keys_alone() {
+        let ec: JwkSet = serde_json::from_value(json!({ "keys": [{
+            "kty": "EC",
+            "crv": "P-256",
+            "kid": "ec",
+            "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+            "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+        }] }))
+        .expect("an EC JWKS parses");
+        assert_eq!(without_short_rsa_keys(ec, 4096).keys.len(), 1);
     }
 
     #[test]

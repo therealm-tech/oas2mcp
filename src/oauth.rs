@@ -116,6 +116,7 @@ struct GrantFlags<'a> {
     private_key: Option<&'a PathBuf>,
     key_id: Option<&'a String>,
     signing_alg: SigningAlg,
+    min_rsa_key_bits: u32,
     assertion_audience: Option<&'a String>,
     assertion_lifetime: Option<Duration>,
     scopes: &'a [String],
@@ -143,6 +144,7 @@ fn document_flags(cli: &Cli) -> Option<GrantFlags<'_>> {
         private_key: cli.openapi_oauth_private_key.as_ref(),
         key_id: cli.openapi_oauth_key_id.as_ref(),
         signing_alg: cli.openapi_oauth_signing_alg,
+        min_rsa_key_bits: cli.min_rsa_key_bits,
         assertion_audience: cli.openapi_oauth_assertion_audience.as_ref(),
         assertion_lifetime: cli.openapi_oauth_assertion_lifetime,
         scopes: &cli.openapi_oauth_scopes,
@@ -161,6 +163,7 @@ fn upstream_flags(cli: &Cli) -> Option<GrantFlags<'_>> {
         private_key: cli.upstream_oauth_private_key.as_ref(),
         key_id: cli.upstream_oauth_key_id.as_ref(),
         signing_alg: cli.upstream_oauth_signing_alg,
+        min_rsa_key_bits: cli.min_rsa_key_bits,
         assertion_audience: cli.upstream_oauth_assertion_audience.as_ref(),
         assertion_lifetime: cli.upstream_oauth_assertion_lifetime,
         scopes: &cli.upstream_oauth_scopes,
@@ -216,8 +219,13 @@ impl TokenConfig {
                  pick one way to authenticate the client"
             ),
             (Some(path), None) => {
-                let key = key::load(path, flags.signing_alg, flags.key_id.cloned())
-                    .context("loading the OAuth client signing key")?;
+                let key = key::load(
+                    path,
+                    flags.signing_alg,
+                    flags.key_id.cloned(),
+                    flags.min_rsa_key_bits,
+                )
+                .context("loading the OAuth client signing key")?;
                 ClientAuth::PrivateKeyJwt {
                     assertion: AssertionConfig {
                         // RFC 7523 §3: for client authentication the assertion

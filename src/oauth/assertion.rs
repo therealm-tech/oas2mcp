@@ -80,6 +80,7 @@ mod tests {
 
     use super::*;
     use crate::cli::SigningAlg;
+    use crate::key_length::DEFAULT_MIN_RSA_KEY_BITS;
     use crate::test_keys::keys;
 
     fn config() -> AssertionConfig {
@@ -96,6 +97,7 @@ mod tests {
             Path::new(&keys().rsa_path),
             SigningAlg::Rs256,
             key_id.map(str::to_string),
+            DEFAULT_MIN_RSA_KEY_BITS,
         )
         .expect("the RSA test key loads")
     }
@@ -181,8 +183,13 @@ mod tests {
 
     #[test]
     fn signs_with_an_ec_key_too() {
-        let key = super::super::key::load(Path::new(&keys().ec_path), SigningAlg::Es256, None)
-            .expect("the EC test key loads");
+        let key = super::super::key::load(
+            Path::new(&keys().ec_path),
+            SigningAlg::Es256,
+            None,
+            DEFAULT_MIN_RSA_KEY_BITS,
+        )
+        .expect("the EC test key loads");
         let config = config();
         let token = sign(&config, &key).expect("signing with an EC key succeeds");
 

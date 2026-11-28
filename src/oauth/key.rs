@@ -8,10 +8,12 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::Context as _;
+use anyhow::{Context as _, bail};
+use jsonwebtoken::jwk::Jwk;
 use jsonwebtoken::{Algorithm, EncodingKey};
 
 use crate::cli::SigningAlg;
+use crate::key_length::rsa_modulus_bits;
 
 /// A private key ready to sign client assertions, with the algorithm and
 /// optional `kid` that go on every header signed with it.
@@ -28,8 +30,14 @@ enum Family {
     Ed,
 }
 
-/// Read and parse the signing key at `path`.
-pub fn load(path: &Path, alg: SigningAlg, key_id: Option<String>) -> anyhow::Result<SigningKey> {
+/// Read and parse the signing key at `path`, refusing an RSA key whose modulus
+/// is shorter than `min_rsa_bits`.
+pub fn load(
+    path: &Path,
+    alg: SigningAlg,
+    key_id: Option<String>,
+    min_rsa_bits: u32,
+) -> anyhow::Result<SigningKey> {
     let pem = fs::read(path).with_context(|| {
         format!(
             "reading the OAuth client private key from {}",
@@ -42,7 +50,8 @@ pub fn load(path: &Path, alg: SigningAlg, key_id: Option<String>) -> anyhow::Res
     // The parser is chosen by key family: handing an EC key to the RSA parser
     // fails with an opaque error, so the algorithm decides up front and the
     // error message can name what was expected.
-    let key = match family(alg) {
+    let family = family(alg);
+    let key = match family {
         Family::Rsa => EncodingKey::from_rsa_pem(&pem),
         Family::Ec => EncodingKey::from_ec_pem(&pem),
         Family::Ed => EncodingKey::from_ed_pem(&pem),
@@ -53,6 +62,9 @@ pub fn load(path: &Path, alg: SigningAlg, key_id: Option<String>) -> anyhow::Res
             path.display()
         )
     })?;
+    if matches!(family, Family::Rsa) {
+        check_rsa_length(path, &key, algorithm, min_rsa_bits)?;
+    }
 
     // Path, algorithm and `kid` only — never anything derived from the key.
     tracing::debug!(
@@ -66,6 +78,28 @@ pub fn load(path: &Path, alg: SigningAlg, key_id: Option<String>) -> anyhow::Res
         key_id,
         key,
     })
+}
+
+/// Refuse an RSA signing key shorter than `min_bits`.
+fn check_rsa_length(
+    path: &Path,
+    key: &EncodingKey,
+    algorithm: Algorithm,
+    min_bits: u32,
+) -> anyhow::Result<()> {
+    let bits = Jwk::from_encoding_key(key, algorithm)
+        .ok()
+        .as_ref()
+        .and_then(rsa_modulus_bits)
+        .with_context(|| format!("reading the RSA modulus of {}", path.display()))?;
+    if bits < min_bits {
+        bail!(
+            "{} holds a {bits}-bit RSA key, below the {min_bits}-bit minimum; rotate it to a \
+             longer key, or lower --min-rsa-key-bits (MIN_RSA_KEY_BITS) to accept it",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// The `jsonwebtoken` algorithm behind a CLI choice.
@@ -134,7 +168,10 @@ fn warn_on_loose_permissions(_path: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_keys::keys;
+    use crate::key_length::DEFAULT_MIN_RSA_KEY_BITS;
+    use crate::test_keys::{keys, rsa_1024, rsa_2048};
+
+    const MIN: u32 = DEFAULT_MIN_RSA_KEY_BITS;
 
     /// Assert the load failed and hand back the formatted error.
     ///
@@ -154,6 +191,7 @@ mod tests {
             Path::new(&keys().rsa_path),
             SigningAlg::Rs256,
             Some("kid-1".to_string()),
+            MIN,
         )
         .expect("the RSA test key loads");
         assert_eq!(key.algorithm, Algorithm::RS256);
@@ -164,13 +202,54 @@ mod tests {
     fn loads_an_ec_key_through_the_ec_parser() {
         // The whole point of picking a parser per family: an EC key must load
         // for `es256` and fail for `rs256`, not silently misbehave.
-        let key = load(Path::new(&keys().ec_path), SigningAlg::Es256, None)
+        let key = load(Path::new(&keys().ec_path), SigningAlg::Es256, None, MIN)
             .expect("the EC test key loads as es256");
         assert_eq!(key.algorithm, Algorithm::ES256);
         assert!(key.key_id.is_none());
 
-        let message = rejection(load(Path::new(&keys().ec_path), SigningAlg::Rs256, None));
+        let message = rejection(load(
+            Path::new(&keys().ec_path),
+            SigningAlg::Rs256,
+            None,
+            MIN,
+        ));
         assert!(message.contains("as a rs256 signing key"), "{message}");
+    }
+
+    #[test]
+    fn a_1024_bit_rsa_key_stops_startup_by_default() {
+        let message = rejection(load(
+            Path::new(&rsa_1024().path),
+            SigningAlg::Rs256,
+            None,
+            MIN,
+        ));
+        assert!(
+            message.contains("1024-bit RSA key, below the 2048-bit minimum"),
+            "{message}"
+        );
+        // The way out is named, so the operator need not dig through the docs.
+        assert!(message.contains("--min-rsa-key-bits"), "{message}");
+        assert!(message.contains("MIN_RSA_KEY_BITS"), "{message}");
+    }
+
+    #[test]
+    fn a_1024_bit_rsa_key_loads_once_the_minimum_is_lowered() {
+        load(Path::new(&rsa_1024().path), SigningAlg::Ps256, None, 1024)
+            .expect("a lowered minimum accepts the 1024-bit key");
+    }
+
+    #[test]
+    fn rsa_keys_of_2048_and_3072_bits_meet_the_default_minimum() {
+        for path in [&rsa_2048().path, &keys().rsa_path] {
+            load(Path::new(path), SigningAlg::Rs256, None, MIN).expect("the key loads");
+        }
+    }
+
+    #[test]
+    fn the_minimum_leaves_ec_keys_alone() {
+        load(Path::new(&keys().ec_path), SigningAlg::Es256, None, 4096)
+            .expect("an EC key is not measured against the RSA minimum");
     }
 
     #[test]
@@ -179,6 +258,7 @@ mod tests {
             Path::new("/definitely/not/a/key.pem"),
             SigningAlg::Rs256,
             None,
+            MIN,
         ));
         assert!(
             message.contains("reading the OAuth client private key"),
@@ -196,7 +276,7 @@ mod tests {
         let banner = ["-----BEGIN", "PRIVATE", "KEY-----"].join(" ");
         let path = std::env::temp_dir().join("oas2mcp-not-a-key.pem");
         fs::write(&path, format!("{banner}\nZ2FyYmFnZQ==\n")).expect("write temp file");
-        let message = rejection(load(&path, SigningAlg::Rs256, None));
+        let message = rejection(load(&path, SigningAlg::Rs256, None, MIN));
         let _ = fs::remove_file(&path);
 
         assert!(message.contains("PKCS#8 PEM expected"), "{message}");
