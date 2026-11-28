@@ -93,7 +93,7 @@ jobs:
       # `command` is what makes this possible: the Keycloak image has no default
       # CMD, so without it the container prints its usage and exits.
       keycloak:
-        image: quay.io/keycloak/keycloak:26.7.4
+        image: quay.io/keycloak/keycloak:26.7.4@sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c
         command: start-dev
         env:
           KC_BOOTSTRAP_ADMIN_USERNAME: admin

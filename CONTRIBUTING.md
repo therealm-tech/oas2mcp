@@ -68,7 +68,7 @@ cargo test protected_resource
 
 The [end-to-end suite](tests/e2e/README.md) drives the real binary against a
 Keycloak container and a sandbox API; it needs Docker and Python 3. Its README
-has the full sequence.
+has the full sequence, and how to run it against a container image instead.
 
 Measure the coverage of the unit, in-process and
 [docs site](#writing-the-documentation) tests, with no threshold to meet:
@@ -166,7 +166,7 @@ request and say why.
 | --- | --- | --- |
 | [`quality`](.github/workflows/quality.yaml) | pre-commit, unit tests, docs site tests, end-to-end suite | `task lint`, `task test`, `task docs:test`, `task e2e` |
 | [`coverage`](.github/workflows/coverage.yaml) | test coverage report, not required | `task coverage` |
-| [`build`](.github/workflows/build.yaml) | multi-arch image build and Trivy image scan | `docker build .`, then the image scan below |
+| [`build`](.github/workflows/build.yaml) | multi-arch image build, Trivy image scan, end-to-end suite against the amd64 image | `docker build -t oas2mcp:e2e .`, `task e2e:image`, then the image scan below |
 | [`security`](.github/workflows/security.yaml) | Trivy scan of the code, and daily of the latest release image | the scans below |
 | [`docs`](.github/workflows/docs.yaml) | build every version of the documentation site, deploy it from `main` | `task docs` |
 | [`release`](.github/workflows/release.yaml) | publish the image and the GitHub Release from a `vX.Y.Z` tag | — (publish only) |

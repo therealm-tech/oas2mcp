@@ -45,6 +45,14 @@
       "matchStrings": ["runner: (?<depName>ubuntu)-(?<currentValue>\\S+)"],
       "datasourceTemplate": "github-runners",
       "versioningTemplate": "docker"
+    },
+    {
+      "description": "Images a shell script runs, pinned in a variable under a renovate comment",
+      "customType": "regex",
+      "managerFilePatterns": ["/\\.sh$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>docker) depName=(?<depName>\\S+)\\s+[A-Z0-9_]+=\"[^:\"]+:(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
+      ]
     }
   ],
   "packageRules": [
