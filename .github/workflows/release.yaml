@@ -57,7 +57,7 @@ jobs:
       id-token: write
       attestations: write
       artifact-metadata: write
-    uses: ./.github/workflows/build.yaml
+    uses: $/.github/workflows/build.yaml
     with:
       push: true
       version: ${{ needs.version.outputs.version }}

@@ -153,6 +153,7 @@ whose failure needs explaining:
 | `trivy-config` | fix the `Dockerfile` or chart finding, whatever its severity; [`.trivyignore`](.trivyignore) holds the accepted ones, each with its reason |
 | `biome` | `npm --prefix docs exec biome check --write .` applies the safe fixes. Like `astro-check`, it needs the site's dependencies, which `task lint` installs |
 | `astro-check` | fix the type or content frontmatter error it reports |
+| `zizmor` | a workflow breaks GitHub's schema or a security rule (a `${{ }}` in a `run:` script, a broad permission, an unpinned action): fix the workflow, following the audit link it prints |
 
 The same hooks, `commit-msg` aside, run in CI, so `--no-verify` or `SKIP=` only
 moves the failure somewhere slower. If a rule is wrong for this repository,
