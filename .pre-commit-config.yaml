@@ -47,6 +47,19 @@ repos:
     hooks:
       - id: shellcheck
 
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: c7d31dc612dffdd4d3b2f2b88b9660d3ab057ee8  # frozen: v1.33.1
+    hooks:
+      - id: zizmor
+        # `--offline`: with a GitHub token in the environment zizmor runs its
+        # online audits, which fail without network or on a revoked token.
+        # `--strict-collection`: a workflow breaking the schema fails instead of
+        # being skipped. `args` replaces the hook's own `--no-progress`.
+        args:
+          - --offline
+          - --strict-collection
+          - --no-progress
+
   - repo: local
     hooks:
       - id: no-co-authors
@@ -80,14 +93,6 @@ repos:
         types:
           - rust
         pass_filenames: false
-
-      - id: actionlint
-        name: actionlint
-        entry: actionlint
-        language: system
-        types:
-          - yaml
-        files: ^\.github/workflows/
 
       - id: helm-lint
         name: helm lint

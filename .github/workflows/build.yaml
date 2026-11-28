@@ -163,10 +163,11 @@ jobs:
 
       - name: export digest
         if: ${{ inputs.push }}
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest='${{ steps.build.outputs.digest }}'
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
 
       - name: upload digest
         if: ${{ inputs.push }}
@@ -225,7 +226,9 @@ jobs:
             $(printf "${IMAGE}@sha256:%s " *)
 
       - name: inspect the manifest
-        run: docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 
       - name: read the manifest digest
         id: digest
