@@ -204,10 +204,13 @@ mod tests {
     #[test]
     fn the_wildcard_disables_the_check() {
         // Empty is how rmcp spells "accept anything".
-        assert!(resolve_allowed_hosts(addr("127.0.0.1:8000"), &[ANY_HOST.to_string()]).is_empty());
+        assert_eq!(
+            resolve_allowed_hosts(addr("127.0.0.1:8000"), &[ANY_HOST.to_string()]),
+            [""; 0]
+        );
         // It wins over its neighbours rather than being one more allowed name.
         let mixed = [ANY_HOST.to_string(), "mcp.example.com".to_string()];
-        assert!(resolve_allowed_hosts(addr("0.0.0.0:8000"), &mixed).is_empty());
+        assert_eq!(resolve_allowed_hosts(addr("0.0.0.0:8000"), &mixed), [""; 0]);
     }
 
     #[test]

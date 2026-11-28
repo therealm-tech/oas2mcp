@@ -375,6 +375,10 @@ impl ServerHandler for OpenApiServer {
         info
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the `ready(..)` rewrite would run the body before the future is polled"
+    )]
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
         tracing::info!("client initialized");
         // `initialize` always negotiates a version before 2026-07-28, so this
@@ -418,6 +422,10 @@ impl ServerHandler for OpenApiServer {
         Ok(())
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the `ready(..)` rewrite would run the body before the future is polled"
+    )]
     async fn list_tools(
         &self,
         request: Option<PaginatedRequestParams>,
@@ -428,6 +436,10 @@ impl ServerHandler for OpenApiServer {
         self.list_page(&access, cursor)
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the `ready(..)` rewrite would run the body before the future is polled"
+    )]
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -436,6 +448,10 @@ impl ServerHandler for OpenApiServer {
         Ok(self.openapi_resources())
     }
 
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the `ready(..)` rewrite would run the body before the future is polled"
+    )]
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
@@ -561,26 +577,25 @@ impl OpenApiServer {
                 // no token — never a quiet fall back to the client's own, which
                 // would hand this caller the broadest identity the server has.
                 let delegation = if provider.needs_caller_identity() {
-                    match &caller.identity {
-                        Some(identity) => Some(Delegation {
+                    if let Some(identity) = &caller.identity {
+                        Some(Delegation {
                             issuer: identity.issuer.as_deref(),
                             subject: &identity.subject,
                             expiry: identity.expiry,
                             token: &identity.token,
-                        }),
-                        None => {
-                            tracing::warn!(
-                                tool = %spec.name,
-                                "denying tool call: the upstream grant delegates, but this call \
-                                 carries no verified caller identity",
-                            );
-                            return (
-                                CallToolResult::error(vec![ContentBlock::text(
-                                    "no verified caller identity to obtain an upstream token for",
-                                )]),
-                                Outcome::AuthError,
-                            );
-                        }
+                        })
+                    } else {
+                        tracing::warn!(
+                            tool = %spec.name,
+                            "denying tool call: the upstream grant delegates, but this call \
+                             carries no verified caller identity",
+                        );
+                        return (
+                            CallToolResult::error(vec![ContentBlock::text(
+                                "no verified caller identity to obtain an upstream token for",
+                            )]),
+                            Outcome::AuthError,
+                        );
                     }
                 } else {
                     None
@@ -683,39 +698,35 @@ impl OpenApiServer {
             .extensions
             .get::<http::request::Parts>()
             .and_then(|parts| bearer_token(&parts.headers));
-        match token {
-            Some(token) => match authorizer.verify(token) {
-                Ok(claims) => Caller {
-                    access: Access::Authenticated(claims.roles),
-                    traced_claims: claims.traced,
-                    identity: claims.subject.map(|subject| Identity {
-                        subject,
-                        issuer: claims.issuer,
-                        expiry: claims.expiry.and_then(unix_to_instant),
-                        token: token.to_string(),
-                    }),
-                },
-                Err(err) => {
-                    tracing::warn!(error = %format!("{err:#}"), "rejecting request: JWT verification failed");
-                    Caller {
-                        access: Access::Anonymous,
-                        traced_claims: Map::new(),
-                        identity: None,
-                    }
-                }
+        let Some(token) = token else {
+            if authorizer.anonymous_discovery() {
+                tracing::debug!(
+                    "no bearer token: listing every tool, calling the public ones only"
+                );
+            } else if authorizer.has_public_tools() {
+                tracing::debug!("no bearer token: serving the public tools only");
+            } else {
+                tracing::warn!("no bearer token on a JWT-protected server: no tool is available");
+            }
+            return Caller {
+                access: Access::Anonymous,
+                traced_claims: Map::new(),
+                identity: None,
+            };
+        };
+        match authorizer.verify(token) {
+            Ok(claims) => Caller {
+                access: Access::Authenticated(claims.roles),
+                traced_claims: claims.traced,
+                identity: claims.subject.map(|subject| Identity {
+                    subject,
+                    issuer: claims.issuer,
+                    expiry: claims.expiry.and_then(unix_to_instant),
+                    token: token.to_string(),
+                }),
             },
-            None => {
-                if authorizer.anonymous_discovery() {
-                    tracing::debug!(
-                        "no bearer token: listing every tool, calling the public ones only"
-                    );
-                } else if authorizer.has_public_tools() {
-                    tracing::debug!("no bearer token: serving the public tools only");
-                } else {
-                    tracing::warn!(
-                        "no bearer token on a JWT-protected server: no tool is available"
-                    );
-                }
+            Err(err) => {
+                tracing::warn!(error = %format!("{err:#}"), "rejecting request: JWT verification failed");
                 Caller {
                     access: Access::Anonymous,
                     traced_claims: Map::new(),
@@ -1209,8 +1220,6 @@ mod tests {
 
     #[test]
     fn reload_swaps_the_tool_set() {
-        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
-
         const ONE_OP: &str = r#"
 openapi: 3.0.0
 info: { title: T, version: "1" }
@@ -1226,6 +1235,7 @@ paths:
   /a: { get: { operationId: getA, responses: { "200": { description: ok } } } }
   /b: { get: { operationId: getB, responses: { "200": { description: ok } } } }
 "#;
+        let cli = Cli::try_parse_from(["oas2mcp"]).expect("minimal CLI parses");
         let spec_one = spec_from(ONE_OP);
         let server = OpenApiServer::from_spec(&spec_one, &cli, None, Metrics::disabled())
             .expect("server builds");
@@ -1778,7 +1788,7 @@ paths:
         let server = resource_server(&[], None);
 
         assert!(server.get_info().capabilities.resources.is_none());
-        assert!(server.openapi_resources().resources.is_empty());
+        assert_eq!(server.openapi_resources().resources, Vec::new());
         let err = server
             .read_openapi(OPENAPI_URI, &Access::Unrestricted)
             .expect_err("nothing to read");
@@ -1976,12 +1986,20 @@ paths:
     #[test]
     fn a_header_with_two_sources_is_refused() {
         let headers = |raw: &[&str]| {
-            parse_headers(&raw.iter().map(|h| h.to_string()).collect::<Vec<_>>())
-                .expect("valid headers")
+            parse_headers(
+                &raw.iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>(),
+            )
+            .expect("valid headers")
         };
         let names = |raw: &[&str]| {
-            parse_header_names(&raw.iter().map(|h| h.to_string()).collect::<Vec<_>>())
-                .expect("valid names")
+            parse_header_names(
+                &raw.iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>(),
+            )
+            .expect("valid names")
         };
 
         // Static and forwarded under one name: the forwarded value never lands.

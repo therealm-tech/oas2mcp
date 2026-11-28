@@ -109,21 +109,20 @@ async fn run() -> anyhow::Result<()> {
     // background. Only a URL source can be reloaded; a file source is loaded
     // once at startup.
     if let Some(interval) = cli.reload_every {
-        match &cli.openapi_url {
-            Some(url) => {
-                tracing::info!(?interval, %url, "reloading the OpenAPI document periodically");
-                tokio::spawn(reload_loop(
-                    server.clone(),
-                    cli.clone(),
-                    doc_auth.clone(),
-                    url.clone(),
-                    interval,
-                ));
-            }
-            None => tracing::warn!(
+        if let Some(url) = &cli.openapi_url {
+            tracing::info!(?interval, %url, "reloading the OpenAPI document periodically");
+            tokio::spawn(reload_loop(
+                server.clone(),
+                cli.clone(),
+                doc_auth.clone(),
+                url.clone(),
+                interval,
+            ));
+        } else {
+            tracing::warn!(
                 "--reload-every is set but the OpenAPI document is not loaded from a URL; \
-                 nothing to reload"
-            ),
+             nothing to reload"
+            );
         }
     }
 

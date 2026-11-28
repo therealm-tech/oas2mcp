@@ -95,6 +95,10 @@ pub struct PathItem {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Operation {
+    #[expect(
+        clippy::struct_field_names,
+        reason = "mirrors OpenAPI's `operationId`; a bare `id` would stop matching it under `rename_all`"
+    )]
     pub operation_id: Option<String>,
     pub summary: Option<String>,
     pub description: Option<String>,
@@ -212,16 +216,15 @@ impl Spec {
                 let Some(reference) = &item.reference else {
                     return Some((path.as_str(), item));
                 };
-                match self.resolve_as::<PathItem>(reference) {
-                    Some(target) => Some((path.as_str(), target)),
-                    None => {
-                        tracing::warn!(
-                            %path,
-                            reference,
-                            "skipping path: its `$ref` does not resolve to a path item"
-                        );
-                        None
-                    }
+                if let Some(target) = self.resolve_as::<PathItem>(reference) {
+                    Some((path.as_str(), target))
+                } else {
+                    tracing::warn!(
+                        %path,
+                        reference,
+                        "skipping path: its `$ref` does not resolve to a path item"
+                    );
+                    None
                 }
             })
     }
@@ -330,12 +333,12 @@ mod tests {
     fn reads_the_header_of_both_versions() {
         for version in ["3.0.3", "3.1.0"] {
             let spec = spec_from(&format!(
-                r##"
+                r#"
 openapi: "{version}"
 info: {{ title: Pets, version: "1.0" }}
 servers: [{{ url: "https://api.example.com" }}]
 paths: {{}}
-"##
+"#
             ));
             assert_eq!(spec.version(), version);
             assert_eq!(spec.info().title, "Pets");
@@ -368,12 +371,12 @@ paths: {{}}
     fn accepts_a_newer_3_x_minor() {
         // Forward-tolerant: 3.2 keeps the shapes this tool reads.
         let spec = spec_from(
-            r##"
+            r#"
 openapi: "3.2.0"
 info: { title: T, version: "1" }
 paths:
   /a: { get: { operationId: getA } }
-"##,
+"#,
         );
         assert_eq!(spec.path_items().count(), 1);
     }
@@ -382,14 +385,14 @@ paths:
     fn accepts_a_3_1_document_without_paths() {
         // 3.1 makes `paths` optional: a document may describe only webhooks.
         let spec = spec_from(
-            r##"
+            r#"
 openapi: "3.1.0"
 info: { title: T, version: "1" }
 webhooks:
   newPet:
     post:
       operationId: newPet
-"##,
+"#,
         );
         assert_eq!(spec.path_items().count(), 0);
     }
@@ -397,14 +400,14 @@ webhooks:
     #[test]
     fn skips_path_level_extensions_and_bad_entries() {
         let spec = spec_from(
-            r##"
+            r#"
 openapi: "3.1.0"
 info: { title: T, version: "1" }
 paths:
   x-internal: "not a path item"
   /good: { get: { operationId: getGood } }
   /bad: "also not a path item"
-"##,
+"#,
         );
         let paths: Vec<_> = spec.path_items().map(|(path, _)| path).collect();
         assert_eq!(paths, vec!["/good"]);
@@ -467,11 +470,11 @@ components:
     #[test]
     fn external_and_dangling_refs_resolve_to_nothing() {
         let spec = spec_from(
-            r##"
+            r#"
 openapi: "3.1.0"
 info: { title: T, version: "1" }
 paths: {}
-"##,
+"#,
         );
         assert!(spec.resolve_value("common.yaml#/Pet").is_none());
         assert!(spec.resolve_value("#/components/schemas/Missing").is_none());
@@ -480,14 +483,14 @@ paths: {}
     #[test]
     fn resolves_a_pointer_with_escapes_and_percent_encoding() {
         let spec = spec_from(
-            r##"
+            r#"
 openapi: "3.1.0"
 info: { title: T, version: "1" }
 paths: {}
 components:
   schemas:
     "Pet Owner": { type: object }
-"##,
+"#,
         );
         // `%20` for the space, which generators emit in `$ref` URIs.
         assert!(

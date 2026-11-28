@@ -1112,7 +1112,7 @@ mod tests {
     fn allowed_hosts_are_repeatable_and_unset_by_default() {
         // Unset is meaningful: the transport then derives the list from the bind
         // address (see `transport::resolve_allowed_hosts`).
-        assert!(http(&[]).expect("parses").allowed_hosts.is_empty());
+        assert_eq!(http(&[]).expect("parses").allowed_hosts, [""; 0]);
         let args = http(&[
             "--allowed-host",
             "mcp.example.com",

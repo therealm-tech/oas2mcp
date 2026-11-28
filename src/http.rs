@@ -125,7 +125,7 @@ gpg0QXMxyWnjLJlYIpB9z4CDr4TZIpkqgw==
     #[test]
     fn ca_cert_env_splits_on_newlines() {
         let cli = cli_from(&[]);
-        assert!(cli.ca_certs.is_empty());
+        assert_eq!(cli.ca_certs, Vec::<std::path::PathBuf>::new());
 
         let cli = cli_from(&["--ca-cert", "/a.pem", "--ca-cert", "/b.pem"]);
         assert_eq!(cli.ca_certs.len(), 2);

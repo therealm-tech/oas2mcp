@@ -111,7 +111,7 @@ mod tests {
             assert_eq!(next, None);
         }
         let (chunk, next) = page::<u8>(&[], 1, size(2), None).expect("valid");
-        assert!(chunk.is_empty());
+        assert_eq!(chunk, [0_u8; 0]);
         assert_eq!(next, None);
     }
 

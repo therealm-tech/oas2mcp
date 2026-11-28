@@ -338,7 +338,7 @@ mod tests {
         });
         let name = renamer.rename("getApiV4Projects");
         assert_eq!(name.len(), 4);
-        assert!(!name.is_empty());
+        assert_ne!(name, "");
     }
 
     #[test]
@@ -367,15 +367,15 @@ mod tests {
         ];
 
         for (raw, expected) in cases {
-            let renamed = renamer.rename(raw);
-            assert_eq!(renamed, expected, "{raw}");
+            let new_name = renamer.rename(raw);
+            assert_eq!(new_name, expected, "{raw}");
             assert!(
-                renamed.len() <= BUDGET,
-                "`{renamed}` ({} chars) does not fit the {BUDGET}-char budget",
-                renamed.len()
+                new_name.len() <= BUDGET,
+                "`{new_name}` ({} chars) does not fit the {BUDGET}-char budget",
+                new_name.len()
             );
             // No hash suffix: the rules did the work, the cap never fired.
-            assert!(!renamed.contains("__"), "{renamed}");
+            assert!(!new_name.contains("__"), "{new_name}");
         }
     }
 }

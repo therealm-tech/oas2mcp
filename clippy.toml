@@ -1,0 +1,3 @@
+# `..` keeps clippy's defaults. Without these two, `doc_markdown` wants
+# backticks that clap would print verbatim in `--help`.
+doc-valid-idents = ["OpenAPI", "OpenAI", ".."]

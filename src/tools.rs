@@ -174,22 +174,21 @@ fn operations(item: &PathItem) -> Vec<(Method, &Operation)> {
 /// `<method>_<path>` fallback, sanitised to the allowed character set. This is
 /// the name the [`OperationFilter`] matches, before any renaming.
 fn operation_name(path: &str, method: &Method, operation: &Operation) -> String {
-    operation
-        .operation_id
-        .clone()
-        .map(|id| sanitize_name(&id))
-        .unwrap_or_else(|| sanitize_name(&format!("{}_{path}", method.as_str().to_lowercase())))
+    operation.operation_id.clone().map_or_else(
+        || sanitize_name(&format!("{}_{path}", method.as_str().to_lowercase())),
+        |id| sanitize_name(&id),
+    )
 }
 
 /// Apply the rename rules to a built tool. A rewritten name keeps its origin in
 /// the description: the model gets the short name, whoever reads a trace keeps
 /// the mapping back to the `operationId`.
 fn rename(tool: &mut ToolSpec, raw: &str, operation: &Operation, renamer: &ToolRenamer) {
-    let renamed = renamer.rename(raw);
-    if renamed == raw {
+    let new_name = renamer.rename(raw);
+    if new_name == raw {
         return;
     }
-    tracing::debug!(old = %raw, new = %renamed, "rewrote the tool name");
+    tracing::debug!(old = %raw, new = %new_name, "rewrote the tool name");
 
     if let Some(id) = &operation.operation_id {
         let origin = format!("OpenAPI operationId: {id}");
@@ -198,7 +197,7 @@ fn rename(tool: &mut ToolSpec, raw: &str, operation: &Operation, renamer: &ToolR
             None => origin,
         });
     }
-    tool.name = renamed;
+    tool.name = new_name;
 }
 
 /// A title is rendered on one line, so the summary's line breaks and runs of
@@ -336,11 +335,10 @@ fn add_request_body(
         return false;
     };
 
-    let schema = media
-        .schema
-        .as_ref()
-        .map(|schema| inlined(spec, schema))
-        .unwrap_or_else(|| json!({ "type": "object" }));
+    let schema = media.schema.as_ref().map_or_else(
+        || json!({ "type": "object" }),
+        |schema| inlined(spec, schema),
+    );
 
     properties.insert("body".into(), schema);
     if body.required {
@@ -436,14 +434,11 @@ fn inlined(spec: &Spec, schema: &Value) -> Value {
 fn inline_refs(spec: &Spec, value: &mut Value, seen: &mut HashSet<String>) {
     match value {
         Value::Object(map) => {
-            let reference = match map.get("$ref") {
-                Some(Value::String(reference)) => reference.clone(),
-                _ => {
-                    for child in map.values_mut() {
-                        inline_refs(spec, child, seen);
-                    }
-                    return;
+            let Some(Value::String(reference)) = map.get("$ref").cloned() else {
+                for child in map.values_mut() {
+                    inline_refs(spec, child, seen);
                 }
+                return;
             };
 
             let siblings = std::mem::take(map);
@@ -481,19 +476,16 @@ fn resolve_schema_ref(spec: &Spec, reference: &str, seen: &mut HashSet<String>) 
         tracing::debug!(reference, "collapsing a recursive schema reference");
         return json!({ "type": "object" });
     }
-    let resolved = match spec.resolve_value(reference) {
-        Some(target) => {
-            let mut value = target.clone();
-            inline_refs(spec, &mut value, seen);
-            value
-        }
-        None => {
-            tracing::debug!(
-                reference,
-                "substituting a bare object for an unresolved schema"
-            );
-            json!({ "type": "object" })
-        }
+    let resolved = if let Some(target) = spec.resolve_value(reference) {
+        let mut value = target.clone();
+        inline_refs(spec, &mut value, seen);
+        value
+    } else {
+        tracing::debug!(
+            reference,
+            "substituting a bare object for an unresolved schema"
+        );
+        json!({ "type": "object" })
     };
     seen.remove(reference);
     resolved
@@ -696,7 +688,7 @@ components:
 
     #[test]
     fn title_folds_the_summary_onto_one_line() {
-        const SPEC: &str = r##"
+        const SPEC: &str = r#"
 openapi: 3.0.0
 info: { title: T, version: "1" }
 paths:
@@ -711,7 +703,7 @@ paths:
       summary: "   "
       description: Only whitespace in the summary.
       responses: { "200": { description: ok } }
-"##;
+"#;
         let tools = tools_from(SPEC);
         let multi = tools.iter().find(|t| t.name == "multiLine").unwrap();
         assert_eq!(multi.title.as_deref(), Some("List the pets of a store"));
@@ -721,7 +713,7 @@ paths:
 
     #[test]
     fn description_falls_back_to_each_field() {
-        const SPEC: &str = r##"
+        const SPEC: &str = r#"
 openapi: 3.0.0
 info: { title: T, version: "1" }
 paths:
@@ -735,7 +727,7 @@ paths:
       operationId: onlyDescription
       description: Just a description
       responses: { "200": { description: ok } }
-"##;
+"#;
         let tools = tools_from(SPEC);
         let only_summary = tools.iter().find(|t| t.name == "onlySummary").unwrap();
         assert_eq!(only_summary.description.as_deref(), Some("Just a summary"));
@@ -822,13 +814,13 @@ paths:
     fn colliding_renamed_names_are_disambiguated() {
         // Two distinct operations abbreviated onto the same name: both are still
         // exposed, and the second one carries a numeric suffix.
-        const SPEC: &str = r##"
+        const SPEC: &str = r#"
 openapi: 3.1.0
 info: { title: T, version: "1" }
 paths:
   /a: { get: { operationId: getApiV4ProjectsIdIssues } }
   /b: { get: { operationId: getApiV4GroupsIdIssues } }
-"##;
+"#;
         let tools = build_tools(
             &spec_from(SPEC),
             &OperationFilter::default(),
@@ -879,7 +871,7 @@ paths:
     fn keeps_3_0_schemas_verbatim_too() {
         // `nullable` is 3.0's spelling and must survive untouched, rather than
         // being normalised away or dropped.
-        const SPEC: &str = r##"
+        const SPEC: &str = r#"
 openapi: 3.0.3
 info: { title: T, version: "1" }
 paths:
@@ -890,7 +882,7 @@ paths:
         - name: tag
           in: query
           schema: { type: string, nullable: true, minLength: 2 }
-"##;
+"#;
         let tools = tools_from(SPEC);
         let schema = &tools[0].input_schema["properties"]["tag"];
         assert_eq!(schema["nullable"], json!(true));
@@ -922,7 +914,7 @@ $defs:
 
     #[test]
     fn prefers_a_json_media_type_over_the_first_entry() {
-        const SPEC: &str = r##"
+        const SPEC: &str = r#"
 openapi: 3.1.0
 info: { title: T, version: "1" }
 paths:
@@ -935,7 +927,7 @@ paths:
             schema: { type: string }
           application/vnd.api+json:
             schema: { type: object, properties: { data: { type: object } } }
-"##;
+"#;
         let tools = tools_from(SPEC);
         let body = &tools[0].input_schema["properties"]["body"];
         assert_eq!(body["type"], "object");
@@ -944,7 +936,7 @@ paths:
 
     #[test]
     fn shared_path_item_parameters_apply_to_every_operation() {
-        const SPEC: &str = r##"
+        const SPEC: &str = r#"
 openapi: 3.1.0
 info: { title: T, version: "1" }
 paths:
@@ -956,7 +948,7 @@ paths:
         schema: { type: string }
     get: { operationId: getPet }
     delete: { operationId: deletePet }
-"##;
+"#;
         let tools = tools_from(SPEC);
         assert_eq!(tools.len(), 2);
         for tool in &tools {
@@ -998,7 +990,7 @@ components:
 
     #[test]
     fn ignores_cookie_parameters() {
-        const SPEC: &str = r##"
+        const SPEC: &str = r#"
 openapi: 3.1.0
 info: { title: T, version: "1" }
 paths:
@@ -1008,7 +1000,7 @@ paths:
       parameters:
         - { name: session, in: cookie, schema: { type: string } }
         - { name: q, in: query, schema: { type: string } }
-"##;
+"#;
         let tools = tools_from(SPEC);
         let names: Vec<_> = tools[0].params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["q"]);
@@ -1016,7 +1008,7 @@ paths:
 
     #[test]
     fn annotations_follow_the_http_method() {
-        const SPEC: &str = r##"
+        const SPEC: &str = r#"
 openapi: 3.0.0
 info: { title: T, version: "1" }
 paths:
@@ -1028,7 +1020,7 @@ paths:
     put: { operationId: put }
     patch: { operationId: patch }
     delete: { operationId: delete }
-"##;
+"#;
         // (read-only, destructive, idempotent); `None` is the spec default.
         let expected = [
             ("get", Some(true), Some(false), Some(true)),
@@ -1092,7 +1084,7 @@ components:
     #[test]
     fn the_output_schema_is_the_object_body_of_the_success_response() {
         let schema = output_schema_for(
-            r##"
+            r#"
         "200":
           description: ok
           content:
@@ -1108,7 +1100,7 @@ components:
           content:
             application/json:
               schema: { type: string }
-"##,
+"#,
         )
         .expect("an object body is declared");
         assert_eq!(schema["type"], "object");
@@ -1152,22 +1144,22 @@ components:
               schema: { $ref: "#/components/schemas/Pets" }
 "##,
             // No success response at all; `default` does not count.
-            r##"
+            r#"
         "404": { description: missing }
         default:
           description: error
           content:
             application/json:
               schema: { type: object }
-"##,
+"#,
             // A body that is not JSON.
-            r##"
+            r#"
         "200":
           description: ok
           content:
             text/csv:
               schema: { type: object }
-"##,
+"#,
             // A second success reply without a body could not conform.
             r##"
         "200": { $ref: "#/components/responses/PetReply" }
@@ -1201,7 +1193,7 @@ components:
     #[test]
     fn no_output_schema_without_the_option() {
         let tools = tools_from(
-            r##"
+            r#"
 openapi: 3.1.0
 info: { title: T, version: "1" }
 paths:
@@ -1214,7 +1206,7 @@ paths:
           content:
             application/json:
               schema: { type: object }
-"##,
+"#,
         );
         assert!(tools[0].output_schema.is_none());
     }
@@ -1223,13 +1215,13 @@ paths:
     fn unquoted_status_codes_are_read_as_well() {
         // YAML reads a bare `200:` key as an integer.
         let schema = output_schema_for(
-            r##"
+            r"
         200:
           description: ok
           content:
             application/json:
               schema: { type: object }
-"##,
+",
         );
         assert!(schema.is_some());
     }

@@ -352,7 +352,10 @@ pub(crate) mod tests {
     use serde_json::json;
 
     fn roles(values: &[&str]) -> HashSet<String> {
-        values.iter().map(|s| s.to_string()).collect()
+        values
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect()
     }
 
     #[test]
@@ -534,21 +537,21 @@ pub(crate) mod tests {
 
     /// Sign a token with the test key, `kid` header, a fixed `sub`, and the
     /// given expiry.
-    pub(crate) fn sign(roles_claim: Value, exp_unix: u64, kid: Option<&str>) -> String {
+    pub(crate) fn sign(roles_claim: &Value, exp_unix: u64, kid: Option<&str>) -> String {
         sign_claims(
-            json!({ "roles": roles_claim, "sub": "user-123", "exp": exp_unix }),
+            &json!({ "roles": roles_claim, "sub": "user-123", "exp": exp_unix }),
             kid,
         )
     }
 
     /// Sign an arbitrary claim set with the test key.
-    fn sign_claims(claims: Value, kid: Option<&str>) -> String {
+    fn sign_claims(claims: &Value, kid: Option<&str>) -> String {
         use jsonwebtoken::{EncodingKey, Header};
         let mut header = Header::new(Algorithm::RS256);
         header.kid = kid.map(str::to_string);
         let key = EncodingKey::from_rsa_pem(crate::test_keys::keys().rsa_pem.as_bytes())
             .expect("test key parses");
-        jsonwebtoken::encode(&header, &claims, &key).expect("signing succeeds")
+        jsonwebtoken::encode(&header, claims, &key).expect("signing succeeds")
     }
 
     pub(crate) fn in_one_hour() -> u64 {
@@ -563,7 +566,7 @@ pub(crate) mod tests {
     #[test]
     fn verify_reads_roles_and_traced_claims_from_a_valid_jwt() {
         let authz = test_authorizer();
-        let token = sign(json!(["admin", "reader"]), in_one_hour(), Some(TEST_KID));
+        let token = sign(&json!(["admin", "reader"]), in_one_hour(), Some(TEST_KID));
         let claims = authz.verify(&token).expect("valid token verifies");
         assert_eq!(claims.roles, roles(&["admin", "reader"]));
         assert!(authz.allows(&claims.roles, "deletePet"));
@@ -578,18 +581,18 @@ pub(crate) mod tests {
         let authz = test_authorizer();
 
         // Expired: exp one hour in the past.
-        let expired = sign(json!(["admin"]), in_one_hour() - 7200, Some(TEST_KID));
+        let expired = sign(&json!(["admin"]), in_one_hour() - 7200, Some(TEST_KID));
         assert!(authz.verify(&expired).is_err());
 
         // Tampered signature: flip the last character of a valid token.
-        let mut token = sign(json!(["admin"]), in_one_hour(), Some(TEST_KID)).into_bytes();
+        let mut token = sign(&json!(["admin"]), in_one_hour(), Some(TEST_KID)).into_bytes();
         let last = token.last_mut().unwrap();
         *last = if *last == b'A' { b'B' } else { b'A' };
         let tampered = String::from_utf8(token).unwrap();
         assert!(authz.verify(&tampered).is_err());
 
         // Unknown kid: no matching JWK.
-        let unknown = sign(json!(["admin"]), in_one_hour(), Some("other-key"));
+        let unknown = sign(&json!(["admin"]), in_one_hour(), Some("other-key"));
         assert!(authz.verify(&unknown).is_err());
     }
 
@@ -598,7 +601,7 @@ pub(crate) mod tests {
         let authz = test_authorizer();
         let exp = in_one_hour();
         let token = sign_claims(
-            json!({
+            &json!({
                 "roles": ["admin"],
                 "sub": "user-123",
                 "iss": "https://idp.example.com/",
@@ -620,7 +623,7 @@ pub(crate) mod tests {
         let mut authz = test_authorizer();
         authz.subject_claim = "email".into();
         let token = sign_claims(
-            json!({ "roles": ["admin"], "sub": "opaque-guid", "email": "a@b.com", "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "sub": "opaque-guid", "email": "a@b.com", "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         let claims = authz.verify(&token).expect("valid token verifies");
@@ -633,14 +636,14 @@ pub(crate) mod tests {
 
         // Absent: no identity to act as.
         let token = sign_claims(
-            json!({ "roles": ["admin"], "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         assert!(authz.verify(&token).expect("verifies").subject.is_none());
 
         // Empty is not an identity either.
         let token = sign_claims(
-            json!({ "roles": ["admin"], "sub": "", "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "sub": "", "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         assert!(authz.verify(&token).expect("verifies").subject.is_none());
@@ -651,7 +654,7 @@ pub(crate) mod tests {
         // guard — so assert the property that matters rather than the mechanism.
         for shape in [json!(42), json!(["a"]), json!(null), json!({ "a": 1 })] {
             let token = sign_claims(
-                json!({ "roles": ["admin"], "sub": shape.clone(), "exp": in_one_hour() }),
+                &json!({ "roles": ["admin"], "sub": shape.clone(), "exp": in_one_hour() }),
                 Some(TEST_KID),
             );
             let subject = authz.verify(&token).ok().and_then(|claims| claims.subject);
@@ -668,7 +671,7 @@ pub(crate) mod tests {
         authz.subject_claim = "tenant_id".into();
         for shape in [json!(42), json!(["a"]), json!(null)] {
             let token = sign_claims(
-                json!({ "roles": ["admin"], "sub": "user-123", "tenant_id": shape.clone(), "exp": in_one_hour() }),
+                &json!({ "roles": ["admin"], "sub": "user-123", "tenant_id": shape.clone(), "exp": in_one_hour() }),
                 Some(TEST_KID),
             );
             assert!(
@@ -685,7 +688,7 @@ pub(crate) mod tests {
         // warns when it is unset.
         let authz = test_authorizer();
         let token = sign_claims(
-            json!({ "roles": ["admin"], "sub": "u", "aud": "some-other-service", "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "sub": "u", "aud": "some-other-service", "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         assert!(authz.verify(&token).is_ok());
@@ -697,13 +700,13 @@ pub(crate) mod tests {
         authz.expected_audiences = vec!["oas2mcp".into()];
 
         let ours = sign_claims(
-            json!({ "roles": ["admin"], "sub": "u", "aud": "oas2mcp", "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "sub": "u", "aud": "oas2mcp", "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         assert!(authz.verify(&ours).is_ok(), "our own audience must pass");
 
         let theirs = sign_claims(
-            json!({ "roles": ["admin"], "sub": "u", "aud": "some-other-service", "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "sub": "u", "aud": "some-other-service", "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         assert!(
@@ -718,7 +721,7 @@ pub(crate) mod tests {
         let mut authz = test_authorizer();
         authz.expected_audiences = vec!["oas2mcp".into()];
         let token = sign_claims(
-            json!({ "roles": ["admin"], "sub": "u", "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "sub": "u", "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         assert!(
@@ -733,7 +736,7 @@ pub(crate) mod tests {
         authz.expected_audiences = vec!["oas2mcp".into(), "oas2mcp-staging".into()];
         for aud in ["oas2mcp", "oas2mcp-staging"] {
             let token = sign_claims(
-                json!({ "roles": ["admin"], "sub": "u", "aud": aud, "exp": in_one_hour() }),
+                &json!({ "roles": ["admin"], "sub": "u", "aud": aud, "exp": in_one_hour() }),
                 Some(TEST_KID),
             );
             assert!(authz.verify(&token).is_ok(), "{aud} must pass");
@@ -747,7 +750,7 @@ pub(crate) mod tests {
         let mut authz = test_authorizer();
         authz.expected_audiences = vec!["oas2mcp".into()];
         let token = sign_claims(
-            json!({ "roles": ["admin"], "sub": "u", "aud": ["other", "oas2mcp"], "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "sub": "u", "aud": ["other", "oas2mcp"], "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         assert!(authz.verify(&token).is_ok());
@@ -759,7 +762,7 @@ pub(crate) mod tests {
         authz.expected_issuers = vec!["https://idp.example.com/".into()];
 
         let ours = sign_claims(
-            json!({ "roles": ["admin"], "sub": "u", "iss": "https://idp.example.com/", "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "sub": "u", "iss": "https://idp.example.com/", "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         assert!(authz.verify(&ours).is_ok());
@@ -767,14 +770,14 @@ pub(crate) mod tests {
         // A key shared between a staging and a production realm is the case this
         // catches: the JWKS verifies both, only `iss` tells them apart.
         let staging = sign_claims(
-            json!({ "roles": ["admin"], "sub": "u", "iss": "https://staging-idp.example.com/", "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "sub": "u", "iss": "https://staging-idp.example.com/", "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         assert!(authz.verify(&staging).is_err());
 
         // And a token with no `iss` cannot satisfy the constraint either.
         let anonymous = sign_claims(
-            json!({ "roles": ["admin"], "sub": "u", "exp": in_one_hour() }),
+            &json!({ "roles": ["admin"], "sub": "u", "exp": in_one_hour() }),
             Some(TEST_KID),
         );
         assert!(authz.verify(&anonymous).is_err());
@@ -786,7 +789,7 @@ pub(crate) mod tests {
         // `jsonwebtoken` requires `exp` by default; pinned so a future change to
         // the validation setup cannot silently drop it.
         let authz = test_authorizer();
-        let token = sign_claims(json!({ "roles": ["admin"], "sub": "u" }), Some(TEST_KID));
+        let token = sign_claims(&json!({ "roles": ["admin"], "sub": "u" }), Some(TEST_KID));
         assert!(authz.verify(&token).is_err());
     }
 
@@ -800,7 +803,7 @@ pub(crate) mod tests {
 
         // Expired 90 seconds ago: outside the default 60s tolerance...
         let token = sign_claims(
-            json!({ "roles": ["admin"], "sub": "u", "exp": now - 90 }),
+            &json!({ "roles": ["admin"], "sub": "u", "exp": now - 90 }),
             Some(TEST_KID),
         );
         let authz = test_authorizer();
